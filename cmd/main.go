@@ -31,7 +31,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/controller"
+	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -78,9 +80,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	clientFactory := cfclient.NewClientFactory(mgr.GetClient())
+	ipResolver := ipresolver.NewResolver()
+
 	if err := (&controller.CloudflareDNSRecordReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("cloudflarednsrecord-controller"),
+		ClientFactory: clientFactory,
+		IPResolver:    ipResolver,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareDNSRecord")
 		os.Exit(1)
