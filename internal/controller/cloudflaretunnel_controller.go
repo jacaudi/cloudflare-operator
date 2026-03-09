@@ -18,40 +18,258 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
+	"github.com/jacaudi/cloudflare-operator/internal/status"
 )
 
 // CloudflareTunnelReconciler reconciles a CloudflareTunnel object
 type CloudflareTunnelReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme         *runtime.Scheme
+	Recorder       record.EventRecorder
+	ClientFactory  *cfclient.ClientFactory
+	TunnelClientFn func(apiToken string) cfclient.TunnelClient
 }
 
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnels,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnels/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnels/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the CloudflareTunnel object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/reconcile
+// Reconcile moves the current state of the cluster closer to the desired state
+// for a CloudflareTunnel resource. It handles the full lifecycle of tunnels
+// including creation, adoption of existing tunnels, credential Secret
+// generation, and deletion.
 func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := log.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// 1. Fetch the CR
+	var tunnel cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(ctx, req.NamespacedName, &tunnel); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
 
-	return ctrl.Result{}, nil
+	// 2. Handle deletion
+	if !tunnel.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(&tunnel, cloudflarev1alpha1.FinalizerName) {
+			return r.reconcileDelete(ctx, &tunnel)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// 3. Ensure finalizer
+	if !controllerutil.ContainsFinalizer(&tunnel, cloudflarev1alpha1.FinalizerName) {
+		controllerutil.AddFinalizer(&tunnel, cloudflarev1alpha1.FinalizerName)
+		if err := r.Update(ctx, &tunnel); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// 4. Get API token
+	apiToken, err := r.ClientFactory.GetAPIToken(ctx, tunnel.Spec.SecretRef.Name, tunnel.Namespace)
+	if err != nil {
+		log.Error(err, "failed to get API token")
+		status.SetReady(&tunnel.Status.Conditions, metav1.ConditionFalse,
+			cloudflarev1alpha1.ReasonSecretNotFound, err.Error(), tunnel.Generation)
+		_ = r.Status().Update(ctx, &tunnel)
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// 5. Build tunnel client
+	var tunnelClient cfclient.TunnelClient
+	if r.TunnelClientFn != nil {
+		tunnelClient = r.TunnelClientFn(apiToken)
+	} else {
+		cfClient := cfclient.NewCloudflareClient(apiToken)
+		tunnelClient = cfclient.NewTunnelClientFromCF(cfClient)
+	}
+
+	// 6. Reconcile the tunnel
+	result, err := r.reconcileTunnel(ctx, &tunnel, tunnelClient)
+	if err != nil {
+		log.Error(err, "reconciliation failed")
+		status.SetReady(&tunnel.Status.Conditions, metav1.ConditionFalse,
+			cloudflarev1alpha1.ReasonCloudflareError, err.Error(), tunnel.Generation)
+		r.Recorder.Event(&tunnel, "Warning", "SyncFailed", err.Error())
+		_ = r.Status().Update(ctx, &tunnel)
+		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+	}
+
+	// 7. Update status
+	tunnel.Status.ObservedGeneration = tunnel.Generation
+	now := metav1.Now()
+	tunnel.Status.LastSyncedAt = &now
+	status.SetReady(&tunnel.Status.Conditions, metav1.ConditionTrue,
+		cloudflarev1alpha1.ReasonReconcileSuccess, "Tunnel synced", tunnel.Generation)
+	status.SetSynced(&tunnel.Status.Conditions, metav1.ConditionTrue,
+		cloudflarev1alpha1.ReasonReconcileSuccess, "Tunnel synced", tunnel.Generation)
+	if err := r.Status().Update(ctx, &tunnel); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return result, nil
+}
+
+func (r *CloudflareTunnelReconciler) reconcileTunnel(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel, tunnelClient cfclient.TunnelClient) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	// Check if tunnel exists by ID
+	var existing *cfclient.Tunnel
+	var err error
+	if tunnel.Status.TunnelID != "" {
+		existing, err = tunnelClient.GetTunnel(ctx, tunnel.Spec.AccountID, tunnel.Status.TunnelID)
+		if err != nil {
+			log.Info("could not fetch tunnel by ID, will search by name", "tunnelID", tunnel.Status.TunnelID)
+			tunnel.Status.TunnelID = ""
+			existing = nil
+		}
+	}
+
+	// Search by name (adopt existing)
+	if existing == nil {
+		tunnels, err := tunnelClient.ListTunnelsByName(ctx, tunnel.Spec.AccountID, tunnel.Spec.Name)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("list tunnels: %w", err)
+		}
+		if len(tunnels) > 0 {
+			existing = &tunnels[0]
+			tunnel.Status.TunnelID = existing.ID
+			log.Info("adopted existing tunnel", "tunnelID", existing.ID)
+			r.Recorder.Event(tunnel, "Normal", "TunnelAdopted",
+				fmt.Sprintf("Adopted existing tunnel %s", existing.ID))
+		}
+	}
+
+	requeueAfter := 30 * time.Minute
+	if tunnel.Spec.Interval != nil {
+		requeueAfter = tunnel.Spec.Interval.Duration
+	}
+
+	// Generate tunnel secret
+	tunnelSecret, err := generateTunnelSecret()
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("generate tunnel secret: %w", err)
+	}
+
+	if existing == nil {
+		// Create new tunnel
+		created, err := tunnelClient.CreateTunnel(ctx, tunnel.Spec.AccountID, cfclient.TunnelParams{
+			Name:         tunnel.Spec.Name,
+			TunnelSecret: tunnelSecret,
+		})
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("create tunnel: %w", err)
+		}
+		tunnel.Status.TunnelID = created.ID
+		log.Info("created tunnel", "tunnelID", created.ID)
+		r.Recorder.Event(tunnel, "Normal", "TunnelCreated",
+			fmt.Sprintf("Created tunnel %s with ID %s", tunnel.Spec.Name, created.ID))
+	}
+
+	// Create/update credentials Secret
+	if err := r.ensureCredentialsSecret(ctx, tunnel, tunnelSecret); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure credentials secret: %w", err)
+	}
+
+	// Update status fields
+	tunnel.Status.TunnelCNAME = fmt.Sprintf("%s.cfargotunnel.com", tunnel.Status.TunnelID)
+	tunnel.Status.CredentialsSecretName = tunnel.Spec.GeneratedSecretName
+
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel, tunnelSecret string) error {
+	creds := map[string]string{
+		"AccountTag":   tunnel.Spec.AccountID,
+		"TunnelSecret": tunnelSecret,
+		"TunnelID":     tunnel.Status.TunnelID,
+	}
+	credsJSON, err := json.Marshal(creds)
+	if err != nil {
+		return fmt.Errorf("marshal credentials: %w", err)
+	}
+
+	credSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tunnel.Spec.GeneratedSecretName,
+			Namespace: tunnel.Namespace,
+		},
+	}
+
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, credSecret, func() error {
+		if err := controllerutil.SetControllerReference(tunnel, credSecret, r.Scheme); err != nil {
+			return err
+		}
+		if credSecret.Data == nil {
+			credSecret.Data = make(map[string][]byte)
+		}
+		credSecret.Data["credentials.json"] = credsJSON
+		return nil
+	})
+	return err
+}
+
+func generateTunnelSecret() (string, error) {
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(secretBytes), nil
+}
+
+func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	if tunnel.Status.TunnelID != "" {
+		apiToken, err := r.ClientFactory.GetAPIToken(ctx, tunnel.Spec.SecretRef.Name, tunnel.Namespace)
+		if err != nil {
+			log.Error(err, "failed to get API token during deletion")
+		} else {
+			var tunnelClient cfclient.TunnelClient
+			if r.TunnelClientFn != nil {
+				tunnelClient = r.TunnelClientFn(apiToken)
+			} else {
+				cfClient := cfclient.NewCloudflareClient(apiToken)
+				tunnelClient = cfclient.NewTunnelClientFromCF(cfClient)
+			}
+
+			if err := tunnelClient.DeleteTunnel(ctx, tunnel.Spec.AccountID, tunnel.Status.TunnelID); err != nil {
+				log.Error(err, "failed to delete tunnel from Cloudflare")
+				status.SetReady(&tunnel.Status.Conditions, metav1.ConditionFalse,
+					cloudflarev1alpha1.ReasonCloudflareError, err.Error(), tunnel.Generation)
+				_ = r.Status().Update(ctx, tunnel)
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+			log.Info("deleted tunnel from Cloudflare", "tunnelID", tunnel.Status.TunnelID)
+			r.Recorder.Event(tunnel, "Normal", "TunnelDeleted",
+				fmt.Sprintf("Deleted tunnel %s from Cloudflare", tunnel.Spec.Name))
+		}
+	}
+
+	controllerutil.RemoveFinalizer(tunnel, cloudflarev1alpha1.FinalizerName)
+	return ctrl.Result{}, r.Update(ctx, tunnel)
 }
 
 // SetupWithManager sets up the controller with the Manager.
