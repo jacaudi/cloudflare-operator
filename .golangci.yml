@@ -7,7 +7,6 @@ linters:
     - copyloopvar
     - dupl
     - errcheck
-    - ginkgolinter
     - goconst
     - gocyclo
     - govet

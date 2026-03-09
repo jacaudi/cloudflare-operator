@@ -1,0 +1,12 @@
+---
+extends: default
+
+rules:
+  line-length: disable
+  document-start:
+    level: warning
+  truthy:
+    level: warning
+
+ignore: |
+  config/
