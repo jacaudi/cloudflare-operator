@@ -20,38 +20,70 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// CloudflareTunnelSpec defines the desired state of CloudflareTunnel.
+// CloudflareTunnelSpec defines the desired state of a Cloudflare Tunnel.
 type CloudflareTunnelSpec struct {
+	// Name is the tunnel name in Cloudflare.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// AccountID is the Cloudflare Account ID.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	AccountID string `json:"accountID"`
+
+	// SecretRef references a Secret containing Cloudflare API credentials.
+	// +kubebuilder:validation:Required
+	SecretRef SecretReference `json:"secretRef"`
+
+	// GeneratedSecretName is the name of the Secret to create with tunnel credentials.
+	// The Secret will contain a "credentials.json" key with the tunnel credentials.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	GeneratedSecretName string `json:"generatedSecretName"`
+
+	// Interval is the reconciliation interval.
+	// +kubebuilder:default="30m"
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
 }
 
-// CloudflareTunnelStatus defines the observed state of CloudflareTunnel.
+// CloudflareTunnelStatus defines the observed state of a CloudflareTunnel.
 type CloudflareTunnelStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the CloudflareTunnel resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Conditions represent the latest available observations.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// TunnelID is the Cloudflare Tunnel ID.
+	// +optional
+	TunnelID string `json:"tunnelID,omitempty"`
+
+	// TunnelCNAME is the CNAME for the tunnel (tunnelID.cfargotunnel.com).
+	// +optional
+	TunnelCNAME string `json:"tunnelCNAME,omitempty"`
+
+	// CredentialsSecretName is the name of the generated credentials Secret.
+	// +optional
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
+
+	// LastSyncedAt is the last time the tunnel was successfully synced.
+	// +optional
+	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+
+	// ObservedGeneration is the most recently observed generation.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Tunnel Name",type=string,JSONPath=`.spec.name`
+// +kubebuilder:printcolumn:name="Tunnel ID",type=string,JSONPath=`.status.tunnelID`
+// +kubebuilder:printcolumn:name="CNAME",type=string,JSONPath=`.status.tunnelCNAME`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // CloudflareTunnel is the Schema for the cloudflaretunnels API
 type CloudflareTunnel struct {

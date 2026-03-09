@@ -14,7 +14,23 @@ spec:
     singular: cloudflaretunnel
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Tunnel Name
+      type: string
+    - jsonPath: .status.tunnelID
+      name: Tunnel ID
+      type: string
+    - jsonPath: .status.tunnelCNAME
+      name: CNAME
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: CloudflareTunnel is the Schema for the cloudflaretunnels API
@@ -38,21 +54,47 @@ spec:
             type: object
           spec:
             description: spec defines the desired state of CloudflareTunnel
+            properties:
+              accountID:
+                description: AccountID is the Cloudflare Account ID.
+                minLength: 1
+                type: string
+              generatedSecretName:
+                description: |-
+                  GeneratedSecretName is the name of the Secret to create with tunnel credentials.
+                  The Secret will contain a "credentials.json" key with the tunnel credentials.
+                minLength: 1
+                type: string
+              interval:
+                default: 30m
+                description: Interval is the reconciliation interval.
+                type: string
+              name:
+                description: Name is the tunnel name in Cloudflare.
+                minLength: 1
+                type: string
+              secretRef:
+                description: SecretRef references a Secret containing Cloudflare API
+                  credentials.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - accountID
+            - generatedSecretName
+            - name
+            - secretRef
             type: object
           status:
             description: status defines the observed state of CloudflareTunnel
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the CloudflareTunnel resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -111,6 +153,25 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              credentialsSecretName:
+                description: CredentialsSecretName is the name of the generated credentials
+                  Secret.
+                type: string
+              lastSyncedAt:
+                description: LastSyncedAt is the last time the tunnel was successfully
+                  synced.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recently observed generation.
+                format: int64
+                type: integer
+              tunnelCNAME:
+                description: TunnelCNAME is the CNAME for the tunnel (tunnelID.cfargotunnel.com).
+                type: string
+              tunnelID:
+                description: TunnelID is the Cloudflare Tunnel ID.
+                type: string
             type: object
         required:
         - spec
