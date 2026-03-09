@@ -31,3 +31,7 @@ go.work.sum
 # .idea/
 # .vscode/
 .worktrees/
+
+# Kubebuilder / controller-gen binaries
+bin/
+kubebuilder

@@ -1,0 +1,7 @@
+## Append samples of your project ##
+resources:
+- cloudflare_v1alpha1_cloudflarednsrecord.yaml
+- cloudflare_v1alpha1_cloudflaretunnel.yaml
+- cloudflare_v1alpha1_cloudflareruleset.yaml
+- cloudflare_v1alpha1_cloudflarezoneconfig.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
