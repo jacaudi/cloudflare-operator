@@ -13,7 +13,7 @@ type DNSRecord struct {
 	Content string
 	Proxied bool
 	TTL     int
-	Data    map[string]interface{}
+	Data    map[string]any
 }
 
 // DNSRecordParams are parameters for creating/updating a DNS record.
@@ -24,7 +24,7 @@ type DNSRecordParams struct {
 	Proxied  *bool
 	TTL      int
 	Priority *int
-	Data     map[string]interface{}
+	Data     map[string]any
 }
 
 // DNSClient manages Cloudflare DNS records.
@@ -71,7 +71,7 @@ type RulesetRule struct {
 	Expression       string
 	Description      string
 	Enabled          bool
-	ActionParameters map[string]interface{}
+	ActionParameters map[string]any
 }
 
 // RulesetParams are parameters for creating/updating a ruleset.
@@ -94,7 +94,7 @@ type RulesetClient interface {
 // ZoneSetting is a key-value pair for a zone setting.
 type ZoneSetting struct {
 	ID    string
-	Value interface{}
+	Value any
 }
 
 // BotManagementConfig represents bot management settings.
@@ -106,7 +106,7 @@ type BotManagementConfig struct {
 // ZoneClient manages Cloudflare Zone settings and bot management.
 type ZoneClient interface {
 	GetSettings(ctx context.Context, zoneID string) ([]ZoneSetting, error)
-	UpdateSetting(ctx context.Context, zoneID, settingID string, value interface{}) error
+	UpdateSetting(ctx context.Context, zoneID, settingID string, value any) error
 	GetBotManagement(ctx context.Context, zoneID string) (*BotManagementConfig, error)
 	UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error
 }
