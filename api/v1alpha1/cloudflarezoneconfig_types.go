@@ -20,38 +20,225 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// SSLSettings defines SSL/TLS settings for a Cloudflare zone.
+type SSLSettings struct {
+	// Mode is the SSL mode.
+	// +kubebuilder:validation:Enum=off;flexible;full;strict
+	// +optional
+	Mode *string `json:"mode,omitempty"`
+
+	// MinTLSVersion is the minimum TLS version.
+	// +kubebuilder:validation:Enum="1.0";"1.1";"1.2";"1.3"
+	// +optional
+	MinTLSVersion *string `json:"minTLSVersion,omitempty"`
+
+	// TLS13 controls TLS 1.3 setting.
+	// +kubebuilder:validation:Enum=on;off;zrt
+	// +optional
+	TLS13 *string `json:"tls13,omitempty"`
+
+	// AlwaysUseHTTPS redirects all HTTP requests to HTTPS.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	AlwaysUseHTTPS *string `json:"alwaysUseHTTPS,omitempty"`
+
+	// AutomaticHTTPSRewrites rewrites HTTP URLs to HTTPS in page content.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	AutomaticHTTPSRewrites *string `json:"automaticHTTPSRewrites,omitempty"`
+
+	// OpportunisticEncryption enables opportunistic encryption.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	OpportunisticEncryption *string `json:"opportunisticEncryption,omitempty"`
+}
+
+// SecuritySettings defines security settings for a Cloudflare zone.
+type SecuritySettings struct {
+	// SecurityLevel controls the security level.
+	// +kubebuilder:validation:Enum=essentially_off;low;medium;high;under_attack
+	// +optional
+	SecurityLevel *string `json:"securityLevel,omitempty"`
+
+	// ChallengeTTL is the challenge TTL in seconds.
+	// +kubebuilder:validation:Enum=300;900;1800;2700;3600;7200;10800;14400;28800;57600;86400
+	// +optional
+	ChallengeTTL *int `json:"challengeTTL,omitempty"`
+
+	// BrowserCheck enables browser integrity check.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	BrowserCheck *string `json:"browserCheck,omitempty"`
+
+	// EmailObfuscation enables email obfuscation.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	EmailObfuscation *string `json:"emailObfuscation,omitempty"`
+}
+
+// MinifySettings defines minification settings for CSS, HTML, and JavaScript.
+type MinifySettings struct {
+	// CSS enables CSS minification.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	CSS *string `json:"css,omitempty"`
+
+	// HTML enables HTML minification.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	HTML *string `json:"html,omitempty"`
+
+	// JS enables JavaScript minification.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	JS *string `json:"js,omitempty"`
+}
+
+// PerformanceSettings defines performance settings for a Cloudflare zone.
+type PerformanceSettings struct {
+	// CacheLevel controls the cache level.
+	// +kubebuilder:validation:Enum=aggressive;basic;simplified
+	// +optional
+	CacheLevel *string `json:"cacheLevel,omitempty"`
+
+	// BrowserCacheTTL is the browser cache TTL in seconds. 0 means respect existing headers.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	BrowserCacheTTL *int `json:"browserCacheTTL,omitempty"`
+
+	// Minify controls minification settings.
+	// +optional
+	Minify *MinifySettings `json:"minify,omitempty"`
+
+	// Polish controls image optimization.
+	// +kubebuilder:validation:Enum=off;lossless;lossy
+	// +optional
+	Polish *string `json:"polish,omitempty"`
+
+	// Brotli enables brotli compression.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	Brotli *string `json:"brotli,omitempty"`
+
+	// EarlyHints enables early hints.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	EarlyHints *string `json:"earlyHints,omitempty"`
+
+	// HTTP2 enables HTTP/2.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	HTTP2 *string `json:"http2,omitempty"`
+
+	// HTTP3 enables HTTP/3.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	HTTP3 *string `json:"http3,omitempty"`
+}
+
+// NetworkSettings defines network settings for a Cloudflare zone.
+type NetworkSettings struct {
+	// IPv6 enables IPv6 support.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	IPv6 *string `json:"ipv6,omitempty"`
+
+	// WebSockets enables WebSocket support.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	WebSockets *string `json:"websockets,omitempty"`
+
+	// PseudoIPv4 controls Pseudo IPv4 behavior.
+	// +kubebuilder:validation:Enum=off;add_header;overwrite_header
+	// +optional
+	PseudoIPv4 *string `json:"pseudoIPv4,omitempty"`
+
+	// IPGeolocation enables IP geolocation.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	IPGeolocation *string `json:"ipGeolocation,omitempty"`
+
+	// OpportunisticOnion enables onion routing.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	OpportunisticOnion *string `json:"opportunisticOnion,omitempty"`
+}
+
+// BotManagementSettings defines bot management settings for a Cloudflare zone.
+type BotManagementSettings struct {
+	// EnableJS enables JavaScript detections.
+	// +optional
+	EnableJS *bool `json:"enableJS,omitempty"`
+
+	// FightMode enables bot fight mode.
+	// +optional
+	FightMode *bool `json:"fightMode,omitempty"`
+}
 
 // CloudflareZoneConfigSpec defines the desired state of CloudflareZoneConfig.
 type CloudflareZoneConfigSpec struct {
+	// ZoneID is the Cloudflare Zone ID.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ZoneID string `json:"zoneID"`
+
+	// SecretRef references a Secret containing Cloudflare API credentials.
+	// +kubebuilder:validation:Required
+	SecretRef SecretReference `json:"secretRef"`
+
+	// Interval is the reconciliation interval.
+	// +kubebuilder:default="30m"
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
+
+	// SSL defines SSL/TLS settings for the zone.
+	// +optional
+	SSL *SSLSettings `json:"ssl,omitempty"`
+
+	// Security defines security settings for the zone.
+	// +optional
+	Security *SecuritySettings `json:"security,omitempty"`
+
+	// Performance defines performance settings for the zone.
+	// +optional
+	Performance *PerformanceSettings `json:"performance,omitempty"`
+
+	// Network defines network settings for the zone.
+	// +optional
+	Network *NetworkSettings `json:"network,omitempty"`
+
+	// BotManagement defines bot management settings for the zone.
+	// +optional
+	BotManagement *BotManagementSettings `json:"botManagement,omitempty"`
 }
 
 // CloudflareZoneConfigStatus defines the observed state of CloudflareZoneConfig.
 type CloudflareZoneConfigStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the CloudflareZoneConfig resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Conditions represent the latest available observations of the resource's state.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// AppliedSettings is the count of settings applied.
+	// +optional
+	AppliedSettings int `json:"appliedSettings,omitempty"`
+
+	// LastSyncedAt is the last time the zone config was successfully synced.
+	// +optional
+	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+
+	// ObservedGeneration is the most recently observed generation of the CR.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Zone ID",type=string,JSONPath=`.spec.zoneID`
+// +kubebuilder:printcolumn:name="Settings",type=integer,JSONPath=`.status.appliedSettings`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // CloudflareZoneConfig is the Schema for the cloudflarezoneconfigs API
 type CloudflareZoneConfig struct {
