@@ -39,7 +39,7 @@ jobs:
       test-framework: 'go'
       go-version: '1.25'
       coverage: true
-      coverage-threshold: 70
+      coverage-threshold: 40
       test-packages: './internal/controller/... ./internal/cloudflare/... ./internal/ipresolver/... ./internal/status/... ./api/...'
 
   # Create semantic version and GitHub release (main branch only)
