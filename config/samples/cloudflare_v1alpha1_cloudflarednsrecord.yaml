@@ -1,9 +1,66 @@
+---
+# Root A record with dynamic IP
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareDNSRecord
 metadata:
-  labels:
-    app.kubernetes.io/name: cloudflare-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: cloudflarednsrecord-sample
+  name: root-a-record
 spec:
-  # TODO(user): Add fields here
+  zoneID: "<zone-id>"
+  name: "wx4wnc.io"
+  type: A
+  dynamicIP: true
+  proxied: true
+  ttl: 1
+  interval: 5m
+  secretRef:
+    name: cloudflare-api-token
+---
+# CNAME - secure (VPN)
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareDNSRecord
+metadata:
+  name: secure-cname
+spec:
+  zoneID: "<zone-id>"
+  name: "secure.wx4wnc.io"
+  type: CNAME
+  content: "wx4wnc.io"
+  proxied: false
+  ttl: 1
+  secretRef:
+    name: cloudflare-api-token
+---
+# CNAME - satisfactory game server
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareDNSRecord
+metadata:
+  name: satisfactory-cname
+spec:
+  zoneID: "<zone-id>"
+  name: "satisfactory.wx4wnc.io"
+  type: CNAME
+  content: "wx4wnc.io"
+  proxied: false
+  ttl: 1
+  secretRef:
+    name: cloudflare-api-token
+---
+# SRV - satisfactory game server discovery
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareDNSRecord
+metadata:
+  name: satisfactory-srv
+spec:
+  zoneID: "<zone-id>"
+  name: "_satisfactory._udp.wx4wnc.io"
+  type: SRV
+  srvData:
+    service: "_satisfactory"
+    proto: "_udp"
+    priority: 10
+    weight: 1
+    port: 7777
+    target: "satisfactory.wx4wnc.io"
+  ttl: 1
+  secretRef:
+    name: cloudflare-api-token
