@@ -88,7 +88,9 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		log.Error(err, "failed to get API token")
 		status.SetReady(&zoneConfig.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonSecretNotFound, err.Error(), zoneConfig.Generation)
-		_ = r.Status().Update(ctx, &zoneConfig)
+		if statusErr := r.Status().Update(ctx, &zoneConfig); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -108,7 +110,9 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		status.SetReady(&zoneConfig.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonCloudflareError, err.Error(), zoneConfig.Generation)
 		r.Recorder.Event(&zoneConfig, "Warning", "SyncFailed", err.Error())
-		_ = r.Status().Update(ctx, &zoneConfig)
+		if statusErr := r.Status().Update(ctx, &zoneConfig); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
@@ -247,12 +251,9 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 
 	// Handle bot management separately (different API)
 	if zoneConfig.Spec.BotManagement != nil {
-		config := cfclient.BotManagementConfig{}
-		if zoneConfig.Spec.BotManagement.EnableJS != nil {
-			config.EnableJS = *zoneConfig.Spec.BotManagement.EnableJS
-		}
-		if zoneConfig.Spec.BotManagement.FightMode != nil {
-			config.FightMode = *zoneConfig.Spec.BotManagement.FightMode
+		config := cfclient.BotManagementConfig{
+			EnableJS:  zoneConfig.Spec.BotManagement.EnableJS,
+			FightMode: zoneConfig.Spec.BotManagement.FightMode,
 		}
 		if err := zoneClient.UpdateBotManagement(ctx, zoneConfig.Spec.ZoneID, config); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update bot management: %w", err)

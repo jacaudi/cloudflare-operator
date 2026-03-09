@@ -45,19 +45,25 @@ func (c *zoneClient) GetBotManagement(ctx context.Context, zoneID string) (*BotM
 	if err != nil {
 		return nil, fmt.Errorf("get bot management: %w", err)
 	}
+	enableJS := resp.EnableJS
+	fightMode := resp.FightMode
 	return &BotManagementConfig{
-		EnableJS:  resp.EnableJS,
-		FightMode: resp.FightMode,
+		EnableJS:  &enableJS,
+		FightMode: &fightMode,
 	}, nil
 }
 
 func (c *zoneClient) UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error {
+	body := bot_management.BotFightModeConfigurationParam{}
+	if config.EnableJS != nil {
+		body.EnableJS = cfgo.F(*config.EnableJS)
+	}
+	if config.FightMode != nil {
+		body.FightMode = cfgo.F(*config.FightMode)
+	}
 	_, err := c.cf.BotManagement.Update(ctx, bot_management.BotManagementUpdateParams{
 		ZoneID: cfgo.F(zoneID),
-		Body: bot_management.BotFightModeConfigurationParam{
-			EnableJS:  cfgo.F(config.EnableJS),
-			FightMode: cfgo.F(config.FightMode),
-		},
+		Body:   body,
 	})
 	if err != nil {
 		return fmt.Errorf("update bot management: %w", err)

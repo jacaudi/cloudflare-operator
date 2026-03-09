@@ -98,9 +98,10 @@ type ZoneSetting struct {
 }
 
 // BotManagementConfig represents bot management settings.
+// Pointer fields allow distinguishing between "unset" and "set to false".
 type BotManagementConfig struct {
-	EnableJS  bool
-	FightMode bool
+	EnableJS  *bool
+	FightMode *bool
 }
 
 // ZoneClient manages Cloudflare Zone settings and bot management.

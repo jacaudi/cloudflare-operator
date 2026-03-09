@@ -90,7 +90,9 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		log.Error(err, "failed to get API token")
 		status.SetReady(&dnsRecord.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonSecretNotFound, err.Error(), dnsRecord.Generation)
-		_ = r.Status().Update(ctx, &dnsRecord)
+		if statusErr := r.Status().Update(ctx, &dnsRecord); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -110,7 +112,9 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		status.SetReady(&dnsRecord.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonCloudflareError, err.Error(), dnsRecord.Generation)
 		r.Recorder.Event(&dnsRecord, "Warning", "SyncFailed", err.Error())
-		_ = r.Status().Update(ctx, &dnsRecord)
+		if statusErr := r.Status().Update(ctx, &dnsRecord); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
@@ -137,7 +141,9 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 	if err != nil {
 		status.SetReady(&dnsRecord.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonIPResolutionError, err.Error(), dnsRecord.Generation)
-		_ = r.Status().Update(ctx, dnsRecord)
+		if statusErr := r.Status().Update(ctx, dnsRecord); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
@@ -260,7 +266,15 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dns
 	if dnsRecord.Status.RecordID != "" {
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, dnsRecord.Namespace)
 		if err != nil {
-			log.Error(err, "failed to get API token during deletion")
+			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
+			status.SetReady(&dnsRecord.Status.Conditions, metav1.ConditionFalse,
+				cloudflarev1alpha1.ReasonSecretNotFound,
+				fmt.Sprintf("Cannot delete Cloudflare resource: %v. Remove the finalizer manually to force deletion.", err),
+				dnsRecord.Generation)
+			if statusErr := r.Status().Update(ctx, dnsRecord); statusErr != nil {
+				log.Error(statusErr, "failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		} else {
 			var dnsClient cfclient.DNSClient
 			if r.DNSClientFn != nil {
@@ -274,7 +288,9 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dns
 				log.Error(err, "failed to delete DNS record from Cloudflare")
 				status.SetReady(&dnsRecord.Status.Conditions, metav1.ConditionFalse,
 					cloudflarev1alpha1.ReasonCloudflareError, err.Error(), dnsRecord.Generation)
-				_ = r.Status().Update(ctx, dnsRecord)
+				if statusErr := r.Status().Update(ctx, dnsRecord); statusErr != nil {
+					log.Error(statusErr, "failed to update status")
+				}
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 			}
 			log.Info("deleted DNS record from Cloudflare", "recordID", dnsRecord.Status.RecordID)

@@ -98,12 +98,16 @@ func (c *rulesetClient) DeleteRuleset(ctx context.Context, zoneID, rulesetID str
 func buildNewParamsRules(rules []RulesetRule) []rulesets.RulesetNewParamsRuleUnion {
 	sdkRules := make([]rulesets.RulesetNewParamsRuleUnion, 0, len(rules))
 	for _, r := range rules {
-		sdkRules = append(sdkRules, rulesets.RulesetNewParamsRule{
+		rule := rulesets.RulesetNewParamsRule{
 			Action:      cfgo.F(rulesets.RulesetNewParamsRulesAction(r.Action)),
 			Expression:  cfgo.F(r.Expression),
 			Description: cfgo.F(r.Description),
 			Enabled:     cfgo.F(r.Enabled),
-		})
+		}
+		if r.ActionParameters != nil {
+			rule.ActionParameters = cfgo.F[interface{}](r.ActionParameters)
+		}
+		sdkRules = append(sdkRules, rule)
 	}
 	return sdkRules
 }
@@ -112,12 +116,16 @@ func buildNewParamsRules(rules []RulesetRule) []rulesets.RulesetNewParamsRuleUni
 func buildUpdateParamsRules(rules []RulesetRule) []rulesets.RulesetUpdateParamsRuleUnion {
 	sdkRules := make([]rulesets.RulesetUpdateParamsRuleUnion, 0, len(rules))
 	for _, r := range rules {
-		sdkRules = append(sdkRules, rulesets.RulesetUpdateParamsRule{
+		rule := rulesets.RulesetUpdateParamsRule{
 			Action:      cfgo.F(rulesets.RulesetUpdateParamsRulesAction(r.Action)),
 			Expression:  cfgo.F(r.Expression),
 			Description: cfgo.F(r.Description),
 			Enabled:     cfgo.F(r.Enabled),
-		})
+		}
+		if r.ActionParameters != nil {
+			rule.ActionParameters = cfgo.F[interface{}](r.ActionParameters)
+		}
+		sdkRules = append(sdkRules, rule)
 	}
 	return sdkRules
 }

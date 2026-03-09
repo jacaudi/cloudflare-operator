@@ -352,10 +352,10 @@ func TestZoneConfigReconcile_AppliesBotManagement(t *testing.T) {
 	if mock.botConfig == nil {
 		t.Fatal("expected bot config to be set")
 	}
-	if !mock.botConfig.EnableJS {
+	if mock.botConfig.EnableJS == nil || !*mock.botConfig.EnableJS {
 		t.Error("expected EnableJS=true")
 	}
-	if mock.botConfig.FightMode {
+	if mock.botConfig.FightMode == nil || *mock.botConfig.FightMode {
 		t.Error("expected FightMode=false")
 	}
 

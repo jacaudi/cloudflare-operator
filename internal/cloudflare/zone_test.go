@@ -119,10 +119,10 @@ func TestZoneClient_GetBotManagement(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !config.EnableJS {
+	if config.EnableJS == nil || !*config.EnableJS {
 		t.Error("expected EnableJS true")
 	}
-	if !config.FightMode {
+	if config.FightMode == nil || !*config.FightMode {
 		t.Error("expected FightMode true")
 	}
 }
@@ -143,10 +143,10 @@ func TestZoneClient_GetBotManagement_Disabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if config.EnableJS {
+	if config.EnableJS == nil || *config.EnableJS {
 		t.Error("expected EnableJS false")
 	}
-	if config.FightMode {
+	if config.FightMode == nil || *config.FightMode {
 		t.Error("expected FightMode false")
 	}
 }
@@ -194,9 +194,11 @@ func TestZoneClient_UpdateBotManagement(t *testing.T) {
 	})
 
 	client := newTestZoneClient(t, mux)
+	enableJS := true
+	fightMode := true
 	err := client.UpdateBotManagement(context.Background(), "zone-1", BotManagementConfig{
-		EnableJS:  true,
-		FightMode: true,
+		EnableJS:  &enableJS,
+		FightMode: &fightMode,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -226,9 +228,11 @@ func TestZoneClient_UpdateBotManagement_APIError(t *testing.T) {
 	})
 
 	client := newTestZoneClient(t, mux)
+	enableJS := true
+	fightMode := true
 	err := client.UpdateBotManagement(context.Background(), "zone-1", BotManagementConfig{
-		EnableJS:  true,
-		FightMode: true,
+		EnableJS:  &enableJS,
+		FightMode: &fightMode,
 	})
 	if err == nil {
 		t.Error("expected error for API failure")

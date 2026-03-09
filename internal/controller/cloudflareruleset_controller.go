@@ -89,7 +89,9 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		log.Error(err, "failed to get API token")
 		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonSecretNotFound, err.Error(), ruleset.Generation)
-		_ = r.Status().Update(ctx, &ruleset)
+		if statusErr := r.Status().Update(ctx, &ruleset); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -109,7 +111,9 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonCloudflareError, err.Error(), ruleset.Generation)
 		r.Recorder.Event(&ruleset, "Warning", "SyncFailed", err.Error())
-		_ = r.Status().Update(ctx, &ruleset)
+		if statusErr := r.Status().Update(ctx, &ruleset); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
@@ -233,7 +237,15 @@ func (r *CloudflareRulesetReconciler) reconcileDelete(ctx context.Context, rules
 	if ruleset.Status.RulesetID != "" {
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
 		if err != nil {
-			log.Error(err, "failed to get API token during deletion")
+			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
+			status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
+				cloudflarev1alpha1.ReasonSecretNotFound,
+				fmt.Sprintf("Cannot delete Cloudflare resource: %v. Remove the finalizer manually to force deletion.", err),
+				ruleset.Generation)
+			if statusErr := r.Status().Update(ctx, ruleset); statusErr != nil {
+				log.Error(statusErr, "failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		} else {
 			var rulesetClient cfclient.RulesetClient
 			if r.RulesetClientFn != nil {
@@ -247,7 +259,9 @@ func (r *CloudflareRulesetReconciler) reconcileDelete(ctx context.Context, rules
 				log.Error(err, "failed to delete ruleset from Cloudflare")
 				status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
 					cloudflarev1alpha1.ReasonCloudflareError, err.Error(), ruleset.Generation)
-				_ = r.Status().Update(ctx, ruleset)
+				if statusErr := r.Status().Update(ctx, ruleset); statusErr != nil {
+					log.Error(statusErr, "failed to update status")
+				}
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 			}
 			log.Info("deleted ruleset from Cloudflare", "rulesetID", ruleset.Status.RulesetID)
