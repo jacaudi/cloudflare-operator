@@ -1,9 +1,25 @@
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareRuleset
 metadata:
-  labels:
-    app.kubernetes.io/name: cloudflare-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: cloudflareruleset-sample
+  name: waf-custom-rules
 spec:
-  # TODO(user): Add fields here
+  zoneID: "<zone-id>"
+  name: "Custom WAF Rules"
+  description: "Custom WAF rules for zone protection"
+  phase: "http_request_firewall_custom"
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token
+  rules:
+    - action: block
+      expression: '(cf.client.bot) or (cf.threat_score gt 14)'
+      description: "Block bots and high threat scores"
+      enabled: true
+    - action: block
+      expression: '(not ip.geoip.country in {"CA" "US" "GB"})'
+      description: "Block non-allowed countries"
+      enabled: true
+    - action: block
+      expression: '(http.host eq "plex.wx4wnc.io" and not ip.geoip.country in {"CA" "US" "GB"})'
+      description: "Block Plex access from non-allowed countries"
+      enabled: true
