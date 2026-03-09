@@ -14,7 +14,26 @@ spec:
     singular: cloudflarednsrecord
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Record Name
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.currentContent
+      name: Content
+      type: string
+    - jsonPath: .spec.proxied
+      name: Proxied
+      type: boolean
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: CloudflareDNSRecord is the Schema for the cloudflarednsrecords
@@ -40,25 +59,116 @@ spec:
           spec:
             description: spec defines the desired state of CloudflareDNSRecord
             properties:
-              foo:
-                description: foo is an example field of CloudflareDNSRecord. Edit
-                  cloudflarednsrecord_types.go to remove/update
+              content:
+                description: |-
+                  Content is the record content (IP address, hostname, etc.).
+                  Mutually exclusive with DynamicIP.
                 type: string
+              dynamicIP:
+                description: |-
+                  DynamicIP enables automatic external IP resolution for this record.
+                  Only valid for type A. Mutually exclusive with Content.
+                type: boolean
+              interval:
+                default: 5m
+                description: Interval is the reconciliation interval for drift detection.
+                type: string
+              name:
+                description: Name is the DNS record name (e.g., "example.com", "sub.example.com").
+                minLength: 1
+                type: string
+              priority:
+                description: Priority is the record priority (used for MX and SRV
+                  records).
+                type: integer
+              proxied:
+                description: Proxied indicates whether the record is proxied through
+                  Cloudflare.
+                type: boolean
+              secretRef:
+                description: SecretRef references a Secret containing Cloudflare API
+                  credentials.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              srvData:
+                description: |-
+                  SRVData contains SRV-specific record data.
+                  Required when Type is SRV.
+                properties:
+                  port:
+                    description: Port is the target port.
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                  priority:
+                    description: Priority of the SRV record.
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                  proto:
+                    description: Proto is the SRV protocol.
+                    enum:
+                    - _tcp
+                    - _udp
+                    - _tls
+                    type: string
+                  service:
+                    description: Service is the SRV service name (e.g., "_satisfactory").
+                    type: string
+                  target:
+                    description: Target is the target hostname for the SRV record.
+                    type: string
+                  weight:
+                    description: Weight of the SRV record.
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                required:
+                - port
+                - priority
+                - proto
+                - service
+                - target
+                - weight
+                type: object
+              ttl:
+                default: 1
+                description: TTL is the time-to-live in seconds. Use 1 for automatic.
+                minimum: 1
+                type: integer
+              type:
+                description: Type is the DNS record type.
+                enum:
+                - A
+                - AAAA
+                - CNAME
+                - SRV
+                - MX
+                - TXT
+                - NS
+                type: string
+              zoneID:
+                description: ZoneID is the Cloudflare Zone ID.
+                minLength: 1
+                type: string
+            required:
+            - name
+            - secretRef
+            - type
+            - zoneID
             type: object
           status:
             description: status defines the observed state of CloudflareDNSRecord
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the CloudflareDNSRecord resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: Conditions represent the latest available observations
+                  of the resource's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -117,6 +227,23 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              currentContent:
+                description: CurrentContent is the current content/value of the DNS
+                  record in Cloudflare.
+                type: string
+              lastSyncedAt:
+                description: LastSyncedAt is the last time the record was successfully
+                  synced.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recently observed generation
+                  of the CR.
+                format: int64
+                type: integer
+              recordID:
+                description: RecordID is the Cloudflare DNS record ID.
+                type: string
             type: object
         required:
         - spec

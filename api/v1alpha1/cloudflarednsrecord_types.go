@@ -20,46 +20,126 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// CloudflareDNSRecordSpec defines the desired state of CloudflareDNSRecord
+// CloudflareDNSRecordSpec defines the desired state of a Cloudflare DNS record.
 type CloudflareDNSRecordSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// ZoneID is the Cloudflare Zone ID.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ZoneID string `json:"zoneID"`
 
-	// foo is an example field of CloudflareDNSRecord. Edit cloudflarednsrecord_types.go to remove/update
+	// Name is the DNS record name (e.g., "example.com", "sub.example.com").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Type is the DNS record type.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=A;AAAA;CNAME;SRV;MX;TXT;NS
+	Type string `json:"type"`
+
+	// Content is the record content (IP address, hostname, etc.).
+	// Mutually exclusive with DynamicIP.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Content *string `json:"content,omitempty"`
+
+	// DynamicIP enables automatic external IP resolution for this record.
+	// Only valid for type A. Mutually exclusive with Content.
+	// +optional
+	DynamicIP bool `json:"dynamicIP,omitempty"`
+
+	// TTL is the time-to-live in seconds. Use 1 for automatic.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
+	// +optional
+	TTL int `json:"ttl,omitempty"`
+
+	// Proxied indicates whether the record is proxied through Cloudflare.
+	// +optional
+	Proxied *bool `json:"proxied,omitempty"`
+
+	// SRVData contains SRV-specific record data.
+	// Required when Type is SRV.
+	// +optional
+	SRVData *SRVData `json:"srvData,omitempty"`
+
+	// Priority is the record priority (used for MX and SRV records).
+	// +optional
+	Priority *int `json:"priority,omitempty"`
+
+	// SecretRef references a Secret containing Cloudflare API credentials.
+	// +kubebuilder:validation:Required
+	SecretRef SecretReference `json:"secretRef"`
+
+	// Interval is the reconciliation interval for drift detection.
+	// +kubebuilder:default="5m"
+	// +optional
+	Interval *metav1.Duration `json:"interval,omitempty"`
 }
 
-// CloudflareDNSRecordStatus defines the observed state of CloudflareDNSRecord.
+// SRVData contains SRV-specific record fields.
+type SRVData struct {
+	// Service is the SRV service name (e.g., "_satisfactory").
+	// +kubebuilder:validation:Required
+	Service string `json:"service"`
+
+	// Proto is the SRV protocol.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=_tcp;_udp;_tls
+	Proto string `json:"proto"`
+
+	// Priority of the SRV record.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=65535
+	Priority int `json:"priority"`
+
+	// Weight of the SRV record.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=65535
+	Weight int `json:"weight"`
+
+	// Port is the target port.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=65535
+	Port int `json:"port"`
+
+	// Target is the target hostname for the SRV record.
+	// +kubebuilder:validation:Required
+	Target string `json:"target"`
+}
+
+// CloudflareDNSRecordStatus defines the observed state of a CloudflareDNSRecord.
 type CloudflareDNSRecordStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the CloudflareDNSRecord resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Conditions represent the latest available observations of the resource's state.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// RecordID is the Cloudflare DNS record ID.
+	// +optional
+	RecordID string `json:"recordID,omitempty"`
+
+	// CurrentContent is the current content/value of the DNS record in Cloudflare.
+	// +optional
+	CurrentContent string `json:"currentContent,omitempty"`
+
+	// LastSyncedAt is the last time the record was successfully synced.
+	// +optional
+	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+
+	// ObservedGeneration is the most recently observed generation of the CR.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Record Name",type=string,JSONPath=`.spec.name`
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Content",type=string,JSONPath=`.status.currentContent`
+// +kubebuilder:printcolumn:name="Proxied",type=boolean,JSONPath=`.spec.proxied`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // CloudflareDNSRecord is the Schema for the cloudflarednsrecords API
 type CloudflareDNSRecord struct {

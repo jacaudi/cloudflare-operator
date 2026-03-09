@@ -23,16 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// CloudflareRulesetSpec defines the desired state of CloudflareRuleset
+// CloudflareRulesetSpec defines the desired state of CloudflareRuleset.
 type CloudflareRulesetSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of CloudflareRuleset. Edit cloudflareruleset_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
 }
 
 // CloudflareRulesetStatus defines the observed state of CloudflareRuleset.

@@ -23,16 +23,8 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// CloudflareTunnelSpec defines the desired state of CloudflareTunnel
+// CloudflareTunnelSpec defines the desired state of CloudflareTunnel.
 type CloudflareTunnelSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of CloudflareTunnel. Edit cloudflaretunnel_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
 }
 
 // CloudflareTunnelStatus defines the observed state of CloudflareTunnel.

@@ -38,11 +38,6 @@ spec:
             type: object
           spec:
             description: spec defines the desired state of CloudflareTunnel
-            properties:
-              foo:
-                description: foo is an example field of CloudflareTunnel. Edit cloudflaretunnel_types.go
-                  to remove/update
-                type: string
             type: object
           status:
             description: status defines the observed state of CloudflareTunnel
