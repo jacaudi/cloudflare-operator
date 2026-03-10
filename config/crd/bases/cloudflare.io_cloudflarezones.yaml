@@ -14,7 +14,23 @@ spec:
     singular: cloudflarezone
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Domain
+      type: string
+    - jsonPath: .status.zoneID
+      name: Zone ID
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: CloudflareZone is the Schema for the cloudflarezones API
@@ -39,25 +55,67 @@ spec:
           spec:
             description: spec defines the desired state of CloudflareZone
             properties:
-              foo:
-                description: foo is an example field of CloudflareZone. Edit cloudflarezone_types.go
-                  to remove/update
+              accountID:
+                description: AccountID is the Cloudflare Account ID.
+                minLength: 1
                 type: string
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens when the CR is deleted.
+                  "Retain" (default) leaves the zone in Cloudflare.
+                  "Delete" removes the zone from Cloudflare.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              interval:
+                default: 30m
+                description: Interval is the reconciliation interval.
+                type: string
+              name:
+                description: Name is the domain name to onboard (e.g., "example.com").
+                minLength: 1
+                type: string
+              paused:
+                description: Paused indicates whether the zone is paused (not serving
+                  traffic through Cloudflare).
+                type: boolean
+              secretRef:
+                description: SecretRef references a Secret containing Cloudflare API
+                  credentials.
+                properties:
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              type:
+                default: full
+                description: |-
+                  Type is the zone type. "full" means Cloudflare is the authoritative DNS.
+                  "partial" is a CNAME setup. Immutable after creation.
+                enum:
+                - full
+                - partial
+                - secondary
+                type: string
+            required:
+            - accountID
+            - name
+            - secretRef
             type: object
           status:
             description: status defines the observed state of CloudflareZone
             properties:
+              activatedOn:
+                description: ActivatedOn is the time the zone became active.
+                format: date-time
+                type: string
               conditions:
-                description: |-
-                  conditions represent the current state of the CloudflareZone resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +174,38 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastSyncedAt:
+                description: LastSyncedAt is the last time the zone was successfully
+                  synced.
+                format: date-time
+                type: string
+              nameServers:
+                description: |-
+                  NameServers are the Cloudflare-assigned nameservers for this zone.
+                  Update your registrar's NS records to these values to activate the zone.
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the most recently observed generation.
+                format: int64
+                type: integer
+              originalNameServers:
+                description: OriginalNameServers are the nameservers before migration
+                  to Cloudflare.
+                items:
+                  type: string
+                type: array
+              originalRegistrar:
+                description: OriginalRegistrar is the registrar at the time of onboarding.
+                type: string
+              status:
+                description: Status is the zone status in Cloudflare (initializing,
+                  pending, active, moved).
+                type: string
+              zoneID:
+                description: ZoneID is the Cloudflare Zone ID.
+                type: string
             type: object
         required:
         - spec

@@ -25,6 +25,8 @@ const (
 	ReasonInvalidSpec       = "InvalidSpec"
 	ReasonDeletingResource  = "DeletingResource"
 	ReasonIPResolutionError = "IPResolutionError"
+	ReasonZonePending       = "ZonePending"
+	ReasonZoneNotActive     = "ZoneNotActive"
 )
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.
