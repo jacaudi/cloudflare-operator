@@ -120,6 +120,13 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareZoneConfig")
 		os.Exit(1)
 	}
+	if err := (&controller.CloudflareZoneReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareZone")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

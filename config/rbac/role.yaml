@@ -29,6 +29,7 @@ rules:
   - cloudflarerulesets
   - cloudflaretunnels
   - cloudflarezoneconfigs
+  - cloudflarezones
   verbs:
   - create
   - delete
@@ -44,6 +45,7 @@ rules:
   - cloudflarerulesets/finalizers
   - cloudflaretunnels/finalizers
   - cloudflarezoneconfigs/finalizers
+  - cloudflarezones/finalizers
   verbs:
   - update
 - apiGroups:
@@ -53,6 +55,7 @@ rules:
   - cloudflarerulesets/status
   - cloudflaretunnels/status
   - cloudflarezoneconfigs/status
+  - cloudflarezones/status
   verbs:
   - get
   - patch

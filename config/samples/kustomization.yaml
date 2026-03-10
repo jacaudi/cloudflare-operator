@@ -4,4 +4,5 @@ resources:
 - cloudflare_v1alpha1_cloudflaretunnel.yaml
 - cloudflare_v1alpha1_cloudflareruleset.yaml
 - cloudflare_v1alpha1_cloudflarezoneconfig.yaml
+- cloudflare_v1alpha1_cloudflarezone.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -6,6 +6,7 @@ resources:
 - bases/cloudflare.io_cloudflaretunnels.yaml
 - bases/cloudflare.io_cloudflarerulesets.yaml
 - bases/cloudflare.io_cloudflarezoneconfigs.yaml
+- bases/cloudflare.io_cloudflarezones.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

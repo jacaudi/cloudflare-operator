@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the cloudflare-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- cloudflarezone_admin_role.yaml
+- cloudflarezone_editor_role.yaml
+- cloudflarezone_viewer_role.yaml
 - cloudflarezoneconfig_admin_role.yaml
 - cloudflarezoneconfig_editor_role.yaml
 - cloudflarezoneconfig_viewer_role.yaml
