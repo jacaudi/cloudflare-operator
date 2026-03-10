@@ -3,6 +3,7 @@ package cloudflare
 
 import (
 	"context"
+	"time"
 )
 
 // DNSRecord represents a Cloudflare DNS record.
@@ -110,4 +111,39 @@ type ZoneClient interface {
 	UpdateSetting(ctx context.Context, zoneID, settingID string, value any) error
 	GetBotManagement(ctx context.Context, zoneID string) (*BotManagementConfig, error)
 	UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error
+}
+
+// Zone represents a Cloudflare Zone (lifecycle information).
+type Zone struct {
+	ID                  string
+	Name                string
+	Status              string // initializing, pending, active, moved
+	Type                string // full, partial, secondary
+	Paused              bool
+	NameServers         []string
+	OriginalNameServers []string
+	OriginalRegistrar   string
+	VerificationKey     string
+	ActivatedOn         *time.Time
+}
+
+// ZoneLifecycleParams are parameters for creating a zone.
+type ZoneLifecycleParams struct {
+	Name string
+	Type string // full, partial, secondary
+}
+
+// ZoneLifecycleEditParams are parameters for editing a zone.
+type ZoneLifecycleEditParams struct {
+	Paused *bool
+}
+
+// ZoneLifecycleClient manages Cloudflare Zone lifecycle (create/get/list/edit/delete).
+type ZoneLifecycleClient interface {
+	CreateZone(ctx context.Context, accountID string, params ZoneLifecycleParams) (*Zone, error)
+	GetZone(ctx context.Context, zoneID string) (*Zone, error)
+	ListZonesByName(ctx context.Context, accountID, name string) ([]Zone, error)
+	EditZone(ctx context.Context, zoneID string, params ZoneLifecycleEditParams) (*Zone, error)
+	DeleteZone(ctx context.Context, zoneID string) error
+	TriggerActivationCheck(ctx context.Context, zoneID string) error
 }
