@@ -19,12 +19,12 @@ import (
 
 // mockZoneClient implements cfclient.ZoneClient for testing.
 type mockZoneClient struct {
-	settings          map[string]any
-	botConfig         *cfclient.BotManagementConfig
-	updateErrors      map[string]error
-	botUpdateErr      error
+	settings           map[string]any
+	botConfig          *cfclient.BotManagementConfig
+	updateErrors       map[string]error
+	botUpdateErr       error
 	updateSettingCalls int
-	updateBotCalled   bool
+	updateBotCalled    bool
 }
 
 func newMockZoneClient() *mockZoneClient {
@@ -139,11 +139,11 @@ func TestZoneConfigReconcile_AppliesSSLSettings(t *testing.T) {
 	autoRewrites := "on"
 	oppEncryption := "on"
 	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{
-		Mode:                   &sslMode,
-		MinTLSVersion:          &minTLS,
-		TLS13:                  &tls13,
-		AlwaysUseHTTPS:         &alwaysHTTPS,
-		AutomaticHTTPSRewrites: &autoRewrites,
+		Mode:                    &sslMode,
+		MinTLSVersion:           &minTLS,
+		TLS13:                   &tls13,
+		AlwaysUseHTTPS:          &alwaysHTTPS,
+		AutomaticHTTPSRewrites:  &autoRewrites,
 		OpportunisticEncryption: &oppEncryption,
 	}
 
@@ -191,7 +191,7 @@ func TestZoneConfigReconcile_AppliesSSLSettings(t *testing.T) {
 
 	// Verify status was updated
 	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone config: %v", err)
 	}
 
@@ -212,11 +212,11 @@ func TestZoneConfigReconcile_AppliesAllSettings(t *testing.T) {
 	autoRewrites := "on"
 	oppEncryption := "on"
 	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{
-		Mode:                   &sslMode,
-		MinTLSVersion:          &minTLS,
-		TLS13:                  &tls13,
-		AlwaysUseHTTPS:         &alwaysHTTPS,
-		AutomaticHTTPSRewrites: &autoRewrites,
+		Mode:                    &sslMode,
+		MinTLSVersion:           &minTLS,
+		TLS13:                   &tls13,
+		AlwaysUseHTTPS:          &alwaysHTTPS,
+		AutomaticHTTPSRewrites:  &autoRewrites,
 		OpportunisticEncryption: &oppEncryption,
 	}
 
@@ -227,8 +227,8 @@ func TestZoneConfigReconcile_AppliesAllSettings(t *testing.T) {
 	emailObfuscation := "on"
 	zoneConfig.Spec.Security = &cloudflarev1alpha1.SecuritySettings{
 		SecurityLevel:    &secLevel,
-		ChallengeTTL:    &challengeTTL,
-		BrowserCheck:    &browserCheck,
+		ChallengeTTL:     &challengeTTL,
+		BrowserCheck:     &browserCheck,
 		EmailObfuscation: &emailObfuscation,
 	}
 
@@ -305,7 +305,7 @@ func TestZoneConfigReconcile_AppliesAllSettings(t *testing.T) {
 
 	// Verify status: 23 settings + 1 bot management = 24
 	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone config: %v", err)
 	}
 
@@ -361,7 +361,7 @@ func TestZoneConfigReconcile_AppliesBotManagement(t *testing.T) {
 
 	// Verify status: 1 for bot management
 	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone config: %v", err)
 	}
 
@@ -398,7 +398,7 @@ func TestZoneConfigReconcile_DeleteDoesNotRevert(t *testing.T) {
 
 	// Verify finalizer was removed (object may be garbage-collected by fake client)
 	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	err = r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated)
+	err = r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated)
 	if err == nil {
 		// Object still exists — verify finalizer was removed
 		for _, f := range updated.Finalizers {
@@ -432,7 +432,7 @@ func TestZoneConfigReconcile_SecretNotFound(t *testing.T) {
 
 	// Verify Ready condition is False with SecretNotFound reason
 	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone config: %v", err)
 	}
 

@@ -44,16 +44,16 @@ test: manifests generate fmt vet ## Run tests.
 	go test ./... -coverprofile cover.out
 
 .PHONY: lint
-lint: golangci-lint ## Run golangci-lint linter
-	$(GOLANGCI_LINT) run
+lint: custom-gcl ## Run golangci-lint linter
+	$(CUSTOM_GCL) run
 
 .PHONY: lint-fix
-lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
-	$(GOLANGCI_LINT) run --fix
+lint-fix: custom-gcl ## Run golangci-lint linter and perform fixes
+	$(CUSTOM_GCL) run --fix
 
 .PHONY: lint-config
-lint-config: golangci-lint ## Verify golangci-lint linter configuration
-	$(GOLANGCI_LINT) config verify
+lint-config: custom-gcl ## Verify golangci-lint linter configuration
+	$(CUSTOM_GCL) config verify
 
 ##@ Build
 
@@ -103,6 +103,7 @@ $(LOCALBIN):
 ## Tool Binaries
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+CUSTOM_GCL = $(LOCALBIN)/custom-gcl
 
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
@@ -117,3 +118,8 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	test -s $(LOCALBIN)/golangci-lint || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+.PHONY: custom-gcl
+custom-gcl: golangci-lint $(CUSTOM_GCL) ## Build custom golangci-lint with module plugins.
+$(CUSTOM_GCL): .custom-gcl.yml $(LOCALBIN)
+	$(GOLANGCI_LINT) custom && mv custom-gcl $(CUSTOM_GCL)

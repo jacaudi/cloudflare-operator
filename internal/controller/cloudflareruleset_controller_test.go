@@ -201,7 +201,7 @@ func TestRulesetReconcile_CreatesRuleset(t *testing.T) {
 
 	// Verify status was updated
 	var updated cloudflarev1alpha1.CloudflareRuleset
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated ruleset: %v", err)
 	}
 
@@ -257,7 +257,7 @@ func TestRulesetReconcile_AdoptsExistingRuleset(t *testing.T) {
 
 	// Verify the status has the adopted ruleset ID
 	var updated cloudflarev1alpha1.CloudflareRuleset
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated ruleset: %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestRulesetReconcile_UpdatesRuleset(t *testing.T) {
 
 	// Verify status
 	var updated cloudflarev1alpha1.CloudflareRuleset
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated ruleset: %v", err)
 	}
 
@@ -355,7 +355,7 @@ func TestRulesetReconcile_DeletesRuleset(t *testing.T) {
 	// once the finalizer is removed, so we verify the object is gone (which proves
 	// the finalizer was successfully removed).
 	var updated cloudflarev1alpha1.CloudflareRuleset
-	err = r.Client.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated)
+	err = r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated)
 	if err == nil {
 		// Object still exists — verify finalizer was removed
 		for _, f := range updated.Finalizers {
@@ -389,7 +389,7 @@ func TestRulesetReconcile_SecretNotFound(t *testing.T) {
 
 	// Verify Ready condition is False with SecretNotFound reason
 	var updated cloudflarev1alpha1.CloudflareRuleset
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated ruleset: %v", err)
 	}
 

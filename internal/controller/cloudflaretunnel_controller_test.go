@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -154,17 +155,11 @@ func TestTunnelReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 
 	// Verify finalizer was added
 	var updated cloudflarev1alpha1.CloudflareTunnel
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated tunnel: %v", err)
 	}
 
-	found := false
-	for _, f := range updated.Finalizers {
-		if f == cloudflarev1alpha1.FinalizerName {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(updated.Finalizers, cloudflarev1alpha1.FinalizerName)
 	if !found {
 		t.Errorf("expected finalizer %q to be present, got finalizers: %v", cloudflarev1alpha1.FinalizerName, updated.Finalizers)
 	}
@@ -198,7 +193,7 @@ func TestTunnelReconcile_CreatesTunnel(t *testing.T) {
 
 	// Verify status was updated
 	var updated cloudflarev1alpha1.CloudflareTunnel
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated tunnel: %v", err)
 	}
 
@@ -215,7 +210,7 @@ func TestTunnelReconcile_CreatesTunnel(t *testing.T) {
 
 	// Verify the credentials Secret was created
 	var credSecret corev1.Secret
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "tunnel-creds", Namespace: "default"}, &credSecret); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tunnel-creds", Namespace: "default"}, &credSecret); err != nil {
 		t.Fatalf("expected credentials secret to be created: %v", err)
 	}
 
@@ -272,7 +267,7 @@ func TestTunnelReconcile_AdoptsExistingTunnel(t *testing.T) {
 
 	// Verify the status has the adopted tunnel ID
 	var updated cloudflarev1alpha1.CloudflareTunnel
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated tunnel: %v", err)
 	}
 
@@ -287,7 +282,7 @@ func TestTunnelReconcile_AdoptsExistingTunnel(t *testing.T) {
 
 	// Verify the credentials Secret was created even for adopted tunnels
 	var credSecret corev1.Secret
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "tunnel-creds", Namespace: "default"}, &credSecret); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tunnel-creds", Namespace: "default"}, &credSecret); err != nil {
 		t.Fatalf("expected credentials secret to be created for adopted tunnel: %v", err)
 	}
 }
@@ -330,7 +325,7 @@ func TestTunnelReconcile_DeletesTunnel(t *testing.T) {
 	// once the finalizer is removed, so we verify the object is gone (which proves
 	// the finalizer was successfully removed).
 	var updated cloudflarev1alpha1.CloudflareTunnel
-	err = r.Client.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated)
+	err = r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated)
 	if err == nil {
 		// Object still exists - verify finalizer was removed
 		for _, f := range updated.Finalizers {
@@ -364,7 +359,7 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 
 	// Verify Ready condition is False with SecretNotFound reason
 	var updated cloudflarev1alpha1.CloudflareTunnel
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated tunnel: %v", err)
 	}
 

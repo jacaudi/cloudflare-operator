@@ -121,8 +121,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.CloudflareZoneReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("cloudflarezone-controller"),
+		ClientFactory: clientFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareZone")
 		os.Exit(1)

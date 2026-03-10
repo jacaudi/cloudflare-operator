@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,17 +22,17 @@ import (
 
 // mockDNSClient implements cfclient.DNSClient for testing.
 type mockDNSClient struct {
-	records       map[string]*cfclient.DNSRecord
-	nextID        int
-	createCalled  bool
-	updateCalled  bool
-	deleteCalled  bool
-	createErr     error
-	updateErr     error
-	deleteErr     error
-	listErr       error
-	getErr        error
-	listOverride  func(zoneID, name, recordType string) ([]cfclient.DNSRecord, error)
+	records      map[string]*cfclient.DNSRecord
+	nextID       int
+	createCalled bool
+	updateCalled bool
+	deleteCalled bool
+	createErr    error
+	updateErr    error
+	deleteErr    error
+	listErr      error
+	getErr       error
+	listOverride func(zoneID, name, recordType string) ([]cfclient.DNSRecord, error)
 }
 
 func newMockDNSClient() *mockDNSClient {
@@ -216,17 +217,11 @@ func TestReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 
 	// Verify finalizer was added
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
 
-	found := false
-	for _, f := range updated.Finalizers {
-		if f == cloudflarev1alpha1.FinalizerName {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(updated.Finalizers, cloudflarev1alpha1.FinalizerName)
 	if !found {
 		t.Errorf("expected finalizer %q to be present, got finalizers: %v", cloudflarev1alpha1.FinalizerName, updated.Finalizers)
 	}
@@ -261,7 +256,7 @@ func TestReconcile_CreatesDNSRecord(t *testing.T) {
 
 	// Verify status was updated
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
 
@@ -307,7 +302,7 @@ func TestReconcile_AdoptsExistingRecord(t *testing.T) {
 
 	// Verify the status has the adopted record ID
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
 
@@ -355,7 +350,7 @@ func TestReconcile_UpdatesDriftedRecord(t *testing.T) {
 
 	// Verify status
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
 	if updated.Status.CurrentContent != "1.2.3.4" {
@@ -386,7 +381,7 @@ func TestReconcile_SecretNotFound(t *testing.T) {
 
 	// Verify Ready condition is False with SecretNotFound reason
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
 
@@ -448,7 +443,7 @@ func TestReconcile_DeletesRecord(t *testing.T) {
 	// once the finalizer is removed, so we verify the object is gone (which proves
 	// the finalizer was successfully removed).
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	err = r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated)
+	err = r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated)
 	if err == nil {
 		// Object still exists — verify finalizer was removed
 		for _, f := range updated.Finalizers {
@@ -503,7 +498,7 @@ func TestReconcile_SkipsUpToDateRecord(t *testing.T) {
 
 	// Verify status reflects current content
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
 	if updated.Status.CurrentContent != "1.2.3.4" {

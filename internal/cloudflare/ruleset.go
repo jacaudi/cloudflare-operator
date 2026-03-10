@@ -105,7 +105,7 @@ func buildNewParamsRules(rules []RulesetRule) []rulesets.RulesetNewParamsRuleUni
 			Enabled:     cfgo.F(r.Enabled),
 		}
 		if r.ActionParameters != nil {
-			rule.ActionParameters = cfgo.F[interface{}](r.ActionParameters)
+			rule.ActionParameters = cfgo.F[any](r.ActionParameters)
 		}
 		sdkRules = append(sdkRules, rule)
 	}
@@ -123,7 +123,7 @@ func buildUpdateParamsRules(rules []RulesetRule) []rulesets.RulesetUpdateParamsR
 			Enabled:     cfgo.F(r.Enabled),
 		}
 		if r.ActionParameters != nil {
-			rule.ActionParameters = cfgo.F[interface{}](r.ActionParameters)
+			rule.ActionParameters = cfgo.F[any](r.ActionParameters)
 		}
 		sdkRules = append(sdkRules, rule)
 	}
@@ -132,7 +132,7 @@ func buildUpdateParamsRules(rules []RulesetRule) []rulesets.RulesetUpdateParamsR
 
 // toMapStringAny converts an interface{} value to map[string]any via JSON roundtrip.
 // This handles both raw map[string]any and SDK typed structs (e.g. BlockRuleActionParameters).
-func toMapStringAny(v interface{}) map[string]any {
+func toMapStringAny(v any) map[string]any {
 	if v == nil {
 		return nil
 	}

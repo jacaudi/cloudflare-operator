@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -174,17 +175,11 @@ func TestZoneReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone: %v", err)
 	}
 
-	found := false
-	for _, f := range updated.Finalizers {
-		if f == cloudflarev1alpha1.FinalizerName {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(updated.Finalizers, cloudflarev1alpha1.FinalizerName)
 	if !found {
 		t.Errorf("expected finalizer %q to be present", cloudflarev1alpha1.FinalizerName)
 	}
@@ -210,7 +205,7 @@ func TestZoneReconcile_CreatesZone(t *testing.T) {
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone: %v", err)
 	}
 
@@ -253,7 +248,7 @@ func TestZoneReconcile_AdoptsExistingZone(t *testing.T) {
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone: %v", err)
 	}
 
@@ -287,7 +282,7 @@ func TestZoneReconcile_SetsReadyTrueWhenActive(t *testing.T) {
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone: %v", err)
 	}
 
@@ -332,7 +327,7 @@ func TestZoneReconcile_SetsReadyFalseWhenPending(t *testing.T) {
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone: %v", err)
 	}
 
@@ -463,7 +458,7 @@ func TestZoneReconcile_SecretNotFound(t *testing.T) {
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
-	if err := r.Client.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated zone: %v", err)
 	}
 

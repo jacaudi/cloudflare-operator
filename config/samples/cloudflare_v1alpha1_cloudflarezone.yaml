@@ -1,9 +1,13 @@
+---
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareZone
 metadata:
-  labels:
-    app.kubernetes.io/name: cloudflare-operator
-    app.kubernetes.io/managed-by: kustomize
-  name: cloudflarezone-sample
+  name: example-zone
 spec:
-  # TODO(user): Add fields here
+  name: "example.com"
+  accountID: "<account-id>"
+  type: "full"
+  deletionPolicy: Retain
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token
