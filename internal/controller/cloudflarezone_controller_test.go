@@ -470,6 +470,46 @@ func TestZoneReconcile_SecretNotFound(t *testing.T) {
 	t.Error("expected Ready condition with SecretNotFound reason")
 }
 
+func TestZoneReconcile_CloudflareAPIError(t *testing.T) {
+	zone := newTestCloudflareZone("test-zone", "default")
+	zone.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+
+	mock := newMockZoneLifecycleClient()
+	mock.listErr = fmt.Errorf("cloudflare API error: 500 internal server error")
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.RequeueAfter != 1*time.Minute {
+		t.Errorf("expected RequeueAfter=1m, got %v", result.RequeueAfter)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZone
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("failed to get updated zone: %v", err)
+	}
+
+	for _, c := range updated.Status.Conditions {
+		if c.Type == "Ready" {
+			if c.Status != metav1.ConditionFalse {
+				t.Errorf("expected Ready=False, got %s", c.Status)
+			}
+			if c.Reason != cloudflarev1alpha1.ReasonCloudflareError {
+				t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonCloudflareError, c.Reason)
+			}
+			return
+		}
+	}
+	t.Error("expected Ready condition with CloudflareError reason")
+}
+
 func TestZoneReconcile_EditsZoneWhenPausedChanges(t *testing.T) {
 	paused := true
 	zone := newTestCloudflareZone("test-zone", "default")

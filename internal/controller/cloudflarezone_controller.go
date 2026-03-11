@@ -115,6 +115,9 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// 7. Update status
+	// Note: Ready/Synced conditions are set inside reconcileZone rather than here
+	// because the zone has three distinct status states (active, pending, other)
+	// that each require different condition values.
 	zone.Status.ObservedGeneration = zone.Generation
 	now := metav1.Now()
 	zone.Status.LastSyncedAt = &now
@@ -134,9 +137,16 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 	if zone.Status.ZoneID != "" {
 		existing, err = zoneClient.GetZone(ctx, zone.Status.ZoneID)
 		if err != nil {
-			log.Info("could not fetch zone by ID, will search by name", "zoneID", zone.Status.ZoneID)
-			zone.Status.ZoneID = ""
-			existing = nil
+			// Distinguish not-found (safe to fall through to ListZonesByName) from
+			// transient errors (retry to avoid potential duplicate zone creation).
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "404") {
+				log.Info("zone not found by ID, will search by name", "zoneID", zone.Status.ZoneID)
+				zone.Status.ZoneID = ""
+				existing = nil
+			} else {
+				return ctrl.Result{}, fmt.Errorf("get zone by ID %s: %w", zone.Status.ZoneID, err)
+			}
 		}
 	}
 
@@ -260,6 +270,12 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 		} else {
 			cfClient := cfclient.NewCloudflareClient(apiToken)
 			zoneClient = cfclient.NewZoneLifecycleClientFromCF(cfClient)
+		}
+
+		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
+			cloudflarev1alpha1.ReasonDeletingResource, "Deleting zone from Cloudflare", zone.Generation)
+		if statusErr := r.Status().Update(ctx, zone); statusErr != nil {
+			log.Error(statusErr, "failed to update status before deletion")
 		}
 
 		if err := zoneClient.DeleteZone(ctx, zone.Status.ZoneID); err != nil {
