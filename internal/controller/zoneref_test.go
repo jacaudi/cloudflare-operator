@@ -115,3 +115,17 @@ func TestResolveZoneID_NeitherProvided(t *testing.T) {
 		t.Fatal("expected error when neither zoneID nor zoneRef provided")
 	}
 }
+
+func TestResolveZoneID_BothProvided_ZoneIDTakesPrecedence(t *testing.T) {
+	s := testScheme(t)
+	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
+
+	ref := &cloudflarev1alpha1.ZoneReference{Name: "my-zone"}
+	zoneID, err := ResolveZoneID(context.Background(), fakeClient, "default", "direct-id", ref)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if zoneID != "direct-id" {
+		t.Errorf("expected direct-id to take precedence, got %s", zoneID)
+	}
+}
