@@ -1,0 +1,11 @@
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareTunnel
+metadata:
+  name: k8s-external-ingress
+spec:
+  name: k8s-external-ingress
+  accountID: "<account-id>"
+  generatedSecretName: cloudflare-tunnel-credentials
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token

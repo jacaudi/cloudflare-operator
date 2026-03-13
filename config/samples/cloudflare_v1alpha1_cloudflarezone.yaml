@@ -1,0 +1,13 @@
+---
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareZone
+metadata:
+  name: example-zone
+spec:
+  name: "example.com"
+  accountID: "<account-id>"
+  type: "full"
+  deletionPolicy: Retain
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token

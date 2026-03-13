@@ -1,0 +1,89 @@
+---
+# CI/CD Pipeline for Cloudflare Operator
+# Runs linting, testing, container builds, and image scanning
+name: CI/CD
+
+"on":
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only allow one release at a time - queue subsequent runs
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  # Lint YAML and Go code
+  lint:
+    uses: jacaudi/github-actions/.github/workflows/lint.yml@v0.13.0
+    permissions:
+      contents: read
+    with:
+      yaml: true
+      go: true
+      go-version: '1.25'
+
+  # Run Go tests with coverage
+  test:
+    uses: jacaudi/github-actions/.github/workflows/test.yml@v0.13.0
+    permissions:
+      contents: read
+    with:
+      test-framework: 'go'
+      go-version: '1.25'
+      coverage: true
+      coverage-threshold: 40
+      test-packages: './internal/controller/... ./internal/cloudflare/... ./internal/ipresolver/... ./internal/status/... ./api/...'
+
+  # Create semantic version and GitHub release (main branch only)
+  release:
+    needs: [lint, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: jacaudi/github-actions/.github/workflows/semantic-release.yml@v0.13.0
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    with:
+      use-github-app: true
+      allow-initial-development-versions: true
+    secrets:
+      app-id: ${{ secrets.APP_ID }}
+      app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  # Build multi-arch container images
+  docker:
+    needs: [release]
+    if: needs.release.outputs.new-release-published == 'true'
+    uses: jacaudi/github-actions/.github/workflows/docker-build.yml@v0.13.0
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image-name: ${{ github.repository }}
+      platforms: 'linux/amd64,linux/arm64'
+      version: ${{ needs.release.outputs.new-release-version }}
+      tags: |
+        ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version }}
+        ghcr.io/${{ github.repository }}:latest
+
+  # Scan container image for vulnerabilities
+  scan:
+    needs: [release, docker]
+    if: needs.release.outputs.new-release-published == 'true'
+    uses: jacaudi/github-actions/.github/workflows/image-scan.yml@v0.13.0
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    with:
+      image-ref: ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version }}
+      severity: 'CRITICAL,HIGH'
+      exit-code: 0

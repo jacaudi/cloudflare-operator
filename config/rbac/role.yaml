@@ -1,0 +1,62 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cloudflare.io
+  resources:
+  - cloudflarednsrecords
+  - cloudflarerulesets
+  - cloudflaretunnels
+  - cloudflarezoneconfigs
+  - cloudflarezones
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cloudflare.io
+  resources:
+  - cloudflarednsrecords/finalizers
+  - cloudflarerulesets/finalizers
+  - cloudflaretunnels/finalizers
+  - cloudflarezoneconfigs/finalizers
+  - cloudflarezones/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cloudflare.io
+  resources:
+  - cloudflarednsrecords/status
+  - cloudflarerulesets/status
+  - cloudflaretunnels/status
+  - cloudflarezoneconfigs/status
+  - cloudflarezones/status
+  verbs:
+  - get
+  - patch
+  - update

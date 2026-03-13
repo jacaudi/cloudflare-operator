@@ -1,0 +1,40 @@
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareZoneConfig
+metadata:
+  name: zone-settings
+spec:
+  zoneID: "<zone-id>"
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token
+  ssl:
+    mode: "full"
+    minTLSVersion: "1.2"
+    tls13: "zrt"
+    alwaysUseHTTPS: "on"
+    automaticHTTPSRewrites: "on"
+    opportunisticEncryption: "on"
+  security:
+    securityLevel: "medium"
+    challengeTTL: 1800
+    browserCheck: "on"
+    emailObfuscation: "on"
+  performance:
+    cacheLevel: "aggressive"
+    browserCacheTTL: 14400
+    brotli: "on"
+    earlyHints: "on"
+    http2: "on"
+    http3: "on"
+    minify:
+      css: "on"
+      html: "on"
+      js: "on"
+  network:
+    ipv6: "on"
+    websockets: "on"
+    ipGeolocation: "on"
+    opportunisticOnion: "on"
+  botManagement:
+    enableJS: true
+    fightMode: true
