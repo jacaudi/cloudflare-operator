@@ -9,6 +9,14 @@ type SecretReference struct {
 	Name string `json:"name"`
 }
 
+// ZoneReference refers to a CloudflareZone CR in the same namespace.
+type ZoneReference struct {
+	// Name of the CloudflareZone resource.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+}
+
 // Condition type constants used across all CRDs.
 const (
 	ConditionTypeReady  = "Ready"
@@ -27,6 +35,7 @@ const (
 	ReasonIPResolutionError = "IPResolutionError"
 	ReasonZonePending       = "ZonePending"
 	ReasonZoneNotActive     = "ZoneNotActive"
+	ReasonZoneRefNotReady   = "ZoneRefNotReady"
 )
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.
