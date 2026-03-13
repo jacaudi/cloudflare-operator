@@ -157,6 +157,7 @@ spec:
                 description: |-
                   ZoneID is the Cloudflare Zone ID.
                   Mutually exclusive with ZoneRef.
+                minLength: 1
                 type: string
               zoneRef:
                 description: |-

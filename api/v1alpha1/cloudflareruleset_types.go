@@ -54,6 +54,7 @@ type CloudflareRulesetSpec struct {
 	// ZoneID is the Cloudflare Zone ID.
 	// Mutually exclusive with ZoneRef.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
 	ZoneID string `json:"zoneID,omitempty"`
 
 	// ZoneRef references a CloudflareZone resource in the same namespace.
