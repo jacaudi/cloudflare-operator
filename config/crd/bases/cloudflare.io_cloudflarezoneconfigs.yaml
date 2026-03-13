@@ -270,12 +270,25 @@ spec:
                     type: string
                 type: object
               zoneID:
-                description: ZoneID is the Cloudflare Zone ID.
-                minLength: 1
+                description: |-
+                  ZoneID is the Cloudflare Zone ID.
+                  Mutually exclusive with ZoneRef.
                 type: string
+              zoneRef:
+                description: |-
+                  ZoneRef references a CloudflareZone resource in the same namespace.
+                  The controller resolves the zone ID from the referenced resource's status.
+                  Mutually exclusive with ZoneID.
+                properties:
+                  name:
+                    description: Name of the CloudflareZone resource.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
             required:
             - secretRef
-            - zoneID
             type: object
           status:
             description: status defines the observed state of CloudflareZoneConfig
@@ -358,6 +371,11 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: one of zoneID or zoneRef is required
+          rule: has(self.spec.zoneID) || has(self.spec.zoneRef)
+        - message: zoneID and zoneRef are mutually exclusive
+          rule: '!(has(self.spec.zoneID) && has(self.spec.zoneRef))'
     served: true
     storage: true
     subresources:

@@ -23,9 +23,15 @@ import (
 // CloudflareDNSRecordSpec defines the desired state of a Cloudflare DNS record.
 type CloudflareDNSRecordSpec struct {
 	// ZoneID is the Cloudflare Zone ID.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	ZoneID string `json:"zoneID"`
+	// Mutually exclusive with ZoneRef.
+	// +optional
+	ZoneID string `json:"zoneID,omitempty"`
+
+	// ZoneRef references a CloudflareZone resource in the same namespace.
+	// The controller resolves the zone ID from the referenced resource's status.
+	// Mutually exclusive with ZoneID.
+	// +optional
+	ZoneRef *ZoneReference `json:"zoneRef,omitempty"`
 
 	// Name is the DNS record name (e.g., "example.com", "sub.example.com").
 	// +kubebuilder:validation:Required
@@ -140,6 +146,8 @@ type CloudflareDNSRecordStatus struct {
 // +kubebuilder:printcolumn:name="Proxied",type=boolean,JSONPath=`.spec.proxied`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.zoneID) && has(self.spec.zoneRef))",message="zoneID and zoneRef are mutually exclusive"
 
 // CloudflareDNSRecord is the Schema for the cloudflarednsrecords API
 type CloudflareDNSRecord struct {
