@@ -27,6 +27,7 @@ type mockDNSClient struct {
 	createCalled bool
 	updateCalled bool
 	deleteCalled bool
+	lastZoneID   string
 	createErr    error
 	updateErr    error
 	deleteErr    error
@@ -66,8 +67,9 @@ func (m *mockDNSClient) ListRecordsByNameAndType(_ context.Context, zoneID, name
 	return results, nil
 }
 
-func (m *mockDNSClient) CreateRecord(_ context.Context, _ string, params cfclient.DNSRecordParams) (*cfclient.DNSRecord, error) {
+func (m *mockDNSClient) CreateRecord(_ context.Context, zoneID string, params cfclient.DNSRecordParams) (*cfclient.DNSRecord, error) {
 	m.createCalled = true
+	m.lastZoneID = zoneID
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -108,8 +110,9 @@ func (m *mockDNSClient) UpdateRecord(_ context.Context, _, recordID string, para
 	return r, nil
 }
 
-func (m *mockDNSClient) DeleteRecord(_ context.Context, _, recordID string) error {
+func (m *mockDNSClient) DeleteRecord(_ context.Context, zoneID, recordID string) error {
 	m.deleteCalled = true
+	m.lastZoneID = zoneID
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -582,9 +585,12 @@ func TestDNSReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify the mock DNS client's CreateRecord was called (zone ID was resolved)
+	// Verify the mock DNS client's CreateRecord was called with the resolved zone ID
 	if !mock.createCalled {
 		t.Error("expected CreateRecord to be called after resolving zone ID from CloudflareZone")
+	}
+	if mock.lastZoneID != "resolved-zone-id" {
+		t.Errorf("expected zone ID passed to DNS client to be %q, got %q", "resolved-zone-id", mock.lastZoneID)
 	}
 
 	// Should requeue after interval
@@ -668,5 +674,124 @@ func TestDNSReconcile_ZoneRefNotReady(t *testing.T) {
 	}
 	if !foundCondition {
 		t.Error("expected Ready condition to be set")
+	}
+}
+
+func TestDNSReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockDNSClient()
+
+	// CloudflareZone with status
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			AccountID: "acct-1",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	// DNS record marked for deletion with zoneRef
+	content := "1.2.3.4"
+	proxied := false
+	now := metav1.Now()
+	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-rec",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
+			Name:      "test.example.com",
+			Type:      "A",
+			Content:   &content,
+			TTL:       1,
+			Proxied:   &proxied,
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:  &metav1.Duration{Duration: 5 * time.Minute},
+		},
+		Status: cloudflarev1alpha1.CloudflareDNSRecordStatus{
+			RecordID: "existing-record-id",
+		},
+	}
+
+	secret := newTestSecret("default")
+	r := buildReconciler(s, mock, zone, dnsRecord, secret)
+
+	// Set zone status
+	zone.Status.ZoneID = "resolved-zone-id"
+	zone.Status.Status = "active"
+	if err := r.Status().Update(context.Background(), zone); err != nil {
+		t.Fatalf("failed to update zone status: %v", err)
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !mock.deleteCalled {
+		t.Error("expected DeleteRecord to be called")
+	}
+	if mock.lastZoneID != "resolved-zone-id" {
+		t.Errorf("expected zone ID %q for delete, got %q", "resolved-zone-id", mock.lastZoneID)
+	}
+}
+
+func TestDNSReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockDNSClient()
+
+	// DNS record marked for deletion, but the referenced zone doesn't exist
+	content := "1.2.3.4"
+	proxied := false
+	now := metav1.Now()
+	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-rec",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "deleted-zone"},
+			Name:      "test.example.com",
+			Type:      "A",
+			Content:   &content,
+			TTL:       1,
+			Proxied:   &proxied,
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:  &metav1.Duration{Duration: 5 * time.Minute},
+		},
+		Status: cloudflarev1alpha1.CloudflareDNSRecordStatus{
+			RecordID: "existing-record-id",
+		},
+	}
+
+	secret := newTestSecret("default")
+	r := buildReconciler(s, mock, dnsRecord, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	if mock.deleteCalled {
+		t.Error("DeleteRecord should NOT be called when zone can't be resolved")
 	}
 }
