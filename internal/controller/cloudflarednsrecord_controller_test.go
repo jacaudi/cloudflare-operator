@@ -556,14 +556,14 @@ func TestDNSReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
-			ZoneRef:  &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
-			Name:     "test.example.com",
-			Type:     "A",
-			Content:  &content,
-			TTL:      1,
-			Proxied:  &proxied,
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
+			Name:      "test.example.com",
+			Type:      "A",
+			Content:   &content,
+			TTL:       1,
+			Proxied:   &proxied,
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
-			Interval: &metav1.Duration{Duration: 5 * time.Minute},
+			Interval:  &metav1.Duration{Duration: 5 * time.Minute},
 		},
 	}
 
@@ -627,14 +627,14 @@ func TestDNSReconcile_ZoneRefNotReady(t *testing.T) {
 			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
-			ZoneRef:  &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"},
-			Name:     "test.example.com",
-			Type:     "A",
-			Content:  &content,
-			TTL:      1,
-			Proxied:  &proxied,
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"},
+			Name:      "test.example.com",
+			Type:      "A",
+			Content:   &content,
+			TTL:       1,
+			Proxied:   &proxied,
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
-			Interval: &metav1.Duration{Duration: 5 * time.Minute},
+			Interval:  &metav1.Duration{Duration: 5 * time.Minute},
 		},
 	}
 
