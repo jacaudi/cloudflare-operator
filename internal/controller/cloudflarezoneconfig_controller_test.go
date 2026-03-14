@@ -25,6 +25,7 @@ type mockZoneClient struct {
 	botUpdateErr       error
 	updateSettingCalls int
 	updateBotCalled    bool
+	lastZoneID         string
 }
 
 func newMockZoneClient() *mockZoneClient {
@@ -42,10 +43,11 @@ func (m *mockZoneClient) GetSettings(_ context.Context, _ string) ([]cfclient.Zo
 	return result, nil
 }
 
-func (m *mockZoneClient) UpdateSetting(_ context.Context, _, settingID string, value any) error {
+func (m *mockZoneClient) UpdateSetting(_ context.Context, zoneID, settingID string, value any) error {
 	if err, ok := m.updateErrors[settingID]; ok {
 		return err
 	}
+	m.lastZoneID = zoneID
 	m.settings[settingID] = value
 	m.updateSettingCalls++
 	return nil
@@ -105,7 +107,8 @@ func buildZoneConfigReconciler(mock *mockZoneClient, objs ...client.Object) *Clo
 	// Collect CRD objects for status subresource registration
 	var statusObjs []client.Object
 	for _, o := range objs {
-		if _, ok := o.(*cloudflarev1alpha1.CloudflareZoneConfig); ok {
+		switch o.(type) {
+		case *cloudflarev1alpha1.CloudflareZoneConfig, *cloudflarev1alpha1.CloudflareZone:
 			statusObjs = append(statusObjs, o)
 		}
 	}
@@ -445,6 +448,153 @@ func TestZoneConfigReconcile_SecretNotFound(t *testing.T) {
 			}
 			if c.Reason != cloudflarev1alpha1.ReasonSecretNotFound {
 				t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotFound, c.Reason)
+			}
+		}
+	}
+	if !foundCondition {
+		t.Error("expected Ready condition to be set")
+	}
+}
+
+func TestZoneConfigReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
+	mock := newMockZoneClient()
+
+	// Create a CloudflareZone with status.zoneID set
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			AccountID: "acct-1",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	// Create a CloudflareZoneConfig using zoneRef (not zoneID)
+	sslMode := "full"
+	zoneConfig := &cloudflarev1alpha1.CloudflareZoneConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-zone-config",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneConfigSpec{
+			ZoneRef: &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name: "cf-secret",
+			},
+			Interval: &metav1.Duration{Duration: 30 * time.Minute},
+			SSL: &cloudflarev1alpha1.SSLSettings{
+				Mode: &sslMode,
+			},
+		},
+	}
+
+	secret := newTestZoneConfigSecret("default")
+
+	r := buildZoneConfigReconciler(mock, zone, zoneConfig, secret)
+
+	// Set the CloudflareZone status after creation (fake client requires Status().Update())
+	zone.Status.ZoneID = "resolved-zone-id"
+	zone.Status.Status = "active"
+	if err := r.Status().Update(context.Background(), zone); err != nil {
+		t.Fatalf("failed to update zone status: %v", err)
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the mock zone client's UpdateSetting was called (meaning zone ID was resolved)
+	if mock.updateSettingCalls == 0 {
+		t.Error("expected UpdateSetting to be called after resolving zone ID from CloudflareZone")
+	}
+
+	// Verify the resolved zone ID was passed to the API
+	if mock.lastZoneID != "resolved-zone-id" {
+		t.Errorf("expected zone ID passed to zone client to be %q, got %q", "resolved-zone-id", mock.lastZoneID)
+	}
+
+	// Should requeue after interval
+	if result.RequeueAfter != 30*time.Minute {
+		t.Errorf("expected RequeueAfter=30m, got %v", result.RequeueAfter)
+	}
+}
+
+func TestZoneConfigReconcile_ZoneRefNotReady(t *testing.T) {
+	mock := newMockZoneClient()
+
+	// Create a CloudflareZone with NO status.zoneID (pending zone)
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pending-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "pending.com",
+			AccountID: "acct-1",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	// Create a CloudflareZoneConfig using zoneRef pointing to the pending zone
+	sslMode := "full"
+	zoneConfig := &cloudflarev1alpha1.CloudflareZoneConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-zone-config",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneConfigSpec{
+			ZoneRef: &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"},
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name: "cf-secret",
+			},
+			Interval: &metav1.Duration{Duration: 30 * time.Minute},
+			SSL: &cloudflarev1alpha1.SSLSettings{
+				Mode: &sslMode,
+			},
+		},
+	}
+
+	secret := newTestZoneConfigSecret("default")
+
+	r := buildZoneConfigReconciler(mock, zone, zoneConfig, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+
+	// Should requeue after 30s
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	// Verify Ready condition is False with ZoneRefNotReady reason
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("failed to get updated zone config: %v", err)
+	}
+
+	foundCondition := false
+	for _, c := range updated.Status.Conditions {
+		if c.Type == "Ready" {
+			foundCondition = true
+			if c.Status != metav1.ConditionFalse {
+				t.Errorf("expected Ready condition status=False, got %s", c.Status)
+			}
+			if c.Reason != cloudflarev1alpha1.ReasonZoneRefNotReady {
+				t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonZoneRefNotReady, c.Reason)
 			}
 		}
 	}
