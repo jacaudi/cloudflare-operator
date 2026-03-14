@@ -60,8 +60,9 @@ func (m *mockZoneClient) GetBotManagement(_ context.Context, _ string) (*cfclien
 	return &cfclient.BotManagementConfig{}, nil
 }
 
-func (m *mockZoneClient) UpdateBotManagement(_ context.Context, _ string, config cfclient.BotManagementConfig) error {
+func (m *mockZoneClient) UpdateBotManagement(_ context.Context, zoneID string, config cfclient.BotManagementConfig) error {
 	m.updateBotCalled = true
+	m.lastZoneID = zoneID
 	if m.botUpdateErr != nil {
 		return m.botUpdateErr
 	}
