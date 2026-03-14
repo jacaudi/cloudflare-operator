@@ -23,3 +23,22 @@ spec:
       expression: '(http.host eq "plex.wx4wnc.io" and not ip.geoip.country in {"CA" "US" "GB"})'
       description: "Block Plex access from non-allowed countries"
       enabled: true
+---
+# Using zoneRef instead of zoneID
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareRuleset
+metadata:
+  name: waf-custom-rules-with-zoneref
+spec:
+  zoneRef:
+    name: my-zone
+  name: "Custom WAF Rules"
+  phase: "http_request_firewall_custom"
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token
+  rules:
+    - action: block
+      expression: '(cf.client.bot)'
+      description: "Block bots"
+      enabled: true
