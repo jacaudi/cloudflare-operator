@@ -52,9 +52,16 @@ type RulesetRuleSpec struct {
 // CloudflareRulesetSpec defines the desired state of CloudflareRuleset.
 type CloudflareRulesetSpec struct {
 	// ZoneID is the Cloudflare Zone ID.
-	// +kubebuilder:validation:Required
+	// Mutually exclusive with ZoneRef.
+	// +optional
 	// +kubebuilder:validation:MinLength=1
-	ZoneID string `json:"zoneID"`
+	ZoneID string `json:"zoneID,omitempty"`
+
+	// ZoneRef references a CloudflareZone resource in the same namespace.
+	// The controller resolves the zone ID from the referenced resource's status.
+	// Mutually exclusive with ZoneID.
+	// +optional
+	ZoneRef *ZoneReference `json:"zoneRef,omitempty"`
 
 	// Name is the human-readable name for the ruleset.
 	// +kubebuilder:validation:Required
@@ -117,6 +124,8 @@ type CloudflareRulesetStatus struct {
 // +kubebuilder:printcolumn:name="Rules",type=integer,JSONPath=`.status.ruleCount`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.zoneID) && has(self.spec.zoneRef))",message="zoneID and zoneRef are mutually exclusive"
 
 // CloudflareRuleset is the Schema for the cloudflarerulesets API
 type CloudflareRuleset struct {

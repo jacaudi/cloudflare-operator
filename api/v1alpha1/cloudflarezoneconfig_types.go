@@ -178,9 +178,16 @@ type BotManagementSettings struct {
 // CloudflareZoneConfigSpec defines the desired state of CloudflareZoneConfig.
 type CloudflareZoneConfigSpec struct {
 	// ZoneID is the Cloudflare Zone ID.
-	// +kubebuilder:validation:Required
+	// Mutually exclusive with ZoneRef.
+	// +optional
 	// +kubebuilder:validation:MinLength=1
-	ZoneID string `json:"zoneID"`
+	ZoneID string `json:"zoneID,omitempty"`
+
+	// ZoneRef references a CloudflareZone resource in the same namespace.
+	// The controller resolves the zone ID from the referenced resource's status.
+	// Mutually exclusive with ZoneID.
+	// +optional
+	ZoneRef *ZoneReference `json:"zoneRef,omitempty"`
 
 	// SecretRef references a Secret containing Cloudflare API credentials.
 	// +kubebuilder:validation:Required
@@ -239,6 +246,8 @@ type CloudflareZoneConfigStatus struct {
 // +kubebuilder:printcolumn:name="Settings",type=integer,JSONPath=`.status.appliedSettings`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.zoneID) && has(self.spec.zoneRef))",message="zoneID and zoneRef are mutually exclusive"
 
 // CloudflareZoneConfig is the Schema for the cloudflarezoneconfigs API
 type CloudflareZoneConfig struct {

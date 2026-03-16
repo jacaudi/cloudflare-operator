@@ -49,6 +49,7 @@ type CloudflareZoneConfigReconciler struct {
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflarezoneconfigs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflarezones,verbs=get;list;watch
 
 // Reconcile moves the current state of the cluster closer to the desired state
 // for a CloudflareZoneConfig resource. It handles applying zone settings to
@@ -82,6 +83,18 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	// 3.5. Resolve zone ID
+	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, zoneConfig.Namespace, zoneConfig.Spec.ZoneID, zoneConfig.Spec.ZoneRef)
+	if err != nil {
+		log.Error(err, "failed to resolve zone ID")
+		status.SetReady(&zoneConfig.Status.Conditions, metav1.ConditionFalse,
+			cloudflarev1alpha1.ReasonZoneRefNotReady, err.Error(), zoneConfig.Generation)
+		if statusErr := r.Status().Update(ctx, &zoneConfig); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zoneConfig.Spec.SecretRef.Name, zoneConfig.Namespace)
 	if err != nil {
@@ -104,7 +117,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 
 	// 6. Reconcile the zone config
-	result, err := r.reconcileZoneConfig(ctx, &zoneConfig, zoneClient)
+	result, err := r.reconcileZoneConfig(ctx, &zoneConfig, zoneClient, resolvedZoneID)
 	if err != nil {
 		log.Error(err, "reconciliation failed")
 		status.SetReady(&zoneConfig.Status.Conditions, metav1.ConditionFalse,
@@ -237,13 +250,13 @@ func collectSettings(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) []settin
 	return updates
 }
 
-func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context, zoneConfig *cloudflarev1alpha1.CloudflareZoneConfig, zoneClient cfclient.ZoneClient) (ctrl.Result, error) {
+func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context, zoneConfig *cloudflarev1alpha1.CloudflareZoneConfig, zoneClient cfclient.ZoneClient, zoneID string) (ctrl.Result, error) {
 	appliedCount := 0
 
 	// Apply regular zone settings
 	settings := collectSettings(&zoneConfig.Spec)
 	for _, s := range settings {
-		if err := zoneClient.UpdateSetting(ctx, zoneConfig.Spec.ZoneID, s.id, s.value); err != nil {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update setting %s: %w", s.id, err)
 		}
 		appliedCount++
@@ -255,7 +268,7 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 			EnableJS:  zoneConfig.Spec.BotManagement.EnableJS,
 			FightMode: zoneConfig.Spec.BotManagement.FightMode,
 		}
-		if err := zoneClient.UpdateBotManagement(ctx, zoneConfig.Spec.ZoneID, config); err != nil {
+		if err := zoneClient.UpdateBotManagement(ctx, zoneID, config); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update bot management: %w", err)
 		}
 		appliedCount++
@@ -269,7 +282,7 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 	}
 
 	r.Recorder.Event(zoneConfig, "Normal", "SettingsApplied",
-		fmt.Sprintf("Applied %d settings to zone %s", appliedCount, zoneConfig.Spec.ZoneID))
+		fmt.Sprintf("Applied %d settings to zone %s", appliedCount, zoneID))
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }

@@ -25,6 +25,7 @@ type mockRulesetClient struct {
 	createCalled bool
 	updateCalled bool
 	deleteCalled bool
+	lastZoneID   string
 	createErr    error
 	updateErr    error
 	deleteErr    error
@@ -60,8 +61,9 @@ func (m *mockRulesetClient) ListRulesetsByPhase(_ context.Context, _, phase stri
 	return results, nil
 }
 
-func (m *mockRulesetClient) CreateRuleset(_ context.Context, _ string, params cfclient.RulesetParams) (*cfclient.Ruleset, error) {
+func (m *mockRulesetClient) CreateRuleset(_ context.Context, zoneID string, params cfclient.RulesetParams) (*cfclient.Ruleset, error) {
 	m.createCalled = true
+	m.lastZoneID = zoneID
 	if m.createErr != nil {
 		return nil, m.createErr
 	}
@@ -91,8 +93,9 @@ func (m *mockRulesetClient) UpdateRuleset(_ context.Context, _, rulesetID string
 	return rs, nil
 }
 
-func (m *mockRulesetClient) DeleteRuleset(_ context.Context, _, rulesetID string) error {
+func (m *mockRulesetClient) DeleteRuleset(_ context.Context, zoneID, rulesetID string) error {
 	m.deleteCalled = true
+	m.lastZoneID = zoneID
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -150,7 +153,8 @@ func buildRulesetReconciler(mock *mockRulesetClient, objs ...client.Object) *Clo
 	// Collect CRD objects for status subresource registration
 	var statusObjs []client.Object
 	for _, o := range objs {
-		if _, ok := o.(*cloudflarev1alpha1.CloudflareRuleset); ok {
+		switch o.(type) {
+		case *cloudflarev1alpha1.CloudflareRuleset, *cloudflarev1alpha1.CloudflareZone:
 			statusObjs = append(statusObjs, o)
 		}
 	}
@@ -407,5 +411,335 @@ func TestRulesetReconcile_SecretNotFound(t *testing.T) {
 	}
 	if !foundCondition {
 		t.Error("expected Ready condition to be set")
+	}
+}
+
+func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockRulesetClient()
+
+	// Create a CloudflareZone with status.zoneID set
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			AccountID: "acct-1",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	// Create a CloudflareRuleset using zoneRef (not zoneID)
+	enabled := true
+	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-ruleset",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
+			ZoneRef:     &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
+			Name:        "test-waf",
+			Description: "Test WAF rules",
+			Phase:       "http_request_firewall_custom",
+			SecretRef:   cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:    &metav1.Duration{Duration: 30 * time.Minute},
+			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
+				{
+					Action:      "block",
+					Expression:  `(cf.client.bot) or (cf.threat_score gt 14)`,
+					Description: "Block bots and threats",
+					Enabled:     &enabled,
+				},
+			},
+		},
+	}
+
+	secret := newTestRulesetSecret("default")
+
+	builder := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, ruleset, secret).
+		WithStatusSubresource(zone, ruleset)
+	fakeClient := builder.Build()
+
+	r := &CloudflareRulesetReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      record.NewFakeRecorder(10),
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		RulesetClientFn: func(_ string) cfclient.RulesetClient {
+			return mock
+		},
+	}
+
+	// Set the CloudflareZone status after creation (fake client requires Status().Update())
+	zone.Status.ZoneID = "resolved-zone-id"
+	zone.Status.Status = "active"
+	if err := r.Status().Update(context.Background(), zone); err != nil {
+		t.Fatalf("failed to update zone status: %v", err)
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the mock ruleset client's CreateRuleset was called with the resolved zone ID
+	if !mock.createCalled {
+		t.Error("expected CreateRuleset to be called after resolving zone ID from CloudflareZone")
+	}
+	if mock.lastZoneID != "resolved-zone-id" {
+		t.Errorf("expected zone ID passed to ruleset client to be %q, got %q", "resolved-zone-id", mock.lastZoneID)
+	}
+
+	// Should requeue after interval
+	if result.RequeueAfter != 30*time.Minute {
+		t.Errorf("expected RequeueAfter=30m, got %v", result.RequeueAfter)
+	}
+}
+
+func TestRulesetReconcile_ZoneRefNotReady(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockRulesetClient()
+
+	// Create a CloudflareZone with NO status.zoneID (pending zone)
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pending-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "pending.com",
+			AccountID: "acct-1",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	// Create a CloudflareRuleset using zoneRef pointing to the pending zone
+	enabled := true
+	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-ruleset",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
+			ZoneRef:     &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"},
+			Name:        "test-waf",
+			Description: "Test WAF rules",
+			Phase:       "http_request_firewall_custom",
+			SecretRef:   cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:    &metav1.Duration{Duration: 30 * time.Minute},
+			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
+				{
+					Action:      "block",
+					Expression:  `(cf.client.bot) or (cf.threat_score gt 14)`,
+					Description: "Block bots and threats",
+					Enabled:     &enabled,
+				},
+			},
+		},
+	}
+
+	secret := newTestRulesetSecret("default")
+
+	builder := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, ruleset, secret).
+		WithStatusSubresource(zone, ruleset)
+	fakeClient := builder.Build()
+
+	r := &CloudflareRulesetReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      record.NewFakeRecorder(10),
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		RulesetClientFn: func(_ string) cfclient.RulesetClient {
+			return mock
+		},
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+
+	// Should requeue after 30s
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	// Verify Ready condition is False with ZoneRefNotReady reason
+	var updated cloudflarev1alpha1.CloudflareRuleset
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("failed to get updated ruleset: %v", err)
+	}
+
+	foundCondition := false
+	for _, c := range updated.Status.Conditions {
+		if c.Type == "Ready" {
+			foundCondition = true
+			if c.Status != metav1.ConditionFalse {
+				t.Errorf("expected Ready condition status=False, got %s", c.Status)
+			}
+			if c.Reason != cloudflarev1alpha1.ReasonZoneRefNotReady {
+				t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonZoneRefNotReady, c.Reason)
+			}
+		}
+	}
+	if !foundCondition {
+		t.Error("expected Ready condition to be set")
+	}
+}
+
+func TestRulesetReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockRulesetClient()
+
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			AccountID: "acct-1",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	enabled := true
+	now := metav1.Now()
+	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-ruleset",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
+			Name:      "Test Rules",
+			Phase:     "http_request_firewall_custom",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:  &metav1.Duration{Duration: 30 * time.Minute},
+			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
+				{Action: "block", Expression: "(cf.client.bot)", Enabled: &enabled},
+			},
+		},
+		Status: cloudflarev1alpha1.CloudflareRulesetStatus{
+			RulesetID: "existing-ruleset-id",
+		},
+	}
+
+	secret := newTestRulesetSecret("default")
+
+	builder := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, ruleset, secret).
+		WithStatusSubresource(zone, ruleset)
+	fakeClient := builder.Build()
+
+	zone.Status.ZoneID = "resolved-zone-id"
+	zone.Status.Status = "active"
+	if err := fakeClient.Status().Update(context.Background(), zone); err != nil {
+		t.Fatalf("failed to update zone status: %v", err)
+	}
+
+	r := &CloudflareRulesetReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      record.NewFakeRecorder(10),
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		RulesetClientFn: func(_ string) cfclient.RulesetClient {
+			return mock
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !mock.deleteCalled {
+		t.Error("expected DeleteRuleset to be called")
+	}
+	if mock.lastZoneID != "resolved-zone-id" {
+		t.Errorf("expected zone ID %q for delete, got %q", "resolved-zone-id", mock.lastZoneID)
+	}
+}
+
+func TestRulesetReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockRulesetClient()
+
+	enabled := true
+	now := metav1.Now()
+	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-ruleset",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "deleted-zone"},
+			Name:      "Test Rules",
+			Phase:     "http_request_firewall_custom",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:  &metav1.Duration{Duration: 30 * time.Minute},
+			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
+				{Action: "block", Expression: "(cf.client.bot)", Enabled: &enabled},
+			},
+		},
+		Status: cloudflarev1alpha1.CloudflareRulesetStatus{
+			RulesetID: "existing-ruleset-id",
+		},
+	}
+
+	secret := newTestRulesetSecret("default")
+
+	builder := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ruleset, secret).
+		WithStatusSubresource(ruleset)
+	fakeClient := builder.Build()
+
+	r := &CloudflareRulesetReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      record.NewFakeRecorder(10),
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		RulesetClientFn: func(_ string) cfclient.RulesetClient {
+			return mock
+		},
+	}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	if mock.deleteCalled {
+		t.Error("DeleteRuleset should NOT be called when zone can't be resolved")
 	}
 }

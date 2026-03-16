@@ -50,6 +50,7 @@ type CloudflareRulesetReconciler struct {
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflarerulesets/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflarezones,verbs=get;list;watch
 
 // Reconcile moves the current state of the cluster closer to the desired state
 // for a CloudflareRuleset resource. It handles the full lifecycle of rulesets
@@ -83,6 +84,18 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	// 3.5. Resolve zone ID
+	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, ruleset.Namespace, ruleset.Spec.ZoneID, ruleset.Spec.ZoneRef)
+	if err != nil {
+		log.Error(err, "failed to resolve zone ID")
+		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
+			cloudflarev1alpha1.ReasonZoneRefNotReady, err.Error(), ruleset.Generation)
+		if statusErr := r.Status().Update(ctx, &ruleset); statusErr != nil {
+			log.Error(statusErr, "failed to update status")
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
 	if err != nil {
@@ -105,7 +118,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// 6. Reconcile the ruleset
-	result, err := r.reconcileRuleset(ctx, &ruleset, rulesetClient)
+	result, err := r.reconcileRuleset(ctx, &ruleset, rulesetClient, resolvedZoneID)
 	if err != nil {
 		log.Error(err, "reconciliation failed")
 		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
@@ -132,7 +145,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return result, nil
 }
 
-func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, ruleset *cloudflarev1alpha1.CloudflareRuleset, rulesetClient cfclient.RulesetClient) (ctrl.Result, error) {
+func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, ruleset *cloudflarev1alpha1.CloudflareRuleset, rulesetClient cfclient.RulesetClient, zoneID string) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
 	// Build desired rules from spec
@@ -151,7 +164,7 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 	// Check if ruleset exists by ID
 	var existing *cfclient.Ruleset
 	if ruleset.Status.RulesetID != "" {
-		existing, err = rulesetClient.GetRuleset(ctx, ruleset.Spec.ZoneID, ruleset.Status.RulesetID)
+		existing, err = rulesetClient.GetRuleset(ctx, zoneID, ruleset.Status.RulesetID)
 		if err != nil {
 			log.Info("could not fetch ruleset by ID, will search by phase", "rulesetID", ruleset.Status.RulesetID)
 			ruleset.Status.RulesetID = ""
@@ -161,7 +174,7 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 
 	// Search by phase (adopt existing)
 	if existing == nil {
-		rulesets, err := rulesetClient.ListRulesetsByPhase(ctx, ruleset.Spec.ZoneID, ruleset.Spec.Phase)
+		rulesets, err := rulesetClient.ListRulesetsByPhase(ctx, zoneID, ruleset.Spec.Phase)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("list rulesets: %w", err)
 		}
@@ -181,7 +194,7 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 
 	if existing == nil {
 		// Create new ruleset
-		created, err := rulesetClient.CreateRuleset(ctx, ruleset.Spec.ZoneID, params)
+		created, err := rulesetClient.CreateRuleset(ctx, zoneID, params)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("create ruleset: %w", err)
 		}
@@ -192,7 +205,7 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 			fmt.Sprintf("Created ruleset %s with ID %s", ruleset.Spec.Name, created.ID))
 	} else {
 		// Always update (PUT replaces all rules atomically — idempotent)
-		updated, err := rulesetClient.UpdateRuleset(ctx, ruleset.Spec.ZoneID, existing.ID, params)
+		updated, err := rulesetClient.UpdateRuleset(ctx, zoneID, existing.ID, params)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("update ruleset: %w", err)
 		}
@@ -235,6 +248,19 @@ func (r *CloudflareRulesetReconciler) reconcileDelete(ctx context.Context, rules
 	log := log.FromContext(ctx)
 
 	if ruleset.Status.RulesetID != "" {
+		resolvedZoneID, err := ResolveZoneID(ctx, r.Client, ruleset.Namespace, ruleset.Spec.ZoneID, ruleset.Spec.ZoneRef)
+		if err != nil {
+			log.Error(err, "failed to resolve zone ID during deletion, will retry; remove the finalizer manually to force deletion")
+			status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
+				cloudflarev1alpha1.ReasonZoneRefNotReady,
+				fmt.Sprintf("Cannot delete Cloudflare resource: %v. Remove the finalizer manually to force deletion.", err),
+				ruleset.Generation)
+			if statusErr := r.Status().Update(ctx, ruleset); statusErr != nil {
+				log.Error(statusErr, "failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
 		if err != nil {
 			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
@@ -255,7 +281,7 @@ func (r *CloudflareRulesetReconciler) reconcileDelete(ctx context.Context, rules
 				rulesetClient = cfclient.NewRulesetClientFromCF(cfClient)
 			}
 
-			if err := rulesetClient.DeleteRuleset(ctx, ruleset.Spec.ZoneID, ruleset.Status.RulesetID); err != nil {
+			if err := rulesetClient.DeleteRuleset(ctx, resolvedZoneID, ruleset.Status.RulesetID); err != nil {
 				log.Error(err, "failed to delete ruleset from Cloudflare")
 				status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
 					cloudflarev1alpha1.ReasonCloudflareError, err.Error(), ruleset.Generation)

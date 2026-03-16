@@ -115,7 +115,8 @@ Manages DNS records with support for dynamic IP resolution, SRV records, and aut
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `zoneID` | string | Yes | | Cloudflare Zone ID |
+| `zoneID` | string | No | | Cloudflare Zone ID. Mutually exclusive with `zoneRef` |
+| `zoneRef` | object | No | | Reference to a `CloudflareZone` CR. Mutually exclusive with `zoneID` |
 | `name` | string | Yes | | Record name (e.g., `sub.example.com`) |
 | `type` | enum | Yes | | `A`, `AAAA`, `CNAME`, `SRV`, `MX`, `TXT`, `NS` |
 | `content` | string | No | | Record content. Mutually exclusive with `dynamicIP` |
@@ -277,7 +278,8 @@ Declaratively manages zone-level settings: SSL/TLS, security, performance, netwo
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `zoneID` | string | Yes | | Cloudflare Zone ID |
+| `zoneID` | string | No | | Cloudflare Zone ID. Mutually exclusive with `zoneRef` |
+| `zoneRef` | object | No | | Reference to a `CloudflareZone` CR. Mutually exclusive with `zoneID` |
 | `secretRef` | object | Yes | | Reference to API token Secret |
 | `interval` | duration | No | `30m` | Reconciliation interval |
 | `ssl` | object | No | | SSL/TLS settings |
@@ -392,7 +394,8 @@ Manages Cloudflare WAF rulesets with support for 14+ phases and free-form action
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `zoneID` | string | Yes | | Cloudflare Zone ID |
+| `zoneID` | string | No | | Cloudflare Zone ID. Mutually exclusive with `zoneRef` |
+| `zoneRef` | object | No | | Reference to a `CloudflareZone` CR. Mutually exclusive with `zoneID` |
 | `name` | string | Yes | | Human-readable ruleset name |
 | `description` | string | No | | Ruleset description |
 | `phase` | enum | Yes | | Ruleset phase (see below) |
@@ -472,6 +475,27 @@ waf-custom-rules  Custom WAF Rules   http_request_firewall_custom      2       T
 ---
 
 ## Common Patterns
+
+### Zone Reference
+
+Instead of hardcoding a `zoneID`, you can reference a `CloudflareZone` CR:
+
+```yaml
+# Instead of:
+spec:
+  zoneID: "<zone-id>"
+
+# Use:
+spec:
+  zoneRef:
+    name: my-zone
+```
+
+The controller resolves the zone ID from the `CloudflareZone` resource's `status.zoneID`. If the referenced zone doesn't exist or isn't ready yet, the dependent resource sets `Ready=False` and retries every 30 seconds.
+
+`zoneID` and `zoneRef` are mutually exclusive -- specify exactly one. `zoneID` takes precedence if both are provided.
+
+Supported on: `CloudflareDNSRecord`, `CloudflareZoneConfig`, `CloudflareRuleset`.
 
 ### All Resources Share
 

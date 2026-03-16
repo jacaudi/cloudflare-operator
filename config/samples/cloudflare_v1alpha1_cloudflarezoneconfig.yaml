@@ -38,3 +38,18 @@ spec:
   botManagement:
     enableJS: true
     fightMode: true
+---
+# Using zoneRef instead of zoneID
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareZoneConfig
+metadata:
+  name: zone-settings-with-zoneref
+spec:
+  zoneRef:
+    name: my-zone
+  interval: 30m
+  secretRef:
+    name: cloudflare-api-token
+  ssl:
+    mode: "full"
+    alwaysUseHTTPS: "on"
