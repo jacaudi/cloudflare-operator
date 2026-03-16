@@ -1,135 +1,88 @@
 # cloudflare-operator
-// TODO(user): Add simple overview of use/purpose
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes operator that manages Cloudflare resources declaratively using Custom Resources. Define DNS records, tunnels, WAF rulesets, zone settings, and zone lifecycle as Kubernetes objects with automatic drift detection and reconciliation.
 
-## Getting Started
+## Custom Resources
+
+| CRD | Description |
+|-----|-------------|
+| `CloudflareZone` | Onboard and manage domain lifecycle (create, adopt, activate, delete) |
+| `CloudflareDNSRecord` | Manage DNS records (A, AAAA, CNAME, SRV, MX, TXT, NS) with dynamic IP support |
+| `CloudflareTunnel` | Create and manage Cloudflare Tunnels with auto-generated credentials |
+| `CloudflareZoneConfig` | Declaratively configure zone settings (SSL, security, performance, network) |
+| `CloudflareRuleset` | Manage WAF rulesets and firewall rules across 14+ phases |
+
+## Quick Start
 
 ### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+- Kubernetes cluster v1.11.3+
+- kubectl configured
+- Cloudflare API token with appropriate permissions
 
-```sh
-make docker-build docker-push IMG=<some-registry>/cloudflare-operator:tag
-```
-
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
-**Install the CRDs into the cluster:**
+### Install
 
 ```sh
+# Install CRDs
 make install
+
+# Deploy the operator
+make deploy IMG=<your-registry>/cloudflare-operator:latest
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+### Create a Secret
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudflare-api-token
+type: Opaque
+stringData:
+  apiToken: "<your-cloudflare-api-token>"
+```
+
+### Create a DNS Record
+
+```yaml
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareDNSRecord
+metadata:
+  name: my-record
+spec:
+  zoneID: "<zone-id>"
+  name: "app.example.com"
+  type: A
+  dynamicIP: true
+  proxied: true
+  ttl: 1
+  interval: 5m
+  secretRef:
+    name: cloudflare-api-token
+```
+
+### Verify
 
 ```sh
-make deploy IMG=<some-registry>/cloudflare-operator:tag
+kubectl get cloudflarednsrecords
+kubectl get cloudflarezones
+kubectl get cloudflaretunnels
+kubectl get cloudflarerulesets
+kubectl get cloudflarezoneconfigs
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+## Uninstall
 
 ```sh
-kubectl apply -k config/samples/
+kubectl delete -k config/samples/   # Remove CRs
+make uninstall                       # Remove CRDs
+make undeploy                        # Remove operator
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+## Documentation
 
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
-make undeploy
-```
-
-## Project Distribution
-
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/cloudflare-operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/cloudflare-operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+Full documentation including all CRD specifications, configuration options, and examples is available at [docs/README.md](docs/README.md).
 
 ## License
 
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Copyright 2026. Licensed under the Apache License, Version 2.0. See [LICENSE](http://www.apache.org/licenses/LICENSE-2.0) for details.
