@@ -21,7 +21,7 @@
       "matchStrings": [
         "GOLANGCI_LINT_VERSION \\?= (?<currentValue>v[0-9.]+)"
       ],
-      "depNameTemplate": "github.com/golangci/golangci-lint",
+      "depNameTemplate": "github.com/golangci/golangci-lint/v2",
       "datasourceTemplate": "go"
     }
   ]

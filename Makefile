@@ -62,6 +62,7 @@ generate-helm-rbac: manifests ## Generate Helm RBAC template from kubebuilder-ge
 .PHONY: sync-helm-crds
 sync-helm-crds: manifests ## Sync CRDs to Helm chart
 	@echo "Syncing CRDs to Helm chart..."
+	@mkdir -p chart/crds
 	@cp config/crd/bases/*.yaml chart/crds/
 	@echo "CRDs synced successfully"
 
