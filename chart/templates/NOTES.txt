@@ -1,0 +1,35 @@
+Cloudflare Operator has been deployed!
+
+{{- if .Values.rbac.enabled }}
+RBAC has been configured for the operator.
+{{- end }}
+
+To verify the deployment:
+  kubectl get pods -l app.kubernetes.io/name={{ include "bjw-s.common.lib.chart.names.name" . }}
+
+Before creating Cloudflare resources, ensure you have:
+1. Installed the CRDs:
+   kubectl apply -f https://raw.githubusercontent.com/jacaudi/cloudflare-operator/main/config/crd/bases/
+
+2. Created a Secret with your Cloudflare API token:
+   kubectl create secret generic cloudflare-api-token \
+     --from-literal=apiToken=YOUR_API_TOKEN
+
+Example CloudflareDNSRecord:
+  apiVersion: cloudflare.io/v1alpha1
+  kind: CloudflareDNSRecord
+  metadata:
+    name: my-record
+  spec:
+    zoneID: "<zone-id>"
+    name: "example.com"
+    type: A
+    dynamicIP: true
+    proxied: true
+    ttl: 1
+    interval: 5m
+    secretRef:
+      name: cloudflare-api-token
+
+For more examples, see:
+  https://github.com/jacaudi/cloudflare-operator/tree/main/config/samples

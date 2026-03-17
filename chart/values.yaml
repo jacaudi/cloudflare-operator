@@ -1,0 +1,57 @@
+---
+# Cloudflare Operator Helm Chart
+# Based on bjw-s app-template
+
+# -- Global values
+global: {}
+
+# -- Container image configuration
+image:
+  repository: ghcr.io/jacaudi/cloudflare-operator
+  # -- Overrides the image tag (default is the chart appVersion)
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# -- Controller/Deployment configuration
+controller:
+  # -- Number of replicas (for HA, use 2+ with leader election)
+  replicas: 1
+  strategy: Recreate
+
+# -- Leader election for HA (active-passive)
+# When enabled with multiple replicas, only one instance processes resources
+leaderElection:
+  enabled: true
+
+# -- Timezone for the container
+timezone: UTC
+
+# -- Resource limits and requests
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+
+# -- Service account configuration
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# -- RBAC configuration
+rbac:
+  # -- Enable RBAC resources
+  enabled: true
+
+# -- Metrics and monitoring configuration
+metrics:
+  serviceMonitor:
+    # -- Enable ServiceMonitor for Prometheus Operator
+    enabled: false
+    # -- Scrape interval
+    interval: 30s
+    # -- Scrape timeout
+    scrapeTimeout: 10s
