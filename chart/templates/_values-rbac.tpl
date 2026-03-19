@@ -1,6 +1,6 @@
 {{/*
 RBAC configuration for cloudflare-operator
-AUTO-GENERATED from config/rbac/role.yaml - DO NOT EDIT MANUALLY
+AUTO-GENERATED from config/rbac/ - DO NOT EDIT MANUALLY
 Run 'make generate-helm-rbac' to regenerate after updating kubebuilder markers.
 */}}
 {{- define "cloudflare-operator.values.rbac" -}}
@@ -67,6 +67,43 @@ rbac:
             - get
             - patch
             - update
+{{- if .Values.leaderElection.enabled }}
+    leader-election:
+      enabled: true
+      type: Role
+      rules:
+        - apiGroups:
+            - ""
+          resources:
+            - configmaps
+          verbs:
+            - get
+            - list
+            - watch
+            - create
+            - update
+            - patch
+            - delete
+        - apiGroups:
+            - coordination.k8s.io
+          resources:
+            - leases
+          verbs:
+            - get
+            - list
+            - watch
+            - create
+            - update
+            - patch
+            - delete
+        - apiGroups:
+            - ""
+          resources:
+            - events
+          verbs:
+            - create
+            - patch
+{{- end }}
   bindings:
     main:
       enabled: true
@@ -75,5 +112,14 @@ rbac:
         identifier: main
       subjects:
         - identifier: main
+{{- if .Values.leaderElection.enabled }}
+    leader-election:
+      enabled: true
+      type: RoleBinding
+      roleRef:
+        identifier: leader-election
+      subjects:
+        - identifier: main
+{{- end }}
 {{- end }}
 {{- end -}}

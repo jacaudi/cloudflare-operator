@@ -28,10 +28,14 @@ and passes it to the bjw-s common library loader
   {{- $_ := set $bjwsValues "serviceAccount" $serviceAccount.serviceAccount -}}
 {{- end -}}
 
-{{/* RBAC */}}
+{{/* RBAC (requires serviceAccount for binding subjects) */}}
+{{- if .Values.serviceAccount.create -}}
 {{- $rbac := include "cloudflare-operator.values.rbac" . | fromYaml -}}
 {{- if $rbac -}}
   {{- $_ := set $bjwsValues "rbac" $rbac.rbac -}}
+{{- end -}}
+{{- else -}}
+  {{- $_ := set $bjwsValues "rbac" dict -}}
 {{- end -}}
 
 {{/* ServiceMonitor */}}

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # AUTO-GENERATED RBAC SYNC SCRIPT
-# This script converts kubebuilder-generated RBAC (config/rbac/role.yaml)
-# to the bjw-s app-template format used by the Helm chart.
+# This script converts kubebuilder-generated RBAC (config/rbac/role.yaml and
+# config/rbac/leader_election_role.yaml) to the bjw-s app-template format
+# used by the Helm chart.
 #
 # Usage: ./hack/generate-helm-rbac.sh
 #
@@ -13,11 +14,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-INPUT_FILE="${REPO_ROOT}/config/rbac/role.yaml"
+ROLE_FILE="${REPO_ROOT}/config/rbac/role.yaml"
+LEADER_ELECTION_FILE="${REPO_ROOT}/config/rbac/leader_election_role.yaml"
 OUTPUT_FILE="${REPO_ROOT}/chart/templates/_values-rbac.tpl"
 
-if [[ ! -f "${INPUT_FILE}" ]]; then
-    echo "Error: ${INPUT_FILE} not found. Run 'make manifests' first."
+if [[ ! -f "${ROLE_FILE}" ]]; then
+    echo "Error: ${ROLE_FILE} not found. Run 'make manifests' first."
     exit 1
 fi
 
@@ -32,7 +34,7 @@ fi
 cat > "${OUTPUT_FILE}" << 'HEADER'
 {{/*
 RBAC configuration for cloudflare-operator
-AUTO-GENERATED from config/rbac/role.yaml - DO NOT EDIT MANUALLY
+AUTO-GENERATED from config/rbac/ - DO NOT EDIT MANUALLY
 Run 'make generate-helm-rbac' to regenerate after updating kubebuilder markers.
 */}}
 {{- define "cloudflare-operator.values.rbac" -}}
@@ -46,10 +48,26 @@ rbac:
 HEADER
 
 # Extract and format rules from the kubebuilder-generated YAML
-# Use yq to output proper YAML format with correct indentation
-yq eval '.rules' "${INPUT_FILE}" | sed 's/^/        /' >> "${OUTPUT_FILE}"
+yq eval '.rules' "${ROLE_FILE}" | sed 's/^/        /' >> "${OUTPUT_FILE}"
 
-cat >> "${OUTPUT_FILE}" << 'FOOTER'
+# Add leader election Role if the source file exists
+if [[ -f "${LEADER_ELECTION_FILE}" ]]; then
+    cat >> "${OUTPUT_FILE}" << 'LEADER_ROLE'
+{{- if .Values.leaderElection.enabled }}
+    leader-election:
+      enabled: true
+      type: Role
+      rules:
+LEADER_ROLE
+
+    yq eval '.rules' "${LEADER_ELECTION_FILE}" | sed 's/^/        /' >> "${OUTPUT_FILE}"
+
+    # Close the leader election conditional before bindings
+    printf '{{- end }}\n' >> "${OUTPUT_FILE}"
+fi
+
+# Add bindings
+cat >> "${OUTPUT_FILE}" << 'BINDINGS'
   bindings:
     main:
       enabled: true
@@ -58,8 +76,27 @@ cat >> "${OUTPUT_FILE}" << 'FOOTER'
         identifier: main
       subjects:
         - identifier: main
+BINDINGS
+
+# Add leader election binding if applicable
+if [[ -f "${LEADER_ELECTION_FILE}" ]]; then
+    cat >> "${OUTPUT_FILE}" << 'LEADER_BINDING'
+{{- if .Values.leaderElection.enabled }}
+    leader-election:
+      enabled: true
+      type: RoleBinding
+      roleRef:
+        identifier: leader-election
+      subjects:
+        - identifier: main
+{{- end }}
+LEADER_BINDING
+fi
+
+# Close the template
+cat >> "${OUTPUT_FILE}" << 'FOOTER'
 {{- end }}
 {{- end -}}
 FOOTER
 
-echo "Generated ${OUTPUT_FILE} from ${INPUT_FILE}"
+echo "Generated ${OUTPUT_FILE} from ${ROLE_FILE}"

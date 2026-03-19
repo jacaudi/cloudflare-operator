@@ -6,7 +6,8 @@ Build serviceMonitor structure from flat values
 serviceMonitor:
   main:
     enabled: true
-    serviceName: main
+    service:
+      identifier: main
     endpoints:
       - port: metrics
         scheme: http
