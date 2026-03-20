@@ -55,6 +55,17 @@ lint-fix: custom-gcl ## Run golangci-lint linter and perform fixes
 lint-config: custom-gcl ## Verify golangci-lint linter configuration
 	$(CUSTOM_GCL) config verify
 
+.PHONY: generate-helm-rbac
+generate-helm-rbac: manifests ## Generate Helm RBAC template from kubebuilder-generated role.yaml
+	./hack/generate-helm-rbac.sh
+
+.PHONY: sync-helm-crds
+sync-helm-crds: manifests ## Sync CRDs to Helm chart
+	@echo "Syncing CRDs to Helm chart..."
+	@mkdir -p chart/crds
+	@cp config/crd/bases/*.yaml chart/crds/
+	@echo "CRDs synced successfully"
+
 ##@ Build
 
 .PHONY: build
