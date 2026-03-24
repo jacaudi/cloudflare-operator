@@ -6,9 +6,9 @@ require (
 	github.com/cloudflare/cloudflare-go/v6 v6.8.0
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
-	k8s.io/api v0.35.0
+	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.0
-	k8s.io/apimachinery v0.35.0
+	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v0.35.0
 	sigs.k8s.io/controller-runtime v0.23.1
 )
