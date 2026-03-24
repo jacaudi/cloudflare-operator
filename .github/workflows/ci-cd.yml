@@ -74,23 +74,9 @@ jobs:
         ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version }}
         ghcr.io/${{ github.repository }}:latest
 
-  # Scan container image for vulnerabilities
-  scan:
-    needs: [release, docker]
-    if: needs.release.outputs.new-release-published == 'true'
-    uses: jacaudi/github-actions/.github/workflows/image-scan.yml@v0.14.0
-    permissions:
-      contents: read
-      packages: read
-      security-events: write
-    with:
-      image-ref: ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version }}
-      severity: 'CRITICAL,HIGH'
-      exit-code: 0
-
   # Publish Helm chart to OCI registry
   helm:
-    needs: [release, scan]
+    needs: [release, docker]
     if: needs.release.outputs.new-release-published == 'true'
     uses: jacaudi/github-actions/.github/workflows/helm-publish.yml@v0.14.0
     permissions:

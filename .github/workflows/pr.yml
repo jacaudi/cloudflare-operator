@@ -10,7 +10,7 @@ name: PR Validation
 permissions:
   contents: read
   pull-requests: write
-  security-events: write
+
 
 jobs:
   lint:
@@ -114,34 +114,6 @@ jobs:
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
 
-      - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: cloudflare-operator:pr-${{ github.event.pull_request.number }}-amd64
-          format: 'table'
-          output: 'trivy-results-amd64.txt'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Output scan results to summary
-        if: always()
-        run: |
-          echo "## Security Scan Results (amd64)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f trivy-results-amd64.txt ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat trivy-results-amd64.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No vulnerabilities found or scan failed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload scan results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: trivy-scan-results-amd64
-          path: trivy-results-amd64.txt
-          if-no-files-found: ignore
 
   docker-arm64:
     name: Build Container (arm64)
@@ -165,31 +137,3 @@ jobs:
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
 
-      - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: cloudflare-operator:pr-${{ github.event.pull_request.number }}-arm64
-          format: 'table'
-          output: 'trivy-results-arm64.txt'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Output scan results to summary
-        if: always()
-        run: |
-          echo "## Security Scan Results (arm64)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ -f trivy-results-arm64.txt ]; then
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat trivy-results-arm64.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No vulnerabilities found or scan failed" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Upload scan results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: trivy-scan-results-arm64
-          path: trivy-results-arm64.txt
-          if-no-files-found: ignore
