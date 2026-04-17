@@ -9,17 +9,20 @@
     {
       "description": "Group Kubernetes client libraries (local override of upstream preset which uses deprecated matchPackagePatterns)",
       "matchPackageNames": ["/^k8s\\.io//", "sigs.k8s.io/controller-runtime"],
-      "groupName": "kubernetes-client-libraries"
+      "groupName": "kubernetes-client-libraries",
+      "recreateWhen": "always"
     },
     {
       "description": "Group Ginkgo and Gomega test framework bumps together",
       "matchPackageNames": ["github.com/onsi/ginkgo/v2", "github.com/onsi/gomega"],
-      "groupName": "test-libraries"
+      "groupName": "test-libraries",
+      "recreateWhen": "always"
     },
     {
       "description": "Group Go toolchain bumps (go.mod directive, golang Docker image, setup-go version)",
       "matchPackageNames": ["go", "golang"],
-      "groupName": "go-toolchain"
+      "groupName": "go-toolchain",
+      "recreateWhen": "always"
     }
   ],
   "customManagers": [
