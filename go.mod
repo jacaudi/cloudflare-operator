@@ -3,7 +3,7 @@ module github.com/jacaudi/cloudflare-operator
 go 1.25.3
 
 require (
-	github.com/cloudflare/cloudflare-go/v6 v6.8.0
+	github.com/cloudflare/cloudflare-go/v6 v6.9.0
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
 	k8s.io/api v0.35.4
