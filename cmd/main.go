@@ -18,7 +18,9 @@ package main
 
 import (
 	"flag"
+	"log/slog"
 	"os"
+	"strings"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -145,4 +147,37 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// lookupEnvOrString returns the value of the named environment variable,
+// falling back to defaultVal when the variable is unset.
+func lookupEnvOrString(key, defaultVal string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return defaultVal
+}
+
+// setupLogger builds an slog.Logger for the given level and format strings.
+// Unknown level → info. Unknown format → json. Inputs are case-insensitive.
+func setupLogger(level, format string) *slog.Logger {
+	var slogLevel slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		slogLevel = slog.LevelDebug
+	case "warn":
+		slogLevel = slog.LevelWarn
+	case "error":
+		slogLevel = slog.LevelError
+	default:
+		slogLevel = slog.LevelInfo
+	}
+
+	var handler slog.Handler
+	if strings.ToLower(format) == "text" {
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slogLevel})
+	} else {
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slogLevel})
+	}
+	return slog.New(handler)
 }
