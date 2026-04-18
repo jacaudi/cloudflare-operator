@@ -71,7 +71,7 @@ jobs:
       platforms: 'linux/amd64,linux/arm64'
       version: ${{ needs.release.outputs.new-release-version }}
       tags: |
-        ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version }}
+        ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version-v }}
         ghcr.io/${{ github.repository }}:latest
 
   # Publish Helm chart to OCI registry
@@ -86,6 +86,6 @@ jobs:
       chart-name: cloudflare-operator
       chart-path: chart
       repository: ${{ github.repository_owner }}/charts
-      version: ${{ needs.release.outputs.new-release-version }}
+      version: ${{ needs.release.outputs.new-release-version-v }}
       registry: ghcr.io
       registry-username: ${{ github.repository_owner }}
