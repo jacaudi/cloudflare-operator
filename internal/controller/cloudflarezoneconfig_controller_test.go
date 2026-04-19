@@ -192,16 +192,6 @@ func TestZoneConfigReconcile_AppliesSSLSettings(t *testing.T) {
 	if mock.settings["opportunistic_encryption"] != "on" {
 		t.Errorf("expected opportunistic_encryption=on, got %v", mock.settings["opportunistic_encryption"])
 	}
-
-	// Verify status was updated
-	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
-		t.Fatalf("failed to get updated zone config: %v", err)
-	}
-
-	if updated.Status.AppliedSettings != 6 {
-		t.Errorf("expected AppliedSettings=6, got %d", updated.Status.AppliedSettings)
-	}
 }
 
 func TestZoneConfigReconcile_AppliesAllSettings(t *testing.T) {
@@ -306,17 +296,6 @@ func TestZoneConfigReconcile_AppliesAllSettings(t *testing.T) {
 	if !mock.updateBotCalled {
 		t.Error("expected UpdateBotManagement to be called")
 	}
-
-	// Verify status: 23 settings + 1 bot management = 24
-	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
-		t.Fatalf("failed to get updated zone config: %v", err)
-	}
-
-	expectedApplied := 24
-	if updated.Status.AppliedSettings != expectedApplied {
-		t.Errorf("expected AppliedSettings=%d, got %d", expectedApplied, updated.Status.AppliedSettings)
-	}
 }
 
 func TestZoneConfigReconcile_AppliesBotManagement(t *testing.T) {
@@ -361,16 +340,6 @@ func TestZoneConfigReconcile_AppliesBotManagement(t *testing.T) {
 	}
 	if mock.botConfig.FightMode == nil || *mock.botConfig.FightMode {
 		t.Error("expected FightMode=false")
-	}
-
-	// Verify status: 1 for bot management
-	var updated cloudflarev1alpha1.CloudflareZoneConfig
-	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
-		t.Fatalf("failed to get updated zone config: %v", err)
-	}
-
-	if updated.Status.AppliedSettings != 1 {
-		t.Errorf("expected AppliedSettings=1, got %d", updated.Status.AppliedSettings)
 	}
 }
 

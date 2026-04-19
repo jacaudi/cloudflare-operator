@@ -227,9 +227,11 @@ type CloudflareZoneConfigStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// AppliedSettings is the count of settings applied.
+	// AppliedSpecHash is a hash of the settings-relevant spec fields the last
+	// time reconciliation successfully applied them. When the current hash
+	// matches, the controller skips the per-setting API calls.
 	// +optional
-	AppliedSettings int `json:"appliedSettings,omitempty"`
+	AppliedSpecHash string `json:"appliedSpecHash,omitempty"`
 
 	// LastSyncedAt is the last time the zone config was successfully synced.
 	// +optional
@@ -243,7 +245,6 @@ type CloudflareZoneConfigStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Zone ID",type=string,JSONPath=`.spec.zoneID`
-// +kubebuilder:printcolumn:name="Settings",type=integer,JSONPath=`.status.appliedSettings`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"

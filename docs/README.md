@@ -342,9 +342,11 @@ Declaratively manages zone-level settings: SSL/TLS, security, performance, netwo
 
 ### Status
 
+Standard fields: `conditions`, `lastSyncedAt`, `observedGeneration`, plus:
+
 | Field | Description |
 |-------|-------------|
-| `appliedSettings` | Count of settings applied |
+| `appliedSpecHash` | Hash of the settings-relevant spec at last successful reconcile. When the current hash matches, the operator skips the per-setting API calls. |
 
 ### Example
 
@@ -380,8 +382,8 @@ spec:
 ### Print Columns
 
 ```
-NAME            ZONE ID       SETTINGS   READY   AGE
-zone-settings   abc123...     18         True    5d
+NAME            ZONE ID       READY   AGE
+zone-settings   abc123...     True    5d
 ```
 
 ---

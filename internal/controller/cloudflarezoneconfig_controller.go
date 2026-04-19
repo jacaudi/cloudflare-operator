@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -233,15 +236,30 @@ func collectSettings(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) []settin
 }
 
 func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context, zoneConfig *cloudflarev1alpha1.CloudflareZoneConfig, zoneClient cfclient.ZoneClient, zoneID string) (ctrl.Result, error) {
-	appliedCount := 0
+	log := log.FromContext(ctx)
+
+	requeueAfter := 30 * time.Minute
+	if zoneConfig.Spec.Interval != nil {
+		requeueAfter = zoneConfig.Spec.Interval.Duration
+	}
+
+	// Skip the whole apply loop if the settings-relevant spec hasn't changed
+	// since the last successful reconcile. Out-of-band dashboard edits won't
+	// be reverted until the K8s spec itself changes.
+	desiredHash := hashZoneConfigSpec(&zoneConfig.Spec)
+	if zoneConfig.Status.AppliedSpecHash == desiredHash {
+		log.V(1).Info("zone config spec unchanged, skipping settings apply", "hash", desiredHash)
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil
+	}
 
 	// Apply regular zone settings
-	for _, s := range collectSettings(&zoneConfig.Spec) {
+	settings := collectSettings(&zoneConfig.Spec)
+	for _, s := range settings {
 		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update setting %s: %w", s.id, err)
 		}
-		appliedCount++
 	}
+	appliedCount := len(settings)
 
 	// Handle bot management separately (different API)
 	if zoneConfig.Spec.BotManagement != nil {
@@ -255,17 +273,35 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 		appliedCount++
 	}
 
-	zoneConfig.Status.AppliedSettings = appliedCount
-
-	requeueAfter := 30 * time.Minute
-	if zoneConfig.Spec.Interval != nil {
-		requeueAfter = zoneConfig.Spec.Interval.Duration
-	}
+	zoneConfig.Status.AppliedSpecHash = desiredHash
 
 	r.Recorder.Event(zoneConfig, corev1.EventTypeNormal, "SettingsApplied",
 		fmt.Sprintf("Applied %d settings to zone %s", appliedCount, zoneID))
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// hashZoneConfigSpec returns a sha256 hex digest over the settings-relevant
+// spec fields. Operational fields (Interval, SecretRef, ZoneID/Ref) are excluded
+// so changing them doesn't spuriously re-apply settings.
+func hashZoneConfigSpec(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) string {
+	payload := struct {
+		SSL           *cloudflarev1alpha1.SSLSettings           `json:"ssl,omitempty"`
+		Security      *cloudflarev1alpha1.SecuritySettings      `json:"security,omitempty"`
+		Performance   *cloudflarev1alpha1.PerformanceSettings   `json:"performance,omitempty"`
+		Network       *cloudflarev1alpha1.NetworkSettings       `json:"network,omitempty"`
+		BotManagement *cloudflarev1alpha1.BotManagementSettings `json:"botManagement,omitempty"`
+	}{spec.SSL, spec.Security, spec.Performance, spec.Network, spec.BotManagement}
+
+	// json.Marshal is deterministic for structs (field order is source order)
+	// and omits nil pointers via omitempty, so semantically equal specs hash equal.
+	data, err := json.Marshal(payload)
+	if err != nil {
+		// Marshalling these plain value structs cannot fail at runtime.
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func (r *CloudflareZoneConfigReconciler) reconcileDelete(ctx context.Context, zoneConfig *cloudflarev1alpha1.CloudflareZoneConfig) (ctrl.Result, error) {

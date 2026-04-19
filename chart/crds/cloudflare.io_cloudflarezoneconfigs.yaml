@@ -18,9 +18,6 @@ spec:
     - jsonPath: .spec.zoneID
       name: Zone ID
       type: string
-    - jsonPath: .status.appliedSettings
-      name: Settings
-      type: integer
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -294,9 +291,12 @@ spec:
           status:
             description: status defines the observed state of CloudflareZoneConfig
             properties:
-              appliedSettings:
-                description: AppliedSettings is the count of settings applied.
-                type: integer
+              appliedSpecHash:
+                description: |-
+                  AppliedSpecHash is a hash of the settings-relevant spec fields the last
+                  time reconciliation successfully applied them. When the current hash
+                  matches, the controller skips the per-setting API calls.
+                type: string
               conditions:
                 description: Conditions represent the latest available observations
                   of the resource's state.
