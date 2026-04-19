@@ -170,8 +170,8 @@ func TestZoneReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !result.Requeue {
-		t.Error("expected Requeue=true after adding finalizer")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after adding finalizer")
 	}
 
 	var updated cloudflarev1alpha1.CloudflareZone
@@ -287,7 +287,7 @@ func TestZoneReconcile_SetsReadyTrueWhenActive(t *testing.T) {
 	}
 
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			if c.Status != metav1.ConditionTrue {
 				t.Errorf("expected Ready=True, got %s", c.Status)
 			}
@@ -332,7 +332,7 @@ func TestZoneReconcile_SetsReadyFalseWhenPending(t *testing.T) {
 	}
 
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready=False when pending, got %s", c.Status)
 			}
@@ -463,7 +463,7 @@ func TestZoneReconcile_SecretNotFound(t *testing.T) {
 	}
 
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" && c.Reason == cloudflarev1alpha1.ReasonSecretNotFound {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady && c.Reason == cloudflarev1alpha1.ReasonSecretNotFound {
 			return
 		}
 	}
@@ -497,7 +497,7 @@ func TestZoneReconcile_CloudflareAPIError(t *testing.T) {
 	}
 
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready=False, got %s", c.Status)
 			}

@@ -60,7 +60,7 @@ type CloudflareZoneConfigReconciler struct {
 // for a CloudflareZoneConfig resource. It handles applying zone settings to
 // Cloudflare and tracking the applied settings count.
 func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// 1. Fetch the CR
 	var zoneConfig cloudflarev1alpha1.CloudflareZoneConfig
@@ -86,13 +86,13 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		if err := r.Update(ctx, &zoneConfig); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	// 3.5. Resolve zone ID
 	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, &zoneConfig)
 	if err != nil {
-		log.Error(err, "failed to resolve zone ID")
+		logger.Error(err, "failed to resolve zone ID")
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
 			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
@@ -100,7 +100,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zoneConfig.Spec.SecretRef.Name, zoneConfig.Namespace)
 	if err != nil {
-		log.Error(err, "failed to get API token")
+		logger.Error(err, "failed to get API token")
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
@@ -108,7 +108,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// 5. Reconcile the zone config
 	result, err := r.reconcileZoneConfig(ctx, &zoneConfig, r.zoneClient(apiToken), resolvedZoneID)
 	if err != nil {
-		log.Error(err, "reconciliation failed")
+		logger.Error(err, "reconciliation failed")
 		r.Recorder.Event(&zoneConfig, corev1.EventTypeWarning, "SyncFailed", err.Error())
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
 			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
@@ -135,108 +135,91 @@ type settingUpdate struct {
 	value any
 }
 
+// appendIfSet appends a settingUpdate if value is non-nil, dereferencing it.
+func appendIfSet[T any](updates []settingUpdate, id string, value *T) []settingUpdate {
+	if value == nil {
+		return updates
+	}
+	return append(updates, settingUpdate{id, *value})
+}
+
 // collectSettings maps non-nil spec fields to Cloudflare setting IDs and values.
 func collectSettings(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) []settingUpdate {
 	var updates []settingUpdate
+	updates = appendSSL(updates, spec.SSL)
+	updates = appendSecurity(updates, spec.Security)
+	updates = appendPerformance(updates, spec.Performance)
+	updates = appendNetwork(updates, spec.Network)
+	return updates
+}
 
-	if spec.SSL != nil {
-		if spec.SSL.Mode != nil {
-			updates = append(updates, settingUpdate{"ssl", *spec.SSL.Mode})
+func appendSSL(updates []settingUpdate, ssl *cloudflarev1alpha1.SSLSettings) []settingUpdate {
+	if ssl == nil {
+		return updates
+	}
+	updates = appendIfSet(updates, "ssl", ssl.Mode)
+	updates = appendIfSet(updates, "min_tls_version", ssl.MinTLSVersion)
+	updates = appendIfSet(updates, "tls_1_3", ssl.TLS13)
+	updates = appendIfSet(updates, "always_use_https", ssl.AlwaysUseHTTPS)
+	updates = appendIfSet(updates, "automatic_https_rewrites", ssl.AutomaticHTTPSRewrites)
+	updates = appendIfSet(updates, "opportunistic_encryption", ssl.OpportunisticEncryption)
+	return updates
+}
+
+func appendSecurity(updates []settingUpdate, sec *cloudflarev1alpha1.SecuritySettings) []settingUpdate {
+	if sec == nil {
+		return updates
+	}
+	updates = appendIfSet(updates, "security_level", sec.SecurityLevel)
+	updates = appendIfSet(updates, "challenge_ttl", sec.ChallengeTTL)
+	updates = appendIfSet(updates, "browser_check", sec.BrowserCheck)
+	updates = appendIfSet(updates, "email_obfuscation", sec.EmailObfuscation)
+	return updates
+}
+
+func appendPerformance(updates []settingUpdate, perf *cloudflarev1alpha1.PerformanceSettings) []settingUpdate {
+	if perf == nil {
+		return updates
+	}
+	updates = appendIfSet(updates, "cache_level", perf.CacheLevel)
+	updates = appendIfSet(updates, "browser_cache_ttl", perf.BrowserCacheTTL)
+	if perf.Minify != nil {
+		minifyValue := map[string]string{}
+		if perf.Minify.CSS != nil {
+			minifyValue["css"] = *perf.Minify.CSS
 		}
-		if spec.SSL.MinTLSVersion != nil {
-			updates = append(updates, settingUpdate{"min_tls_version", *spec.SSL.MinTLSVersion})
+		if perf.Minify.HTML != nil {
+			minifyValue["html"] = *perf.Minify.HTML
 		}
-		if spec.SSL.TLS13 != nil {
-			updates = append(updates, settingUpdate{"tls_1_3", *spec.SSL.TLS13})
+		if perf.Minify.JS != nil {
+			minifyValue["js"] = *perf.Minify.JS
 		}
-		if spec.SSL.AlwaysUseHTTPS != nil {
-			updates = append(updates, settingUpdate{"always_use_https", *spec.SSL.AlwaysUseHTTPS})
-		}
-		if spec.SSL.AutomaticHTTPSRewrites != nil {
-			updates = append(updates, settingUpdate{"automatic_https_rewrites", *spec.SSL.AutomaticHTTPSRewrites})
-		}
-		if spec.SSL.OpportunisticEncryption != nil {
-			updates = append(updates, settingUpdate{"opportunistic_encryption", *spec.SSL.OpportunisticEncryption})
+		if len(minifyValue) > 0 {
+			updates = append(updates, settingUpdate{"minify", minifyValue})
 		}
 	}
+	updates = appendIfSet(updates, "polish", perf.Polish)
+	updates = appendIfSet(updates, "brotli", perf.Brotli)
+	updates = appendIfSet(updates, "early_hints", perf.EarlyHints)
+	updates = appendIfSet(updates, "http2", perf.HTTP2)
+	updates = appendIfSet(updates, "http3", perf.HTTP3)
+	return updates
+}
 
-	if spec.Security != nil {
-		if spec.Security.SecurityLevel != nil {
-			updates = append(updates, settingUpdate{"security_level", *spec.Security.SecurityLevel})
-		}
-		if spec.Security.ChallengeTTL != nil {
-			updates = append(updates, settingUpdate{"challenge_ttl", *spec.Security.ChallengeTTL})
-		}
-		if spec.Security.BrowserCheck != nil {
-			updates = append(updates, settingUpdate{"browser_check", *spec.Security.BrowserCheck})
-		}
-		if spec.Security.EmailObfuscation != nil {
-			updates = append(updates, settingUpdate{"email_obfuscation", *spec.Security.EmailObfuscation})
-		}
+func appendNetwork(updates []settingUpdate, net *cloudflarev1alpha1.NetworkSettings) []settingUpdate {
+	if net == nil {
+		return updates
 	}
-
-	if spec.Performance != nil {
-		if spec.Performance.CacheLevel != nil {
-			updates = append(updates, settingUpdate{"cache_level", *spec.Performance.CacheLevel})
-		}
-		if spec.Performance.BrowserCacheTTL != nil {
-			updates = append(updates, settingUpdate{"browser_cache_ttl", *spec.Performance.BrowserCacheTTL})
-		}
-		if spec.Performance.Minify != nil {
-			minifyValue := map[string]string{}
-			if spec.Performance.Minify.CSS != nil {
-				minifyValue["css"] = *spec.Performance.Minify.CSS
-			}
-			if spec.Performance.Minify.HTML != nil {
-				minifyValue["html"] = *spec.Performance.Minify.HTML
-			}
-			if spec.Performance.Minify.JS != nil {
-				minifyValue["js"] = *spec.Performance.Minify.JS
-			}
-			if len(minifyValue) > 0 {
-				updates = append(updates, settingUpdate{"minify", minifyValue})
-			}
-		}
-		if spec.Performance.Polish != nil {
-			updates = append(updates, settingUpdate{"polish", *spec.Performance.Polish})
-		}
-		if spec.Performance.Brotli != nil {
-			updates = append(updates, settingUpdate{"brotli", *spec.Performance.Brotli})
-		}
-		if spec.Performance.EarlyHints != nil {
-			updates = append(updates, settingUpdate{"early_hints", *spec.Performance.EarlyHints})
-		}
-		if spec.Performance.HTTP2 != nil {
-			updates = append(updates, settingUpdate{"http2", *spec.Performance.HTTP2})
-		}
-		if spec.Performance.HTTP3 != nil {
-			updates = append(updates, settingUpdate{"http3", *spec.Performance.HTTP3})
-		}
-	}
-
-	if spec.Network != nil {
-		if spec.Network.IPv6 != nil {
-			updates = append(updates, settingUpdate{"ipv6", *spec.Network.IPv6})
-		}
-		if spec.Network.WebSockets != nil {
-			updates = append(updates, settingUpdate{"websockets", *spec.Network.WebSockets})
-		}
-		if spec.Network.PseudoIPv4 != nil {
-			updates = append(updates, settingUpdate{"pseudo_ipv4", *spec.Network.PseudoIPv4})
-		}
-		if spec.Network.IPGeolocation != nil {
-			updates = append(updates, settingUpdate{"ip_geolocation", *spec.Network.IPGeolocation})
-		}
-		if spec.Network.OpportunisticOnion != nil {
-			updates = append(updates, settingUpdate{"opportunistic_onion", *spec.Network.OpportunisticOnion})
-		}
-	}
-
+	updates = appendIfSet(updates, "ipv6", net.IPv6)
+	updates = appendIfSet(updates, "websockets", net.WebSockets)
+	updates = appendIfSet(updates, "pseudo_ipv4", net.PseudoIPv4)
+	updates = appendIfSet(updates, "ip_geolocation", net.IPGeolocation)
+	updates = appendIfSet(updates, "opportunistic_onion", net.OpportunisticOnion)
 	return updates
 }
 
 func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context, zoneConfig *cloudflarev1alpha1.CloudflareZoneConfig, zoneClient cfclient.ZoneClient, zoneID string) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	requeueAfter := 30 * time.Minute
 	if zoneConfig.Spec.Interval != nil {
@@ -248,7 +231,7 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 	// be reverted until the K8s spec itself changes.
 	desiredHash := hashZoneConfigSpec(&zoneConfig.Spec)
 	if zoneConfig.Status.AppliedSpecHash == desiredHash {
-		log.V(1).Info("zone config spec unchanged, skipping settings apply", "hash", desiredHash)
+		logger.V(1).Info("zone config spec unchanged, skipping settings apply", "hash", desiredHash)
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 

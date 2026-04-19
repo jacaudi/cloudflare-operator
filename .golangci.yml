@@ -1,3 +1,4 @@
+---
 version: "2"
 run:
   allow-parallel-runners: true
@@ -44,6 +45,11 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Test helpers often accept parameters for future flexibility even when
+      # current call sites only pass one value. Accept the ergonomic cost.
+      - linters:
+          - unparam
+        path: _test\.go
     paths:
       - third_party$
       - builtin$

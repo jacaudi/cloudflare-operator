@@ -11,6 +11,11 @@ import (
 	"github.com/cloudflare/cloudflare-go/v6/option"
 )
 
+const (
+	testTunnelName = "my-tunnel"
+	testTunnelID   = "tunnel-uuid-1"
+)
+
 // newTestTunnelClient creates a TunnelClient backed by a test HTTP server.
 func newTestTunnelClient(t *testing.T, handler http.Handler) TunnelClient {
 	t.Helper()
@@ -36,7 +41,7 @@ func TestTunnelClient_CreateTunnel(t *testing.T) {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
 
-		if body["name"] != "my-tunnel" {
+		if body["name"] != testTunnelName {
 			t.Errorf("expected name my-tunnel, got %v", body["name"])
 		}
 		if body["tunnel_secret"] != "c2VjcmV0LXZhbHVlLXRoYXQtaXMtYXQtbGVhc3QtMzItYnl0ZXM=" {
@@ -44,25 +49,25 @@ func TestTunnelClient_CreateTunnel(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":   "tunnel-uuid-1",
-			"name": "my-tunnel",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":   testTunnelID,
+			"name": testTunnelName,
 		}))
 	})
 
 	client := newTestTunnelClient(t, mux)
 	tunnel, err := client.CreateTunnel(context.Background(), "acct-1", TunnelParams{
-		Name:         "my-tunnel",
+		Name:         testTunnelName,
 		TunnelSecret: "c2VjcmV0LXZhbHVlLXRoYXQtaXMtYXQtbGVhc3QtMzItYnl0ZXM=",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if tunnel.ID != "tunnel-uuid-1" {
+	if tunnel.ID != testTunnelID {
 		t.Errorf("expected ID tunnel-uuid-1, got %s", tunnel.ID)
 	}
-	if tunnel.Name != "my-tunnel" {
+	if tunnel.Name != testTunnelName {
 		t.Errorf("expected name my-tunnel, got %s", tunnel.Name)
 	}
 }
@@ -75,22 +80,22 @@ func TestTunnelClient_GetTunnel(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":   "tunnel-uuid-1",
-			"name": "my-tunnel",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":   testTunnelID,
+			"name": testTunnelName,
 		}))
 	})
 
 	client := newTestTunnelClient(t, mux)
-	tunnel, err := client.GetTunnel(context.Background(), "acct-1", "tunnel-uuid-1")
+	tunnel, err := client.GetTunnel(context.Background(), "acct-1", testTunnelID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if tunnel.ID != "tunnel-uuid-1" {
+	if tunnel.ID != testTunnelID {
 		t.Errorf("expected ID tunnel-uuid-1, got %s", tunnel.ID)
 	}
-	if tunnel.Name != "my-tunnel" {
+	if tunnel.Name != testTunnelName {
 		t.Errorf("expected name my-tunnel, got %s", tunnel.Name)
 	}
 }
@@ -103,7 +108,7 @@ func TestTunnelClient_ListTunnelsByName(t *testing.T) {
 		}
 
 		query := r.URL.Query()
-		if name := query.Get("name"); name != "my-tunnel" {
+		if name := query.Get("name"); name != testTunnelName {
 			t.Errorf("expected name=my-tunnel, got %s", name)
 		}
 		if deleted := query.Get("is_deleted"); deleted != "false" {
@@ -111,20 +116,20 @@ func TestTunnelClient_ListTunnelsByName(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
 			{
-				"id":   "tunnel-uuid-1",
-				"name": "my-tunnel",
+				"id":   testTunnelID,
+				"name": testTunnelName,
 			},
 			{
 				"id":   "tunnel-uuid-2",
-				"name": "my-tunnel",
+				"name": testTunnelName,
 			},
 		}))
 	})
 
 	client := newTestTunnelClient(t, mux)
-	tunnels, err := client.ListTunnelsByName(context.Background(), "acct-1", "my-tunnel")
+	tunnels, err := client.ListTunnelsByName(context.Background(), "acct-1", testTunnelName)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +137,7 @@ func TestTunnelClient_ListTunnelsByName(t *testing.T) {
 	if len(tunnels) != 2 {
 		t.Fatalf("expected 2 tunnels, got %d", len(tunnels))
 	}
-	if tunnels[0].ID != "tunnel-uuid-1" {
+	if tunnels[0].ID != testTunnelID {
 		t.Errorf("expected first tunnel ID tunnel-uuid-1, got %s", tunnels[0].ID)
 	}
 	if tunnels[1].ID != "tunnel-uuid-2" {
@@ -144,7 +149,7 @@ func TestTunnelClient_ListTunnelsByName_Empty(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/accounts/acct-1/cfd_tunnel", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{}))
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{}))
 	})
 
 	client := newTestTunnelClient(t, mux)
@@ -167,14 +172,14 @@ func TestTunnelClient_DeleteTunnel(t *testing.T) {
 		}
 		deleteCalled = true
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":   "tunnel-uuid-1",
-			"name": "my-tunnel",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":   testTunnelID,
+			"name": testTunnelName,
 		}))
 	})
 
 	client := newTestTunnelClient(t, mux)
-	err := client.DeleteTunnel(context.Background(), "acct-1", "tunnel-uuid-1")
+	err := client.DeleteTunnel(context.Background(), "acct-1", testTunnelID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +201,7 @@ func TestTunnelClient_GetTunnel_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestTunnelClient(t, mux)

@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const testDNSContent = "1.2.3.4"
+
 // mockDNSClient implements cfclient.DNSClient for testing.
 type mockDNSClient struct {
 	records      map[string]*cfclient.DNSRecord
@@ -122,7 +124,7 @@ func (m *mockDNSClient) DeleteRecord(_ context.Context, zoneID, recordID string)
 
 // Helper to create a base CloudflareDNSRecord for tests.
 func newTestDNSRecord(name, namespace string) *cloudflarev1alpha1.CloudflareDNSRecord {
-	content := "1.2.3.4"
+	content := testDNSContent
 	proxied := false
 	return &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
@@ -215,8 +217,8 @@ func TestReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 	}
 
 	// Should requeue after adding finalizer
-	if !result.Requeue {
-		t.Error("expected Requeue=true after adding finalizer")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after adding finalizer")
 	}
 
 	// Verify finalizer was added
@@ -267,7 +269,7 @@ func TestReconcile_CreatesDNSRecord(t *testing.T) {
 	if updated.Status.RecordID == "" {
 		t.Error("expected RecordID to be set in status")
 	}
-	if updated.Status.CurrentContent != "1.2.3.4" {
+	if updated.Status.CurrentContent != testDNSContent {
 		t.Errorf("expected CurrentContent=1.2.3.4, got %q", updated.Status.CurrentContent)
 	}
 }
@@ -285,7 +287,7 @@ func TestReconcile_AdoptsExistingRecord(t *testing.T) {
 		ID:      "existing-123",
 		Name:    "test.example.com",
 		Type:    "A",
-		Content: "1.2.3.4",
+		Content: testDNSContent,
 		Proxied: false,
 		TTL:     1,
 	}
@@ -348,7 +350,7 @@ func TestReconcile_UpdatesDriftedRecord(t *testing.T) {
 
 	// Verify the content was updated in the mock
 	updatedRec := mock.records["rec-drift"]
-	if updatedRec.Content != "1.2.3.4" {
+	if updatedRec.Content != testDNSContent {
 		t.Errorf("expected record content to be updated to 1.2.3.4, got %q", updatedRec.Content)
 	}
 
@@ -357,7 +359,7 @@ func TestReconcile_UpdatesDriftedRecord(t *testing.T) {
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
-	if updated.Status.CurrentContent != "1.2.3.4" {
+	if updated.Status.CurrentContent != testDNSContent {
 		t.Errorf("expected CurrentContent=1.2.3.4, got %q", updated.Status.CurrentContent)
 	}
 }
@@ -391,7 +393,7 @@ func TestReconcile_SecretNotFound(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)
@@ -421,7 +423,7 @@ func TestReconcile_DeletesRecord(t *testing.T) {
 		ID:      "rec-delete",
 		Name:    "test.example.com",
 		Type:    "A",
-		Content: "1.2.3.4",
+		Content: testDNSContent,
 	}
 
 	r := buildReconciler(s, mock, dnsRecord, secret)
@@ -473,7 +475,7 @@ func TestReconcile_SkipsUpToDateRecord(t *testing.T) {
 		ID:      "rec-uptodate",
 		Name:    "test.example.com",
 		Type:    "A",
-		Content: "1.2.3.4",
+		Content: testDNSContent,
 		Proxied: proxied,
 		TTL:     1,
 	}
@@ -505,7 +507,7 @@ func TestReconcile_SkipsUpToDateRecord(t *testing.T) {
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
 	}
-	if updated.Status.CurrentContent != "1.2.3.4" {
+	if updated.Status.CurrentContent != testDNSContent {
 		t.Errorf("expected CurrentContent=1.2.3.4, got %q", updated.Status.CurrentContent)
 	}
 }
@@ -523,7 +525,7 @@ func TestReconcile_NotFoundReturnsNoError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for not-found CR, got: %v", err)
 	}
-	if result.Requeue || result.RequeueAfter != 0 {
+	if result.RequeueAfter != 0 {
 		t.Errorf("expected empty result for not-found CR, got %+v", result)
 	}
 }
@@ -546,7 +548,7 @@ func TestDNSReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	}
 
 	// Create a CloudflareDNSRecord using zoneRef (not zoneID)
-	content := "1.2.3.4"
+	content := testDNSContent
 	proxied := false
 	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
@@ -572,8 +574,8 @@ func TestDNSReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	r := buildReconciler(s, mock, zone, dnsRecord, secret)
 
 	// Set the CloudflareZone status after creation (fake client requires Status().Update())
-	zone.Status.ZoneID = "resolved-zone-id"
-	zone.Status.Status = "active"
+	zone.Status.ZoneID = testResolvedZoneID
+	zone.Status.Status = testZoneActive
 	if err := r.Status().Update(context.Background(), zone); err != nil {
 		t.Fatalf("failed to update zone status: %v", err)
 	}
@@ -589,8 +591,8 @@ func TestDNSReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	if !mock.createCalled {
 		t.Error("expected CreateRecord to be called after resolving zone ID from CloudflareZone")
 	}
-	if mock.lastZoneID != "resolved-zone-id" {
-		t.Errorf("expected zone ID passed to DNS client to be %q, got %q", "resolved-zone-id", mock.lastZoneID)
+	if mock.lastZoneID != testResolvedZoneID {
+		t.Errorf("expected zone ID passed to DNS client to be %q, got %q", testResolvedZoneID, mock.lastZoneID)
 	}
 
 	// Should requeue after interval
@@ -617,7 +619,7 @@ func TestDNSReconcile_ZoneRefNotReady(t *testing.T) {
 	}
 
 	// Create a CloudflareDNSRecord using zoneRef pointing to the pending zone
-	content := "1.2.3.4"
+	content := testDNSContent
 	proxied := false
 	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
@@ -662,7 +664,7 @@ func TestDNSReconcile_ZoneRefNotReady(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)
@@ -695,7 +697,7 @@ func TestDNSReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
 	}
 
 	// DNS record marked for deletion with zoneRef
-	content := "1.2.3.4"
+	content := testDNSContent
 	proxied := false
 	now := metav1.Now()
 	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
@@ -725,8 +727,8 @@ func TestDNSReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
 	r := buildReconciler(s, mock, zone, dnsRecord, secret)
 
 	// Set zone status
-	zone.Status.ZoneID = "resolved-zone-id"
-	zone.Status.Status = "active"
+	zone.Status.ZoneID = testResolvedZoneID
+	zone.Status.Status = testZoneActive
 	if err := r.Status().Update(context.Background(), zone); err != nil {
 		t.Fatalf("failed to update zone status: %v", err)
 	}
@@ -741,8 +743,8 @@ func TestDNSReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
 	if !mock.deleteCalled {
 		t.Error("expected DeleteRecord to be called")
 	}
-	if mock.lastZoneID != "resolved-zone-id" {
-		t.Errorf("expected zone ID %q for delete, got %q", "resolved-zone-id", mock.lastZoneID)
+	if mock.lastZoneID != testResolvedZoneID {
+		t.Errorf("expected zone ID %q for delete, got %q", testResolvedZoneID, mock.lastZoneID)
 	}
 }
 
@@ -751,7 +753,7 @@ func TestDNSReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
 	mock := newMockDNSClient()
 
 	// DNS record marked for deletion, but the referenced zone doesn't exist
-	content := "1.2.3.4"
+	content := testDNSContent
 	proxied := false
 	now := metav1.Now()
 	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{

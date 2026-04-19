@@ -17,6 +17,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	testSSLModeFull   = "full"
+	testMinTLSVersion = "1.2"
+	testTLS13ZRT      = "zrt"
+)
+
 // mockZoneClient implements cfclient.ZoneClient for testing.
 type mockZoneClient struct {
 	settings           map[string]any
@@ -36,7 +42,7 @@ func newMockZoneClient() *mockZoneClient {
 }
 
 func (m *mockZoneClient) GetSettings(_ context.Context, _ string) ([]cfclient.ZoneSetting, error) {
-	var result []cfclient.ZoneSetting
+	result := make([]cfclient.ZoneSetting, 0, len(m.settings))
 	for id, val := range m.settings {
 		result = append(result, cfclient.ZoneSetting{ID: id, Value: val})
 	}
@@ -136,9 +142,9 @@ func TestZoneConfigReconcile_AppliesSSLSettings(t *testing.T) {
 	zoneConfig := newTestZoneConfig("test-zone-config", "default")
 	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
 
-	sslMode := "full"
-	minTLS := "1.2"
-	tls13 := "zrt"
+	sslMode := testSSLModeFull
+	minTLS := testMinTLSVersion
+	tls13 := testTLS13ZRT
 	alwaysHTTPS := "on"
 	autoRewrites := "on"
 	oppEncryption := "on"
@@ -174,13 +180,13 @@ func TestZoneConfigReconcile_AppliesSSLSettings(t *testing.T) {
 	}
 
 	// Verify specific settings
-	if mock.settings["ssl"] != "full" {
+	if mock.settings["ssl"] != testSSLModeFull {
 		t.Errorf("expected ssl=full, got %v", mock.settings["ssl"])
 	}
-	if mock.settings["min_tls_version"] != "1.2" {
+	if mock.settings["min_tls_version"] != testMinTLSVersion {
 		t.Errorf("expected min_tls_version=1.2, got %v", mock.settings["min_tls_version"])
 	}
-	if mock.settings["tls_1_3"] != "zrt" {
+	if mock.settings["tls_1_3"] != testTLS13ZRT {
 		t.Errorf("expected tls_1_3=zrt, got %v", mock.settings["tls_1_3"])
 	}
 	if mock.settings["always_use_https"] != "on" {
@@ -199,9 +205,9 @@ func TestZoneConfigReconcile_AppliesAllSettings(t *testing.T) {
 	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
 
 	// SSL settings (6)
-	sslMode := "full"
-	minTLS := "1.2"
-	tls13 := "zrt"
+	sslMode := testSSLModeFull
+	minTLS := testMinTLSVersion
+	tls13 := testTLS13ZRT
 	alwaysHTTPS := "on"
 	autoRewrites := "on"
 	oppEncryption := "on"
@@ -411,7 +417,7 @@ func TestZoneConfigReconcile_SecretNotFound(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)
@@ -443,7 +449,7 @@ func TestZoneConfigReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	}
 
 	// Create a CloudflareZoneConfig using zoneRef (not zoneID)
-	sslMode := "full"
+	sslMode := testSSLModeFull
 	zoneConfig := &cloudflarev1alpha1.CloudflareZoneConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test-zone-config",
@@ -514,7 +520,7 @@ func TestZoneConfigReconcile_ZoneRefNotReady(t *testing.T) {
 	}
 
 	// Create a CloudflareZoneConfig using zoneRef pointing to the pending zone
-	sslMode := "full"
+	sslMode := testSSLModeFull
 	zoneConfig := &cloudflarev1alpha1.CloudflareZoneConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test-zone-config",
@@ -558,7 +564,7 @@ func TestZoneConfigReconcile_ZoneRefNotReady(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)

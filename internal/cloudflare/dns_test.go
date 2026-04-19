@@ -11,6 +11,14 @@ import (
 	"github.com/cloudflare/cloudflare-go/v6/option"
 )
 
+const (
+	testRecID   = "rec-1"
+	testRecName = "example.com"
+	testIP      = "1.2.3.4"
+	testIPAlt   = "5.6.7.8"
+	testSubName = "www.example.com"
+)
+
 // newTestDNSClient creates a DNSClient backed by a test HTTP server.
 func newTestDNSClient(t *testing.T, handler http.Handler) DNSClient {
 	t.Helper()
@@ -70,32 +78,32 @@ func TestGetRecord(t *testing.T) {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":      "rec-1",
-			"name":    "example.com",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":      testRecID,
+			"name":    testRecName,
 			"type":    "A",
-			"content": "1.2.3.4",
+			"content": testIP,
 			"proxied": true,
 			"ttl":     1,
 		}))
 	})
 
 	client := newTestDNSClient(t, mux)
-	rec, err := client.GetRecord(context.Background(), "zone-1", "rec-1")
+	rec, err := client.GetRecord(context.Background(), "zone-1", testRecID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if rec.ID != "rec-1" {
+	if rec.ID != testRecID {
 		t.Errorf("expected ID rec-1, got %s", rec.ID)
 	}
-	if rec.Name != "example.com" {
+	if rec.Name != testRecName {
 		t.Errorf("expected name example.com, got %s", rec.Name)
 	}
 	if rec.Type != "A" {
 		t.Errorf("expected type A, got %s", rec.Type)
 	}
-	if rec.Content != "1.2.3.4" {
+	if rec.Content != testIP {
 		t.Errorf("expected content 1.2.3.4, got %s", rec.Content)
 	}
 	if !rec.Proxied {
@@ -115,7 +123,7 @@ func TestListRecordsByNameAndType(t *testing.T) {
 
 		// Verify query parameters
 		query := r.URL.Query()
-		if name := query.Get("name.exact"); name != "www.example.com" {
+		if name := query.Get("name.exact"); name != testSubName {
 			t.Errorf("expected name.exact=www.example.com, got %s", name)
 		}
 		if typ := query.Get("type"); typ != "A" {
@@ -123,20 +131,20 @@ func TestListRecordsByNameAndType(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
 			{
-				"id":      "rec-1",
-				"name":    "www.example.com",
+				"id":      testRecID,
+				"name":    testSubName,
 				"type":    "A",
-				"content": "1.2.3.4",
+				"content": testIP,
 				"proxied": false,
 				"ttl":     3600,
 			},
 			{
 				"id":      "rec-2",
-				"name":    "www.example.com",
+				"name":    testSubName,
 				"type":    "A",
-				"content": "5.6.7.8",
+				"content": testIPAlt,
 				"proxied": false,
 				"ttl":     3600,
 			},
@@ -144,7 +152,7 @@ func TestListRecordsByNameAndType(t *testing.T) {
 	})
 
 	client := newTestDNSClient(t, mux)
-	records, err := client.ListRecordsByNameAndType(context.Background(), "zone-1", "www.example.com", "A")
+	records, err := client.ListRecordsByNameAndType(context.Background(), "zone-1", testSubName, "A")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,16 +161,16 @@ func TestListRecordsByNameAndType(t *testing.T) {
 		t.Fatalf("expected 2 records, got %d", len(records))
 	}
 
-	if records[0].ID != "rec-1" {
+	if records[0].ID != testRecID {
 		t.Errorf("expected first record ID rec-1, got %s", records[0].ID)
 	}
-	if records[0].Content != "1.2.3.4" {
+	if records[0].Content != testIP {
 		t.Errorf("expected first record content 1.2.3.4, got %s", records[0].Content)
 	}
 	if records[1].ID != "rec-2" {
 		t.Errorf("expected second record ID rec-2, got %s", records[1].ID)
 	}
-	if records[1].Content != "5.6.7.8" {
+	if records[1].Content != testIPAlt {
 		t.Errorf("expected second record content 5.6.7.8, got %s", records[1].Content)
 	}
 }
@@ -171,7 +179,7 @@ func TestListRecordsByNameAndType_Empty(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zones/zone-1/dns_records", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{}))
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{}))
 	})
 
 	client := newTestDNSClient(t, mux)
@@ -198,22 +206,22 @@ func TestCreateRecord(t *testing.T) {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
 
-		if body["name"] != "www.example.com" {
+		if body["name"] != testSubName {
 			t.Errorf("expected name www.example.com, got %v", body["name"])
 		}
 		if body["type"] != "A" {
 			t.Errorf("expected type A, got %v", body["type"])
 		}
-		if body["content"] != "1.2.3.4" {
+		if body["content"] != testIP {
 			t.Errorf("expected content 1.2.3.4, got %v", body["content"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"id":      "rec-new",
-			"name":    "www.example.com",
+			"name":    testSubName,
 			"type":    "A",
-			"content": "1.2.3.4",
+			"content": testIP,
 			"proxied": true,
 			"ttl":     1,
 		}))
@@ -222,9 +230,9 @@ func TestCreateRecord(t *testing.T) {
 	client := newTestDNSClient(t, mux)
 	proxied := true
 	rec, err := client.CreateRecord(context.Background(), "zone-1", DNSRecordParams{
-		Name:    "www.example.com",
+		Name:    testSubName,
 		Type:    "A",
-		Content: "1.2.3.4",
+		Content: testIP,
 		Proxied: &proxied,
 		TTL:     1,
 	})
@@ -235,7 +243,7 @@ func TestCreateRecord(t *testing.T) {
 	if rec.ID != "rec-new" {
 		t.Errorf("expected ID rec-new, got %s", rec.ID)
 	}
-	if rec.Name != "www.example.com" {
+	if rec.Name != testSubName {
 		t.Errorf("expected name www.example.com, got %s", rec.Name)
 	}
 	if !rec.Proxied {
@@ -255,36 +263,36 @@ func TestUpdateRecord(t *testing.T) {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
 
-		if body["content"] != "5.6.7.8" {
+		if body["content"] != testIPAlt {
 			t.Errorf("expected content 5.6.7.8, got %v", body["content"])
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":      "rec-1",
-			"name":    "www.example.com",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":      testRecID,
+			"name":    testSubName,
 			"type":    "A",
-			"content": "5.6.7.8",
+			"content": testIPAlt,
 			"proxied": false,
 			"ttl":     3600,
 		}))
 	})
 
 	client := newTestDNSClient(t, mux)
-	rec, err := client.UpdateRecord(context.Background(), "zone-1", "rec-1", DNSRecordParams{
-		Name:    "www.example.com",
+	rec, err := client.UpdateRecord(context.Background(), "zone-1", testRecID, DNSRecordParams{
+		Name:    testSubName,
 		Type:    "A",
-		Content: "5.6.7.8",
+		Content: testIPAlt,
 		TTL:     3600,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if rec.ID != "rec-1" {
+	if rec.ID != testRecID {
 		t.Errorf("expected ID rec-1, got %s", rec.ID)
 	}
-	if rec.Content != "5.6.7.8" {
+	if rec.Content != testIPAlt {
 		t.Errorf("expected content 5.6.7.8, got %s", rec.Content)
 	}
 	if rec.TTL != 3600 {
@@ -301,13 +309,13 @@ func TestDeleteRecord(t *testing.T) {
 		}
 		deleteCalled = true
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id": "rec-1",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id": testRecID,
 		}))
 	})
 
 	client := newTestDNSClient(t, mux)
-	err := client.DeleteRecord(context.Background(), "zone-1", "rec-1")
+	err := client.DeleteRecord(context.Background(), "zone-1", testRecID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -329,7 +337,7 @@ func TestGetRecord_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestDNSClient(t, mux)

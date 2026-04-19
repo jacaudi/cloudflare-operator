@@ -60,7 +60,7 @@ type CloudflareTunnelReconciler struct {
 // including creation, adoption of existing tunnels, credential Secret
 // generation, and deletion.
 func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// 1. Fetch the CR
 	var tunnel cloudflarev1alpha1.CloudflareTunnel
@@ -86,13 +86,13 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err := r.Update(ctx, &tunnel); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, tunnel.Spec.SecretRef.Name, tunnel.Namespace)
 	if err != nil {
-		log.Error(err, "failed to get API token")
+		logger.Error(err, "failed to get API token")
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
@@ -100,7 +100,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 5. Reconcile the tunnel
 	result, err := r.reconcileTunnel(ctx, &tunnel, r.tunnelClient(apiToken))
 	if err != nil {
-		log.Error(err, "reconciliation failed")
+		logger.Error(err, "reconciliation failed")
 		r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "SyncFailed", err.Error())
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
 			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
@@ -122,7 +122,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 }
 
 func (r *CloudflareTunnelReconciler) reconcileTunnel(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel, tunnelClient cfclient.TunnelClient) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Check if tunnel exists by ID
 	var existing *cfclient.Tunnel
@@ -130,7 +130,7 @@ func (r *CloudflareTunnelReconciler) reconcileTunnel(ctx context.Context, tunnel
 	if tunnel.Status.TunnelID != "" {
 		existing, err = tunnelClient.GetTunnel(ctx, tunnel.Spec.AccountID, tunnel.Status.TunnelID)
 		if err != nil {
-			log.Info("could not fetch tunnel by ID, will search by name", "tunnelID", tunnel.Status.TunnelID)
+			logger.Info("could not fetch tunnel by ID, will search by name", "tunnelID", tunnel.Status.TunnelID)
 			tunnel.Status.TunnelID = ""
 			existing = nil
 		}
@@ -145,7 +145,7 @@ func (r *CloudflareTunnelReconciler) reconcileTunnel(ctx context.Context, tunnel
 		if len(tunnels) > 0 {
 			existing = &tunnels[0]
 			tunnel.Status.TunnelID = existing.ID
-			log.Info("adopted existing tunnel", "tunnelID", existing.ID)
+			logger.Info("adopted existing tunnel", "tunnelID", existing.ID)
 			r.Recorder.Event(tunnel, corev1.EventTypeNormal, "TunnelAdopted",
 				fmt.Sprintf("Adopted existing tunnel %s", existing.ID))
 		}
@@ -172,7 +172,7 @@ func (r *CloudflareTunnelReconciler) reconcileTunnel(ctx context.Context, tunnel
 			return ctrl.Result{}, fmt.Errorf("create tunnel: %w", err)
 		}
 		tunnel.Status.TunnelID = created.ID
-		log.Info("created tunnel", "tunnelID", created.ID)
+		logger.Info("created tunnel", "tunnelID", created.ID)
 		r.Recorder.Event(tunnel, corev1.EventTypeNormal, "TunnelCreated",
 			fmt.Sprintf("Created tunnel %s with ID %s", tunnel.Spec.Name, created.ID))
 
@@ -231,20 +231,20 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 // must fill it in manually. If a Secret already exists with a matching TunnelID
 // it is preserved; otherwise it is (over)written with the empty template.
 func (r *CloudflareTunnelReconciler) ensureCredentialsSecretExists(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	var existing corev1.Secret
 	err := r.Get(ctx, client.ObjectKey{Name: tunnel.Spec.GeneratedSecretName, Namespace: tunnel.Namespace}, &existing)
 	switch {
 	case errors.IsNotFound(err):
-		log.Info("creating credentials Secret for adopted tunnel with empty TunnelSecret; user must provide TunnelSecret manually",
+		logger.Info("creating credentials Secret for adopted tunnel with empty TunnelSecret; user must provide TunnelSecret manually",
 			"secretName", tunnel.Spec.GeneratedSecretName)
 	case err != nil:
 		return fmt.Errorf("get credentials secret: %w", err)
 	case secretMatchesTunnel(&existing, tunnel.Status.TunnelID):
 		return nil
 	default:
-		log.Info("credentials Secret does not match adopted tunnel; overwriting with empty TunnelSecret, user must refill",
+		logger.Info("credentials Secret does not match adopted tunnel; overwriting with empty TunnelSecret, user must refill",
 			"secretName", tunnel.Spec.GeneratedSecretName, "tunnelID", tunnel.Status.TunnelID)
 	}
 
@@ -274,22 +274,22 @@ func generateTunnelSecret() (string, error) {
 }
 
 func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	if tunnel.Status.TunnelID != "" {
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, tunnel.Spec.SecretRef.Name, tunnel.Namespace)
 		if err != nil {
-			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
+			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
 				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
 
 		if err := r.tunnelClient(apiToken).DeleteTunnel(ctx, tunnel.Spec.AccountID, tunnel.Status.TunnelID); err != nil {
-			log.Error(err, "failed to delete tunnel from Cloudflare")
+			logger.Error(err, "failed to delete tunnel from Cloudflare")
 			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
 				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
 		}
-		log.Info("deleted tunnel from Cloudflare", "tunnelID", tunnel.Status.TunnelID)
+		logger.Info("deleted tunnel from Cloudflare", "tunnelID", tunnel.Status.TunnelID)
 		r.Recorder.Event(tunnel, corev1.EventTypeNormal, "TunnelDeleted",
 			fmt.Sprintf("Deleted tunnel %s from Cloudflare", tunnel.Spec.Name))
 	}

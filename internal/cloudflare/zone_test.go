@@ -53,7 +53,7 @@ func TestZoneClient_UpdateSetting(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"id":       "ssl",
 			"value":    "full",
 			"editable": true,
@@ -89,7 +89,7 @@ func TestZoneClient_UpdateSetting_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestZoneClient(t, mux)
@@ -107,7 +107,7 @@ func TestZoneClient_GetBotManagement(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"enable_js":  true,
 			"fight_mode": true,
 		}))
@@ -131,7 +131,7 @@ func TestZoneClient_GetBotManagement_Disabled(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zones/zone-1/bot_management", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"enable_js":  false,
 			"fight_mode": false,
 		}))
@@ -163,7 +163,7 @@ func TestZoneClient_GetBotManagement_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestZoneClient(t, mux)
@@ -187,7 +187,7 @@ func TestZoneClient_UpdateBotManagement(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"enable_js":  true,
 			"fight_mode": true,
 		}))
@@ -224,7 +224,7 @@ func TestZoneClient_UpdateBotManagement_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestZoneClient(t, mux)

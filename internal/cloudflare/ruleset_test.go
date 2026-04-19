@@ -11,6 +11,11 @@ import (
 	"github.com/cloudflare/cloudflare-go/v6/option"
 )
 
+const (
+	testRulesetID    = "rs-1"
+	testRulesetPhase = "http_request_firewall_custom"
+)
+
 // newTestRulesetClient creates a RulesetClient backed by a test HTTP server.
 func newTestRulesetClient(t *testing.T, handler http.Handler) RulesetClient {
 	t.Helper()
@@ -31,10 +36,10 @@ func TestRulesetClient_GetRuleset(t *testing.T) {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":          "rs-1",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":          testRulesetID,
 			"name":        "My Custom Ruleset",
-			"phase":       "http_request_firewall_custom",
+			"phase":       testRulesetPhase,
 			"kind":        "custom",
 			"version":     "1",
 			"description": "Block bad bots",
@@ -69,18 +74,18 @@ func TestRulesetClient_GetRuleset(t *testing.T) {
 	})
 
 	client := newTestRulesetClient(t, mux)
-	rs, err := client.GetRuleset(context.Background(), "zone-1", "rs-1")
+	rs, err := client.GetRuleset(context.Background(), "zone-1", testRulesetID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if rs.ID != "rs-1" {
+	if rs.ID != testRulesetID {
 		t.Errorf("expected ID rs-1, got %s", rs.ID)
 	}
 	if rs.Name != "My Custom Ruleset" {
 		t.Errorf("expected name 'My Custom Ruleset', got %s", rs.Name)
 	}
-	if rs.Phase != "http_request_firewall_custom" {
+	if rs.Phase != testRulesetPhase {
 		t.Errorf("expected phase http_request_firewall_custom, got %s", rs.Phase)
 	}
 	if len(rs.Rules) != 2 {
@@ -127,11 +132,11 @@ func TestRulesetClient_ListRulesetsByPhase(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		// List endpoint returns lightweight results (no rules)
-		w.Write(cfAPIListResponse(t, []map[string]any{
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
 			{
-				"id":           "rs-1",
+				"id":           testRulesetID,
 				"name":         "Custom Firewall",
-				"phase":        "http_request_firewall_custom",
+				"phase":        testRulesetPhase,
 				"kind":         "custom",
 				"version":      "1",
 				"last_updated": "2025-01-01T00:00:00Z",
@@ -147,7 +152,7 @@ func TestRulesetClient_ListRulesetsByPhase(t *testing.T) {
 			{
 				"id":           "rs-3",
 				"name":         "Another Firewall",
-				"phase":        "http_request_firewall_custom",
+				"phase":        testRulesetPhase,
 				"kind":         "custom",
 				"version":      "1",
 				"last_updated": "2025-01-01T00:00:00Z",
@@ -156,7 +161,7 @@ func TestRulesetClient_ListRulesetsByPhase(t *testing.T) {
 	})
 
 	client := newTestRulesetClient(t, mux)
-	rulesets, err := client.ListRulesetsByPhase(context.Background(), "zone-1", "http_request_firewall_custom")
+	rulesets, err := client.ListRulesetsByPhase(context.Background(), "zone-1", testRulesetPhase)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,7 +170,7 @@ func TestRulesetClient_ListRulesetsByPhase(t *testing.T) {
 		t.Fatalf("expected 2 rulesets for phase http_request_firewall_custom, got %d", len(rulesets))
 	}
 
-	if rulesets[0].ID != "rs-1" {
+	if rulesets[0].ID != testRulesetID {
 		t.Errorf("expected first ruleset ID rs-1, got %s", rulesets[0].ID)
 	}
 	if rulesets[0].Name != "Custom Firewall" {
@@ -180,11 +185,11 @@ func TestRulesetClient_ListRulesetsByPhase_NoMatch(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zones/zone-1/rulesets", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
 			{
-				"id":           "rs-1",
+				"id":           testRulesetID,
 				"name":         "Custom Firewall",
-				"phase":        "http_request_firewall_custom",
+				"phase":        testRulesetPhase,
 				"kind":         "custom",
 				"version":      "1",
 				"last_updated": "2025-01-01T00:00:00Z",
@@ -218,7 +223,7 @@ func TestRulesetClient_CreateRuleset(t *testing.T) {
 		if body["name"] != "Block Bots" {
 			t.Errorf("expected name 'Block Bots', got %v", body["name"])
 		}
-		if body["phase"] != "http_request_firewall_custom" {
+		if body["phase"] != testRulesetPhase {
 			t.Errorf("expected phase http_request_firewall_custom, got %v", body["phase"])
 		}
 		if body["description"] != "Custom WAF rules" {
@@ -231,10 +236,10 @@ func TestRulesetClient_CreateRuleset(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"id":          "rs-new",
 			"name":        "Block Bots",
-			"phase":       "http_request_firewall_custom",
+			"phase":       testRulesetPhase,
 			"kind":        "custom",
 			"version":     "1",
 			"description": "Custom WAF rules",
@@ -257,7 +262,7 @@ func TestRulesetClient_CreateRuleset(t *testing.T) {
 	rs, err := client.CreateRuleset(context.Background(), "zone-1", RulesetParams{
 		Name:        "Block Bots",
 		Description: "Custom WAF rules",
-		Phase:       "http_request_firewall_custom",
+		Phase:       testRulesetPhase,
 		Rules: []RulesetRule{
 			{
 				Action:      "block",
@@ -277,7 +282,7 @@ func TestRulesetClient_CreateRuleset(t *testing.T) {
 	if rs.Name != "Block Bots" {
 		t.Errorf("expected name 'Block Bots', got %s", rs.Name)
 	}
-	if rs.Phase != "http_request_firewall_custom" {
+	if rs.Phase != testRulesetPhase {
 		t.Errorf("expected phase http_request_firewall_custom, got %s", rs.Phase)
 	}
 	if len(rs.Rules) != 1 {
@@ -313,10 +318,10 @@ func TestRulesetClient_UpdateRuleset(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":          "rs-1",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":          testRulesetID,
 			"name":        "Updated Ruleset",
-			"phase":       "http_request_firewall_custom",
+			"phase":       testRulesetPhase,
 			"kind":        "custom",
 			"version":     "2",
 			"description": "Updated rules",
@@ -345,10 +350,10 @@ func TestRulesetClient_UpdateRuleset(t *testing.T) {
 	})
 
 	client := newTestRulesetClient(t, mux)
-	rs, err := client.UpdateRuleset(context.Background(), "zone-1", "rs-1", RulesetParams{
+	rs, err := client.UpdateRuleset(context.Background(), "zone-1", testRulesetID, RulesetParams{
 		Name:        "Updated Ruleset",
 		Description: "Updated rules",
-		Phase:       "http_request_firewall_custom",
+		Phase:       testRulesetPhase,
 		Rules: []RulesetRule{
 			{
 				Action:      "block",
@@ -368,7 +373,7 @@ func TestRulesetClient_UpdateRuleset(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if rs.ID != "rs-1" {
+	if rs.ID != testRulesetID {
 		t.Errorf("expected ID rs-1, got %s", rs.ID)
 	}
 	if rs.Name != "Updated Ruleset" {
@@ -398,7 +403,7 @@ func TestRulesetClient_DeleteRuleset(t *testing.T) {
 	})
 
 	client := newTestRulesetClient(t, mux)
-	err := client.DeleteRuleset(context.Background(), "zone-1", "rs-1")
+	err := client.DeleteRuleset(context.Background(), "zone-1", testRulesetID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -420,7 +425,7 @@ func TestRulesetClient_GetRuleset_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestRulesetClient(t, mux)

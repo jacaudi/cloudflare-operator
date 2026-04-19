@@ -59,7 +59,7 @@ type CloudflareDNSRecordReconciler struct {
 // for a CloudflareDNSRecord resource. It handles the full lifecycle of DNS records
 // including creation, updates, adoption of existing records, and deletion.
 func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// 1. Fetch the CR
 	var dnsRecord cloudflarev1alpha1.CloudflareDNSRecord
@@ -85,13 +85,13 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		if err := r.Update(ctx, &dnsRecord); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	// 3.5. Resolve zone ID
 	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, &dnsRecord)
 	if err != nil {
-		log.Error(err, "failed to resolve zone ID")
+		logger.Error(err, "failed to resolve zone ID")
 		return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
 			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
@@ -99,7 +99,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, dnsRecord.Namespace)
 	if err != nil {
-		log.Error(err, "failed to get API token")
+		logger.Error(err, "failed to get API token")
 		return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
@@ -107,7 +107,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	// 5. Reconcile the DNS record
 	result, err := r.reconcileRecord(ctx, &dnsRecord, r.dnsClient(apiToken), resolvedZoneID)
 	if err != nil {
-		log.Error(err, "reconciliation failed")
+		logger.Error(err, "reconciliation failed")
 		r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, "SyncFailed", err.Error())
 		return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
 			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
@@ -130,7 +130,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 }
 
 func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dnsRecord *cloudflarev1alpha1.CloudflareDNSRecord, dnsClient cfclient.DNSClient, zoneID string) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// Determine desired content
 	desiredContent, err := r.resolveContent(ctx, dnsRecord)
@@ -144,7 +144,7 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 	if dnsRecord.Status.RecordID != "" {
 		existing, err = dnsClient.GetRecord(ctx, zoneID, dnsRecord.Status.RecordID)
 		if err != nil {
-			log.Info("could not fetch record by ID, will search by name", "recordID", dnsRecord.Status.RecordID)
+			logger.Info("could not fetch record by ID, will search by name", "recordID", dnsRecord.Status.RecordID)
 			dnsRecord.Status.RecordID = ""
 			existing = nil
 		}
@@ -159,7 +159,7 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 		if len(records) > 0 {
 			existing = &records[0]
 			dnsRecord.Status.RecordID = existing.ID
-			log.Info("adopted existing DNS record", "recordID", existing.ID)
+			logger.Info("adopted existing DNS record", "recordID", existing.ID)
 			r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordAdopted",
 				fmt.Sprintf("Adopted existing DNS record %s", existing.ID))
 		}
@@ -201,7 +201,7 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 		}
 		dnsRecord.Status.RecordID = created.ID
 		dnsRecord.Status.CurrentContent = created.Content
-		log.Info("created DNS record", "recordID", created.ID)
+		logger.Info("created DNS record", "recordID", created.ID)
 		r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordCreated",
 			fmt.Sprintf("Created DNS record %s -> %s", dnsRecord.Spec.Name, created.Content))
 	} else {
@@ -212,7 +212,7 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 				return ctrl.Result{}, fmt.Errorf("update record: %w", err)
 			}
 			dnsRecord.Status.CurrentContent = updated.Content
-			log.Info("updated DNS record", "recordID", existing.ID)
+			logger.Info("updated DNS record", "recordID", existing.ID)
 			r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordUpdated",
 				fmt.Sprintf("Updated DNS record %s: %s -> %s", dnsRecord.Spec.Name, existing.Content, updated.Content))
 		} else {
@@ -253,29 +253,29 @@ func (r *CloudflareDNSRecordReconciler) needsUpdate(existing *cfclient.DNSRecord
 }
 
 func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dnsRecord *cloudflarev1alpha1.CloudflareDNSRecord) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	if dnsRecord.Status.RecordID != "" {
 		resolvedZoneID, err := ResolveZoneID(ctx, r.Client, dnsRecord)
 		if err != nil {
-			log.Error(err, "failed to resolve zone ID during deletion, will retry; remove the finalizer manually to force deletion")
+			logger.Error(err, "failed to resolve zone ID during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,
 				cloudflarev1alpha1.ReasonZoneRefNotReady, wrapDeleteErr(err), 30*time.Second)
 		}
 
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, dnsRecord.Namespace)
 		if err != nil {
-			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
+			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,
 				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
 
 		if err := r.dnsClient(apiToken).DeleteRecord(ctx, resolvedZoneID, dnsRecord.Status.RecordID); err != nil {
-			log.Error(err, "failed to delete DNS record from Cloudflare")
+			logger.Error(err, "failed to delete DNS record from Cloudflare")
 			return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,
 				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
 		}
-		log.Info("deleted DNS record from Cloudflare", "recordID", dnsRecord.Status.RecordID)
+		logger.Info("deleted DNS record from Cloudflare", "recordID", dnsRecord.Status.RecordID)
 		r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordDeleted",
 			fmt.Sprintf("Deleted DNS record %s from Cloudflare", dnsRecord.Spec.Name))
 	}

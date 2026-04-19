@@ -10,6 +10,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+const (
+	testResolvedZoneID = "resolved-zone-id"
+	testZoneActive     = "active"
+)
+
 // newDNSRecord returns a minimal CloudflareDNSRecord satisfying zoneReferencer
 // for ResolveZoneID tests. Spec.Name/Type are populated only to keep the object
 // valid enough for round-tripping through the fake client if needed.
@@ -52,8 +57,8 @@ func TestResolveZoneID_ZoneRefResolvesFromStatus(t *testing.T) {
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 		Status: cloudflarev1alpha1.CloudflareZoneStatus{
-			ZoneID: "resolved-zone-id",
-			Status: "active",
+			ZoneID: testResolvedZoneID,
+			Status: testZoneActive,
 		},
 	}
 
@@ -64,8 +69,8 @@ func TestResolveZoneID_ZoneRefResolvesFromStatus(t *testing.T) {
 		Build()
 
 	// Set status after creation (fake client needs this)
-	zone.Status.ZoneID = "resolved-zone-id"
-	zone.Status.Status = "active"
+	zone.Status.ZoneID = testResolvedZoneID
+	zone.Status.Status = testZoneActive
 	if err := fakeClient.Status().Update(context.Background(), zone); err != nil {
 		t.Fatalf("failed to update status: %v", err)
 	}
@@ -75,7 +80,7 @@ func TestResolveZoneID_ZoneRefResolvesFromStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if zoneID != "resolved-zone-id" {
+	if zoneID != testResolvedZoneID {
 		t.Errorf("expected resolved-zone-id, got %s", zoneID)
 	}
 }
