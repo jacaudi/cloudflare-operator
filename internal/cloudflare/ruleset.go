@@ -155,9 +155,10 @@ func toMapStringAny(v any) map[string]any {
 // mapGetRulesetResponse converts a Cloudflare SDK RulesetGetResponse to our internal Ruleset.
 func mapGetRulesetResponse(resp *rulesets.RulesetGetResponse) *Ruleset {
 	rs := &Ruleset{
-		ID:    resp.ID,
-		Name:  resp.Name,
-		Phase: string(resp.Phase),
+		ID:          resp.ID,
+		Name:        resp.Name,
+		Description: resp.Description,
+		Phase:       string(resp.Phase),
 	}
 	for _, r := range resp.Rules {
 		rule := RulesetRule{
@@ -176,9 +177,10 @@ func mapGetRulesetResponse(resp *rulesets.RulesetGetResponse) *Ruleset {
 // mapNewRulesetResponse converts a Cloudflare SDK RulesetNewResponse to our internal Ruleset.
 func mapNewRulesetResponse(resp *rulesets.RulesetNewResponse) *Ruleset {
 	rs := &Ruleset{
-		ID:    resp.ID,
-		Name:  resp.Name,
-		Phase: string(resp.Phase),
+		ID:          resp.ID,
+		Name:        resp.Name,
+		Description: resp.Description,
+		Phase:       string(resp.Phase),
 	}
 	for _, r := range resp.Rules {
 		rule := RulesetRule{
@@ -197,9 +199,10 @@ func mapNewRulesetResponse(resp *rulesets.RulesetNewResponse) *Ruleset {
 // mapUpdateRulesetResponse converts a Cloudflare SDK RulesetUpdateResponse to our internal Ruleset.
 func mapUpdateRulesetResponse(resp *rulesets.RulesetUpdateResponse) *Ruleset {
 	rs := &Ruleset{
-		ID:    resp.ID,
-		Name:  resp.Name,
-		Phase: string(resp.Phase),
+		ID:          resp.ID,
+		Name:        resp.Name,
+		Description: resp.Description,
+		Phase:       string(resp.Phase),
 	}
 	for _, r := range resp.Rules {
 		rule := RulesetRule{

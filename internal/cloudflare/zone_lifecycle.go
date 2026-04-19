@@ -2,11 +2,17 @@ package cloudflare
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	"github.com/cloudflare/cloudflare-go/v6/zones"
 )
+
+// ErrZoneNotFound is returned by GetZone when the Cloudflare API responds with 404.
+// Callers can distinguish not-found from transient errors with errors.Is.
+var ErrZoneNotFound = errors.New("zone not found")
 
 // zoneLifecycleClient wraps the cloudflare-go v6 SDK to implement ZoneLifecycleClient.
 type zoneLifecycleClient struct {
@@ -42,6 +48,10 @@ func (c *zoneLifecycleClient) GetZone(ctx context.Context, zoneID string) (*Zone
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
+		var apiErr *cfgo.Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrZoneNotFound, zoneID)
+		}
 		return nil, fmt.Errorf("get zone %s: %w", zoneID, err)
 	}
 	return mapZoneResponse(resp), nil

@@ -10,11 +10,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// newDNSRecord returns a minimal CloudflareDNSRecord satisfying zoneReferencer
+// for ResolveZoneID tests. Spec.Name/Type are populated only to keep the object
+// valid enough for round-tripping through the fake client if needed.
+func newDNSRecord(namespace, zoneID string, zoneRef *cloudflarev1alpha1.ZoneReference) *cloudflarev1alpha1.CloudflareDNSRecord {
+	return &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: namespace},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			Name:    "example.com",
+			Type:    "A",
+			ZoneID:  zoneID,
+			ZoneRef: zoneRef,
+		},
+	}
+}
+
 func TestResolveZoneID_DirectZoneID(t *testing.T) {
 	s := testScheme(t)
 	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
 
-	zoneID, err := ResolveZoneID(context.Background(), fakeClient, "default", "zone-abc", nil)
+	zoneID, err := ResolveZoneID(context.Background(), fakeClient, newDNSRecord("default", "zone-abc", nil))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,7 +71,7 @@ func TestResolveZoneID_ZoneRefResolvesFromStatus(t *testing.T) {
 	}
 
 	ref := &cloudflarev1alpha1.ZoneReference{Name: "my-zone"}
-	zoneID, err := ResolveZoneID(context.Background(), fakeClient, "default", "", ref)
+	zoneID, err := ResolveZoneID(context.Background(), fakeClient, newDNSRecord("default", "", ref))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -89,7 +104,7 @@ func TestResolveZoneID_ZoneRefNoStatusZoneID(t *testing.T) {
 		Build()
 
 	ref := &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"}
-	_, err := ResolveZoneID(context.Background(), fakeClient, "default", "", ref)
+	_, err := ResolveZoneID(context.Background(), fakeClient, newDNSRecord("default", "", ref))
 	if err == nil {
 		t.Fatal("expected error for zone with no status.zoneID")
 	}
@@ -100,7 +115,7 @@ func TestResolveZoneID_ZoneRefNotFound(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
 
 	ref := &cloudflarev1alpha1.ZoneReference{Name: "nonexistent-zone"}
-	_, err := ResolveZoneID(context.Background(), fakeClient, "default", "", ref)
+	_, err := ResolveZoneID(context.Background(), fakeClient, newDNSRecord("default", "", ref))
 	if err == nil {
 		t.Fatal("expected error for non-existent CloudflareZone")
 	}
@@ -110,7 +125,7 @@ func TestResolveZoneID_NeitherProvided(t *testing.T) {
 	s := testScheme(t)
 	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
 
-	_, err := ResolveZoneID(context.Background(), fakeClient, "default", "", nil)
+	_, err := ResolveZoneID(context.Background(), fakeClient, newDNSRecord("default", "", nil))
 	if err == nil {
 		t.Fatal("expected error when neither zoneID nor zoneRef provided")
 	}
@@ -121,7 +136,7 @@ func TestResolveZoneID_BothProvided_ZoneIDTakesPrecedence(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(s).Build()
 
 	ref := &cloudflarev1alpha1.ZoneReference{Name: "my-zone"}
-	zoneID, err := ResolveZoneID(context.Background(), fakeClient, "default", "direct-id", ref)
+	zoneID, err := ResolveZoneID(context.Background(), fakeClient, newDNSRecord("default", "direct-id", ref))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

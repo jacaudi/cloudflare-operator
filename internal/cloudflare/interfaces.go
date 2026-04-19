@@ -59,10 +59,11 @@ type TunnelClient interface {
 
 // Ruleset represents a Cloudflare Ruleset.
 type Ruleset struct {
-	ID    string
-	Name  string
-	Phase string
-	Rules []RulesetRule
+	ID          string
+	Name        string
+	Description string
+	Phase       string
+	Rules       []RulesetRule
 }
 
 // RulesetRule is a single rule in a ruleset.

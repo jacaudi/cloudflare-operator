@@ -12,6 +12,9 @@ import (
 	"github.com/cloudflare/cloudflare-go/v6/option"
 )
 
+// SecretKeyAPIToken is the Secret data key where the Cloudflare API token is expected.
+const SecretKeyAPIToken = "apiToken"
+
 // ClientFactory creates Cloudflare API clients from Kubernetes Secrets.
 type ClientFactory struct {
 	k8sClient client.Client
@@ -33,9 +36,9 @@ func (f *ClientFactory) GetAPIToken(ctx context.Context, secretName, namespace s
 		return "", fmt.Errorf("failed to get secret %s/%s: %w", namespace, secretName, err)
 	}
 
-	token, ok := secret.Data["apiToken"]
+	token, ok := secret.Data[SecretKeyAPIToken]
 	if !ok {
-		return "", fmt.Errorf("secret %s/%s does not contain 'apiToken' key", namespace, secretName)
+		return "", fmt.Errorf("secret %s/%s does not contain %q key", namespace, secretName, SecretKeyAPIToken)
 	}
 
 	return string(token), nil

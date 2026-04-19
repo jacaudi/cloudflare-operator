@@ -9,9 +9,6 @@ func TestConditionConstants(t *testing.T) {
 	if ConditionTypeReady == "" {
 		t.Error("ConditionTypeReady should not be empty")
 	}
-	if ConditionTypeSynced == "" {
-		t.Error("ConditionTypeSynced should not be empty")
-	}
 }
 
 func TestReasonConstants(t *testing.T) {

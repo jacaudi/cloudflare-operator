@@ -516,8 +516,7 @@ Every resource reports standard Kubernetes conditions:
 | Condition | Meaning |
 |-----------|---------|
 | `Ready=True` | Resource is synced and healthy |
-| `Ready=False` | Resource has an error or is pending |
-| `Synced=True` | Last reconciliation succeeded |
+| `Ready=False` | Resource has an error, is pending external state, or is actively being deleted. Check the `Reason` field (e.g. `ZonePending`, `CloudflareAPIError`, `ZoneRefNotReady`) for specifics. |
 
 ### Events
 

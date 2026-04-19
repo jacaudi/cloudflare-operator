@@ -19,8 +19,7 @@ type ZoneReference struct {
 
 // Condition type constants used across all CRDs.
 const (
-	ConditionTypeReady  = "Ready"
-	ConditionTypeSynced = "Synced"
+	ConditionTypeReady = "Ready"
 )
 
 // Condition reason constants.

@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -66,6 +68,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		return ctrl.Result{}, err
 	}
+	preStatus := ruleset.Status.DeepCopy()
 
 	// 2. Handle deletion
 	if !ruleset.DeletionTimestamp.IsZero() {
@@ -85,61 +88,40 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// 3.5. Resolve zone ID
-	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, ruleset.Namespace, ruleset.Spec.ZoneID, ruleset.Spec.ZoneRef)
+	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, &ruleset)
 	if err != nil {
 		log.Error(err, "failed to resolve zone ID")
-		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
-			cloudflarev1alpha1.ReasonZoneRefNotReady, err.Error(), ruleset.Generation)
-		if statusErr := r.Status().Update(ctx, &ruleset); statusErr != nil {
-			log.Error(statusErr, "failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
+			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
 
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
 	if err != nil {
 		log.Error(err, "failed to get API token")
-		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
-			cloudflarev1alpha1.ReasonSecretNotFound, err.Error(), ruleset.Generation)
-		if statusErr := r.Status().Update(ctx, &ruleset); statusErr != nil {
-			log.Error(statusErr, "failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
+			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
-	// 5. Build ruleset client
-	var rulesetClient cfclient.RulesetClient
-	if r.RulesetClientFn != nil {
-		rulesetClient = r.RulesetClientFn(apiToken)
-	} else {
-		cfClient := cfclient.NewCloudflareClient(apiToken)
-		rulesetClient = cfclient.NewRulesetClientFromCF(cfClient)
-	}
-
-	// 6. Reconcile the ruleset
-	result, err := r.reconcileRuleset(ctx, &ruleset, rulesetClient, resolvedZoneID)
+	// 5. Reconcile the ruleset
+	result, err := r.reconcileRuleset(ctx, &ruleset, r.rulesetClient(apiToken), resolvedZoneID)
 	if err != nil {
 		log.Error(err, "reconciliation failed")
-		status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
-			cloudflarev1alpha1.ReasonCloudflareError, err.Error(), ruleset.Generation)
-		r.Recorder.Event(&ruleset, "Warning", "SyncFailed", err.Error())
-		if statusErr := r.Status().Update(ctx, &ruleset); statusErr != nil {
-			log.Error(statusErr, "failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+		r.Recorder.Event(&ruleset, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
+			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
 	}
 
-	// 7. Update status
+	// 7. Persist status only if anything materially changed.
 	ruleset.Status.ObservedGeneration = ruleset.Generation
-	now := metav1.Now()
-	ruleset.Status.LastSyncedAt = &now
 	status.SetReady(&ruleset.Status.Conditions, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Ruleset synced", ruleset.Generation)
-	status.SetSynced(&ruleset.Status.Conditions, metav1.ConditionTrue,
-		cloudflarev1alpha1.ReasonReconcileSuccess, "Ruleset synced", ruleset.Generation)
-	if err := r.Status().Update(ctx, &ruleset); err != nil {
-		return ctrl.Result{}, err
+	if !reflect.DeepEqual(preStatus, &ruleset.Status) {
+		now := metav1.Now()
+		ruleset.Status.LastSyncedAt = &now
+		if err := r.Status().Update(ctx, &ruleset); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return result, nil
@@ -182,7 +164,7 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 			existing = &rulesets[0]
 			ruleset.Status.RulesetID = existing.ID
 			log.Info("adopted existing ruleset", "rulesetID", existing.ID)
-			r.Recorder.Event(ruleset, "Normal", "RulesetAdopted",
+			r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetAdopted",
 				fmt.Sprintf("Adopted existing ruleset %s", existing.ID))
 		}
 	}
@@ -192,7 +174,8 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 		requeueAfter = ruleset.Spec.Interval.Duration
 	}
 
-	if existing == nil {
+	switch {
+	case existing == nil:
 		// Create new ruleset
 		created, err := rulesetClient.CreateRuleset(ctx, zoneID, params)
 		if err != nil {
@@ -201,17 +184,22 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 		ruleset.Status.RulesetID = created.ID
 		ruleset.Status.RuleCount = len(created.Rules)
 		log.Info("created ruleset", "rulesetID", created.ID)
-		r.Recorder.Event(ruleset, "Normal", "RulesetCreated",
+		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetCreated",
 			fmt.Sprintf("Created ruleset %s with ID %s", ruleset.Spec.Name, created.ID))
-	} else {
-		// Always update (PUT replaces all rules atomically — idempotent)
+
+	case rulesetMatches(existing, params):
+		// In sync — skip the PUT to avoid API churn.
+		ruleset.Status.RuleCount = len(existing.Rules)
+
+	default:
+		// PUT replaces all rules atomically.
 		updated, err := rulesetClient.UpdateRuleset(ctx, zoneID, existing.ID, params)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("update ruleset: %w", err)
 		}
 		ruleset.Status.RuleCount = len(updated.Rules)
 		log.Info("updated ruleset", "rulesetID", existing.ID)
-		r.Recorder.Event(ruleset, "Normal", "RulesetUpdated",
+		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetUpdated",
 			fmt.Sprintf("Updated ruleset %s", existing.ID))
 	}
 
@@ -248,56 +236,67 @@ func (r *CloudflareRulesetReconciler) reconcileDelete(ctx context.Context, rules
 	log := log.FromContext(ctx)
 
 	if ruleset.Status.RulesetID != "" {
-		resolvedZoneID, err := ResolveZoneID(ctx, r.Client, ruleset.Namespace, ruleset.Spec.ZoneID, ruleset.Spec.ZoneRef)
+		resolvedZoneID, err := ResolveZoneID(ctx, r.Client, ruleset)
 		if err != nil {
 			log.Error(err, "failed to resolve zone ID during deletion, will retry; remove the finalizer manually to force deletion")
-			status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
-				cloudflarev1alpha1.ReasonZoneRefNotReady,
-				fmt.Sprintf("Cannot delete Cloudflare resource: %v. Remove the finalizer manually to force deletion.", err),
-				ruleset.Generation)
-			if statusErr := r.Status().Update(ctx, ruleset); statusErr != nil {
-				log.Error(statusErr, "failed to update status")
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return failReconcile(ctx, r.Client, ruleset, &ruleset.Status.Conditions,
+				cloudflarev1alpha1.ReasonZoneRefNotReady, wrapDeleteErr(err), 30*time.Second)
 		}
 
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
 		if err != nil {
 			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
-			status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
-				cloudflarev1alpha1.ReasonSecretNotFound,
-				fmt.Sprintf("Cannot delete Cloudflare resource: %v. Remove the finalizer manually to force deletion.", err),
-				ruleset.Generation)
-			if statusErr := r.Status().Update(ctx, ruleset); statusErr != nil {
-				log.Error(statusErr, "failed to update status")
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		} else {
-			var rulesetClient cfclient.RulesetClient
-			if r.RulesetClientFn != nil {
-				rulesetClient = r.RulesetClientFn(apiToken)
-			} else {
-				cfClient := cfclient.NewCloudflareClient(apiToken)
-				rulesetClient = cfclient.NewRulesetClientFromCF(cfClient)
-			}
-
-			if err := rulesetClient.DeleteRuleset(ctx, resolvedZoneID, ruleset.Status.RulesetID); err != nil {
-				log.Error(err, "failed to delete ruleset from Cloudflare")
-				status.SetReady(&ruleset.Status.Conditions, metav1.ConditionFalse,
-					cloudflarev1alpha1.ReasonCloudflareError, err.Error(), ruleset.Generation)
-				if statusErr := r.Status().Update(ctx, ruleset); statusErr != nil {
-					log.Error(statusErr, "failed to update status")
-				}
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-			}
-			log.Info("deleted ruleset from Cloudflare", "rulesetID", ruleset.Status.RulesetID)
-			r.Recorder.Event(ruleset, "Normal", "RulesetDeleted",
-				fmt.Sprintf("Deleted ruleset %s from Cloudflare", ruleset.Spec.Name))
+			return failReconcile(ctx, r.Client, ruleset, &ruleset.Status.Conditions,
+				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
+
+		if err := r.rulesetClient(apiToken).DeleteRuleset(ctx, resolvedZoneID, ruleset.Status.RulesetID); err != nil {
+			log.Error(err, "failed to delete ruleset from Cloudflare")
+			return failReconcile(ctx, r.Client, ruleset, &ruleset.Status.Conditions,
+				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
+		}
+		log.Info("deleted ruleset from Cloudflare", "rulesetID", ruleset.Status.RulesetID)
+		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetDeleted",
+			fmt.Sprintf("Deleted ruleset %s from Cloudflare", ruleset.Spec.Name))
 	}
 
 	controllerutil.RemoveFinalizer(ruleset, cloudflarev1alpha1.FinalizerName)
 	return ctrl.Result{}, r.Update(ctx, ruleset)
+}
+
+// rulesetMatches reports whether the live ruleset already matches the desired
+// params. Rule IDs are ignored (Cloudflare-assigned, not part of desired state).
+// ActionParameters are compared via reflect.DeepEqual after both sides have
+// been normalized to map[string]any through JSON on their respective read paths,
+// so value shapes match when semantically equal.
+func rulesetMatches(existing *cfclient.Ruleset, desired cfclient.RulesetParams) bool {
+	if existing.Name != desired.Name ||
+		existing.Description != desired.Description ||
+		len(existing.Rules) != len(desired.Rules) {
+		return false
+	}
+	for i, want := range desired.Rules {
+		got := existing.Rules[i]
+		if got.Action != want.Action ||
+			got.Expression != want.Expression ||
+			got.Description != want.Description ||
+			got.Enabled != want.Enabled {
+			return false
+		}
+		if !reflect.DeepEqual(got.ActionParameters, want.ActionParameters) {
+			return false
+		}
+	}
+	return true
+}
+
+// rulesetClient returns the test-injected RulesetClient if present, otherwise
+// builds a live one from apiToken.
+func (r *CloudflareRulesetReconciler) rulesetClient(apiToken string) cfclient.RulesetClient {
+	if r.RulesetClientFn != nil {
+		return r.RulesetClientFn(apiToken)
+	}
+	return cfclient.NewRulesetClientFromCF(cfclient.NewCloudflareClient(apiToken))
 }
 
 // SetupWithManager sets up the controller with the Manager.

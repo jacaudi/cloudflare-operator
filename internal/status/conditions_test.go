@@ -62,15 +62,3 @@ func TestSetReady(t *testing.T) {
 		t.Errorf("expected type Ready, got %s", conditions[0].Type)
 	}
 }
-
-func TestSetSynced(t *testing.T) {
-	var conditions []metav1.Condition
-	SetSynced(&conditions, metav1.ConditionTrue, "Success", "synced", 1)
-
-	if len(conditions) != 1 {
-		t.Fatalf("expected 1 condition, got %d", len(conditions))
-	}
-	if conditions[0].Type != "Synced" {
-		t.Errorf("expected type Synced, got %s", conditions[0].Type)
-	}
-}

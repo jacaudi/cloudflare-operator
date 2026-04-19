@@ -18,10 +18,13 @@ package controller
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -62,6 +65,7 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, err
 	}
+	preStatus := zone.Status.DeepCopy()
 
 	// 2. Handle deletion
 	if !zone.DeletionTimestamp.IsZero() {
@@ -84,45 +88,30 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zone.Spec.SecretRef.Name, zone.Namespace)
 	if err != nil {
 		log.Error(err, "failed to get API token")
-		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
-			cloudflarev1alpha1.ReasonSecretNotFound, err.Error(), zone.Generation)
-		if statusErr := r.Status().Update(ctx, &zone); statusErr != nil {
-			log.Error(statusErr, "failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
+			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
-	// 5. Build zone lifecycle client
-	var zoneClient cfclient.ZoneLifecycleClient
-	if r.ZoneLifecycleClientFn != nil {
-		zoneClient = r.ZoneLifecycleClientFn(apiToken)
-	} else {
-		cfClient := cfclient.NewCloudflareClient(apiToken)
-		zoneClient = cfclient.NewZoneLifecycleClientFromCF(cfClient)
-	}
-
-	// 6. Reconcile the zone
-	result, err := r.reconcileZone(ctx, &zone, zoneClient)
+	// 5. Reconcile the zone
+	result, err := r.reconcileZone(ctx, &zone, r.zoneLifecycleClient(apiToken))
 	if err != nil {
 		log.Error(err, "reconciliation failed")
-		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
-			cloudflarev1alpha1.ReasonCloudflareError, err.Error(), zone.Generation)
-		r.Recorder.Event(&zone, "Warning", "SyncFailed", err.Error())
-		if statusErr := r.Status().Update(ctx, &zone); statusErr != nil {
-			log.Error(statusErr, "failed to update status")
-		}
-		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
+		r.Recorder.Event(&zone, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
+			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
 	}
 
-	// 7. Update status
-	// Note: Ready/Synced conditions are set inside reconcileZone rather than here
-	// because the zone has three distinct status states (active, pending, other)
-	// that each require different condition values.
+	// 7. Persist status only if anything materially changed.
+	// The Ready condition is set inside reconcileZone rather than here because
+	// the zone has three distinct status states (active, pending, other) that
+	// each require different condition values.
 	zone.Status.ObservedGeneration = zone.Generation
-	now := metav1.Now()
-	zone.Status.LastSyncedAt = &now
-	if err := r.Status().Update(ctx, &zone); err != nil {
-		return ctrl.Result{}, err
+	if !reflect.DeepEqual(preStatus, &zone.Status) {
+		now := metav1.Now()
+		zone.Status.LastSyncedAt = &now
+		if err := r.Status().Update(ctx, &zone); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return result, nil
@@ -137,10 +126,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 	if zone.Status.ZoneID != "" {
 		existing, err = zoneClient.GetZone(ctx, zone.Status.ZoneID)
 		if err != nil {
-			// Distinguish not-found (safe to fall through to ListZonesByName) from
-			// transient errors (retry to avoid potential duplicate zone creation).
-			errMsg := err.Error()
-			if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "404") {
+			if stderrors.Is(err, cfclient.ErrZoneNotFound) {
 				log.Info("zone not found by ID, will search by name", "zoneID", zone.Status.ZoneID)
 				zone.Status.ZoneID = ""
 				existing = nil
@@ -160,7 +146,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 			existing = &zones[0]
 			zone.Status.ZoneID = existing.ID
 			log.Info("adopted existing zone", "zoneID", existing.ID)
-			r.Recorder.Event(zone, "Normal", "ZoneAdopted",
+			r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneAdopted",
 				fmt.Sprintf("Adopted existing zone %s with ID %s", zone.Spec.Name, existing.ID))
 		}
 	}
@@ -177,7 +163,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 		existing = created
 		zone.Status.ZoneID = created.ID
 		log.Info("created zone", "zoneID", created.ID)
-		r.Recorder.Event(zone, "Normal", "ZoneCreated",
+		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneCreated",
 			fmt.Sprintf("Created zone %s with ID %s", zone.Spec.Name, created.ID))
 	}
 
@@ -191,7 +177,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 		}
 		existing = updated
 		log.Info("updated zone paused state", "paused", *zone.Spec.Paused)
-		r.Recorder.Event(zone, "Normal", "ZoneUpdated",
+		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneUpdated",
 			fmt.Sprintf("Updated zone %s paused=%v", zone.Spec.Name, *zone.Spec.Paused))
 	}
 
@@ -212,13 +198,11 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 	}
 
 	switch existing.Status {
-	case "active":
+	case cloudflarev1alpha1.ZoneStatusActive:
 		status.SetReady(&zone.Status.Conditions, metav1.ConditionTrue,
 			cloudflarev1alpha1.ReasonReconcileSuccess, "Zone is active", zone.Generation)
-		status.SetSynced(&zone.Status.Conditions, metav1.ConditionTrue,
-			cloudflarev1alpha1.ReasonReconcileSuccess, "Zone synced", zone.Generation)
 
-	case "pending":
+	case cloudflarev1alpha1.ZoneStatusPending:
 		// Trigger activation check
 		if err := zoneClient.TriggerActivationCheck(ctx, zone.Status.ZoneID); err != nil {
 			log.Error(err, "failed to trigger activation check")
@@ -228,8 +212,6 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 			strings.Join(existing.NameServers, ", "))
 		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonZonePending, nsMsg, zone.Generation)
-		status.SetSynced(&zone.Status.Conditions, metav1.ConditionTrue,
-			cloudflarev1alpha1.ReasonReconcileSuccess, "Zone synced", zone.Generation)
 
 		// Shorter requeue when pending for faster activation detection
 		if requeueAfter > 5*time.Minute {
@@ -240,8 +222,6 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonZoneNotActive,
 			fmt.Sprintf("Zone status is %q", existing.Status), zone.Generation)
-		status.SetSynced(&zone.Status.Conditions, metav1.ConditionTrue,
-			cloudflarev1alpha1.ReasonReconcileSuccess, "Zone synced", zone.Generation)
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
@@ -250,26 +230,12 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cloudflarev1alpha1.CloudflareZone) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
-	if zone.Spec.DeletionPolicy == "Delete" && zone.Status.ZoneID != "" {
+	if zone.Spec.DeletionPolicy == cloudflarev1alpha1.DeletionPolicyDelete && zone.Status.ZoneID != "" {
 		apiToken, err := r.ClientFactory.GetAPIToken(ctx, zone.Spec.SecretRef.Name, zone.Namespace)
 		if err != nil {
 			log.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
-			status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
-				cloudflarev1alpha1.ReasonSecretNotFound,
-				fmt.Sprintf("Cannot delete Cloudflare zone: %v. Remove the finalizer manually to force deletion.", err),
-				zone.Generation)
-			if statusErr := r.Status().Update(ctx, zone); statusErr != nil {
-				log.Error(statusErr, "failed to update status")
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
-
-		var zoneClient cfclient.ZoneLifecycleClient
-		if r.ZoneLifecycleClientFn != nil {
-			zoneClient = r.ZoneLifecycleClientFn(apiToken)
-		} else {
-			cfClient := cfclient.NewCloudflareClient(apiToken)
-			zoneClient = cfclient.NewZoneLifecycleClientFromCF(cfClient)
+			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
+				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
 
 		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
@@ -278,26 +244,31 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 			log.Error(statusErr, "failed to update status before deletion")
 		}
 
-		if err := zoneClient.DeleteZone(ctx, zone.Status.ZoneID); err != nil {
+		if err := r.zoneLifecycleClient(apiToken).DeleteZone(ctx, zone.Status.ZoneID); err != nil {
 			log.Error(err, "failed to delete zone from Cloudflare")
-			status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
-				cloudflarev1alpha1.ReasonCloudflareError, err.Error(), zone.Generation)
-			if statusErr := r.Status().Update(ctx, zone); statusErr != nil {
-				log.Error(statusErr, "failed to update status")
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
+				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
 		}
 		log.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
-		r.Recorder.Event(zone, "Normal", "ZoneDeleted",
+		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",
 			fmt.Sprintf("Deleted zone %s from Cloudflare", zone.Spec.Name))
 	} else if zone.Status.ZoneID != "" {
 		log.Info("retaining zone in Cloudflare per deletion policy", "zoneID", zone.Status.ZoneID)
-		r.Recorder.Event(zone, "Normal", "ZoneRetained",
+		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneRetained",
 			fmt.Sprintf("Zone %s retained in Cloudflare (deletionPolicy=Retain)", zone.Spec.Name))
 	}
 
 	controllerutil.RemoveFinalizer(zone, cloudflarev1alpha1.FinalizerName)
 	return ctrl.Result{}, r.Update(ctx, zone)
+}
+
+// zoneLifecycleClient returns the test-injected ZoneLifecycleClient if present,
+// otherwise builds a live one from apiToken.
+func (r *CloudflareZoneReconciler) zoneLifecycleClient(apiToken string) cfclient.ZoneLifecycleClient {
+	if r.ZoneLifecycleClientFn != nil {
+		return r.ZoneLifecycleClientFn(apiToken)
+	}
+	return cfclient.NewZoneLifecycleClientFromCF(cfclient.NewCloudflareClient(apiToken))
 }
 
 // SetupWithManager sets up the controller with the Manager.

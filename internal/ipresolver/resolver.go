@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 var DefaultProviders = []string{
@@ -40,6 +42,7 @@ type Resolver struct {
 	cachedIP   string
 	cachedAt   time.Time
 	mu         sync.RWMutex
+	sf         singleflight.Group
 }
 
 func NewResolver(opts ...Option) *Resolver {
@@ -63,6 +66,27 @@ func (r *Resolver) GetExternalIP(ctx context.Context) (string, error) {
 	}
 	r.mu.RUnlock()
 
+	// Coalesce concurrent cache-miss callers so only one provider fan-out runs
+	// at a time. The key is fixed because there's only one resolution (external IP).
+	ip, err, _ := r.sf.Do("externalIP", func() (any, error) {
+		// Re-check cache under the flight — a prior flight may have just filled it.
+		r.mu.RLock()
+		if r.cacheTTL > 0 && r.cachedIP != "" && time.Since(r.cachedAt) < r.cacheTTL {
+			cached := r.cachedIP
+			r.mu.RUnlock()
+			return cached, nil
+		}
+		r.mu.RUnlock()
+
+		return r.resolveFromProviders(ctx)
+	})
+	if err != nil {
+		return "", err
+	}
+	return ip.(string), nil
+}
+
+func (r *Resolver) resolveFromProviders(ctx context.Context) (string, error) {
 	type result struct {
 		ip  string
 		err error
