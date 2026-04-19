@@ -149,8 +149,8 @@ func TestTunnelReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 	}
 
 	// Should requeue after adding finalizer
-	if !result.Requeue {
-		t.Error("expected Requeue=true after adding finalizer")
+	if result.RequeueAfter == 0 {
+		t.Error("expected requeue after adding finalizer")
 	}
 
 	// Verify finalizer was added
@@ -365,7 +365,7 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)

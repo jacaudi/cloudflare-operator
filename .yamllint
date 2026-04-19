@@ -10,3 +10,4 @@ rules:
 
 ignore: |
   config/
+  chart/templates/

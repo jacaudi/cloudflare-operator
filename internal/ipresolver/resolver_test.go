@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
+const testIP = "203.0.113.1"
+
 func TestResolveIP_SingleProvider(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "203.0.113.1\n")
+		_, _ = fmt.Fprint(w, "203.0.113.1\n")
 	}))
 	defer server.Close()
 
@@ -20,7 +22,7 @@ func TestResolveIP_SingleProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ip != "203.0.113.1" {
+	if ip != testIP {
 		t.Errorf("expected 203.0.113.1, got %s", ip)
 	}
 }
@@ -28,12 +30,12 @@ func TestResolveIP_SingleProvider(t *testing.T) {
 func TestResolveIP_ConsensusFromMultipleProviders(t *testing.T) {
 	makeServer := func(ip string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprint(w, ip+"\n")
+			_, _ = fmt.Fprint(w, ip+"\n")
 		}))
 	}
 
-	s1 := makeServer("203.0.113.1")
-	s2 := makeServer("203.0.113.1")
+	s1 := makeServer(testIP)
+	s2 := makeServer(testIP)
 	s3 := makeServer("198.51.100.1")
 	defer s1.Close()
 	defer s2.Close()
@@ -44,7 +46,7 @@ func TestResolveIP_ConsensusFromMultipleProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ip != "203.0.113.1" {
+	if ip != testIP {
 		t.Errorf("expected consensus IP 203.0.113.1, got %s", ip)
 	}
 }
@@ -53,7 +55,7 @@ func TestResolveIP_Caching(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		fmt.Fprint(w, "203.0.113.1\n")
+		_, _ = fmt.Fprint(w, "203.0.113.1\n")
 	}))
 	defer server.Close()
 
@@ -92,7 +94,7 @@ func TestResolveIP_AllProvidersFail(t *testing.T) {
 
 func TestResolveIP_TrimsWhitespace(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "  203.0.113.1 \n")
+		_, _ = fmt.Fprint(w, "  203.0.113.1 \n")
 	}))
 	defer server.Close()
 
@@ -101,7 +103,7 @@ func TestResolveIP_TrimsWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ip != "203.0.113.1" {
+	if ip != testIP {
 		t.Errorf("expected trimmed IP, got %q", ip)
 	}
 }

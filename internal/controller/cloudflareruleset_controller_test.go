@@ -399,7 +399,7 @@ func TestRulesetReconcile_SecretNotFound(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)
@@ -477,8 +477,8 @@ func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	}
 
 	// Set the CloudflareZone status after creation (fake client requires Status().Update())
-	zone.Status.ZoneID = "resolved-zone-id"
-	zone.Status.Status = "active"
+	zone.Status.ZoneID = testResolvedZoneID
+	zone.Status.Status = testZoneActive
 	if err := r.Status().Update(context.Background(), zone); err != nil {
 		t.Fatalf("failed to update zone status: %v", err)
 	}
@@ -494,8 +494,8 @@ func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	if !mock.createCalled {
 		t.Error("expected CreateRuleset to be called after resolving zone ID from CloudflareZone")
 	}
-	if mock.lastZoneID != "resolved-zone-id" {
-		t.Errorf("expected zone ID passed to ruleset client to be %q, got %q", "resolved-zone-id", mock.lastZoneID)
+	if mock.lastZoneID != testResolvedZoneID {
+		t.Errorf("expected zone ID passed to ruleset client to be %q, got %q", testResolvedZoneID, mock.lastZoneID)
 	}
 
 	// Should requeue after interval
@@ -586,7 +586,7 @@ func TestRulesetReconcile_ZoneRefNotReady(t *testing.T) {
 
 	foundCondition := false
 	for _, c := range updated.Status.Conditions {
-		if c.Type == "Ready" {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
 			foundCondition = true
 			if c.Status != metav1.ConditionFalse {
 				t.Errorf("expected Ready condition status=False, got %s", c.Status)
@@ -650,8 +650,8 @@ func TestRulesetReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
 		WithStatusSubresource(zone, ruleset)
 	fakeClient := builder.Build()
 
-	zone.Status.ZoneID = "resolved-zone-id"
-	zone.Status.Status = "active"
+	zone.Status.ZoneID = testResolvedZoneID
+	zone.Status.Status = testZoneActive
 	if err := fakeClient.Status().Update(context.Background(), zone); err != nil {
 		t.Fatalf("failed to update zone status: %v", err)
 	}
@@ -676,8 +676,8 @@ func TestRulesetReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
 	if !mock.deleteCalled {
 		t.Error("expected DeleteRuleset to be called")
 	}
-	if mock.lastZoneID != "resolved-zone-id" {
-		t.Errorf("expected zone ID %q for delete, got %q", "resolved-zone-id", mock.lastZoneID)
+	if mock.lastZoneID != testResolvedZoneID {
+		t.Errorf("expected zone ID %q for delete, got %q", testResolvedZoneID, mock.lastZoneID)
 	}
 }
 

@@ -145,7 +145,7 @@ func (r *Resolver) queryProvider(ctx context.Context, url string) (string, error
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("provider %s returned status %d", url, resp.StatusCode)

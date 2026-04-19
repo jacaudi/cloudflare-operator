@@ -11,6 +11,8 @@ import (
 	"github.com/cloudflare/cloudflare-go/v6/option"
 )
 
+const testZoneID = "zone-uuid-1"
+
 func newTestZoneLifecycleClient(t *testing.T, handler http.Handler) ZoneLifecycleClient {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -35,7 +37,7 @@ func TestZoneLifecycleClient_CreateZone(t *testing.T) {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
 
-		if body["name"] != "example.com" {
+		if body["name"] != testRecName {
 			t.Errorf("expected name example.com, got %v", body["name"])
 		}
 		if body["type"] != "full" {
@@ -50,9 +52,9 @@ func TestZoneLifecycleClient_CreateZone(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":                    "zone-uuid-1",
-			"name":                  "example.com",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":                    testZoneID,
+			"name":                  testRecName,
 			"status":                "pending",
 			"type":                  "full",
 			"paused":                false,
@@ -73,17 +75,17 @@ func TestZoneLifecycleClient_CreateZone(t *testing.T) {
 
 	client := newTestZoneLifecycleClient(t, mux)
 	zone, err := client.CreateZone(context.Background(), "acct-1", ZoneLifecycleParams{
-		Name: "example.com",
+		Name: testRecName,
 		Type: "full",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if zone.ID != "zone-uuid-1" {
+	if zone.ID != testZoneID {
 		t.Errorf("expected ID zone-uuid-1, got %s", zone.ID)
 	}
-	if zone.Name != "example.com" {
+	if zone.Name != testRecName {
 		t.Errorf("expected name example.com, got %s", zone.Name)
 	}
 	if zone.Status != "pending" {
@@ -105,9 +107,9 @@ func TestZoneLifecycleClient_GetZone(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":                    "zone-uuid-1",
-			"name":                  "example.com",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":                    testZoneID,
+			"name":                  testRecName,
 			"status":                "active",
 			"type":                  "full",
 			"paused":                false,
@@ -127,12 +129,12 @@ func TestZoneLifecycleClient_GetZone(t *testing.T) {
 	})
 
 	client := newTestZoneLifecycleClient(t, mux)
-	zone, err := client.GetZone(context.Background(), "zone-uuid-1")
+	zone, err := client.GetZone(context.Background(), testZoneID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if zone.ID != "zone-uuid-1" {
+	if zone.ID != testZoneID {
 		t.Errorf("expected ID zone-uuid-1, got %s", zone.ID)
 	}
 	if zone.Status != "active" {
@@ -151,7 +153,7 @@ func TestZoneLifecycleClient_ListZonesByName(t *testing.T) {
 		}
 
 		query := r.URL.Query()
-		if name := query.Get("name"); name != "example.com" {
+		if name := query.Get("name"); name != testRecName {
 			t.Errorf("expected name=example.com, got %s", name)
 		}
 		if acctID := query.Get("account.id"); acctID != "acct-1" {
@@ -159,10 +161,10 @@ func TestZoneLifecycleClient_ListZonesByName(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
 			{
-				"id":                    "zone-uuid-1",
-				"name":                  "example.com",
+				"id":                    testZoneID,
+				"name":                  testRecName,
 				"status":                "active",
 				"type":                  "full",
 				"paused":                false,
@@ -182,7 +184,7 @@ func TestZoneLifecycleClient_ListZonesByName(t *testing.T) {
 	})
 
 	client := newTestZoneLifecycleClient(t, mux)
-	zones, err := client.ListZonesByName(context.Background(), "acct-1", "example.com")
+	zones, err := client.ListZonesByName(context.Background(), "acct-1", testRecName)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,7 +192,7 @@ func TestZoneLifecycleClient_ListZonesByName(t *testing.T) {
 	if len(zones) != 1 {
 		t.Fatalf("expected 1 zone, got %d", len(zones))
 	}
-	if zones[0].ID != "zone-uuid-1" {
+	if zones[0].ID != testZoneID {
 		t.Errorf("expected zone-uuid-1, got %s", zones[0].ID)
 	}
 }
@@ -199,7 +201,7 @@ func TestZoneLifecycleClient_ListZonesByName_Empty(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/zones", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIListResponse(t, []map[string]any{}))
+		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{}))
 	})
 
 	client := newTestZoneLifecycleClient(t, mux)
@@ -231,9 +233,9 @@ func TestZoneLifecycleClient_EditZone(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id":                    "zone-uuid-1",
-			"name":                  "example.com",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id":                    testZoneID,
+			"name":                  testRecName,
 			"status":                "active",
 			"type":                  "full",
 			"paused":                true,
@@ -253,7 +255,7 @@ func TestZoneLifecycleClient_EditZone(t *testing.T) {
 
 	client := newTestZoneLifecycleClient(t, mux)
 	paused := true
-	zone, err := client.EditZone(context.Background(), "zone-uuid-1", ZoneLifecycleEditParams{
+	zone, err := client.EditZone(context.Background(), testZoneID, ZoneLifecycleEditParams{
 		Paused: &paused,
 	})
 	if err != nil {
@@ -274,13 +276,13 @@ func TestZoneLifecycleClient_DeleteZone(t *testing.T) {
 		}
 		deleteCalled = true
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id": "zone-uuid-1",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id": testZoneID,
 		}))
 	})
 
 	client := newTestZoneLifecycleClient(t, mux)
-	err := client.DeleteZone(context.Background(), "zone-uuid-1")
+	err := client.DeleteZone(context.Background(), testZoneID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -299,13 +301,13 @@ func TestZoneLifecycleClient_TriggerActivationCheck(t *testing.T) {
 		}
 		triggerCalled = true
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(cfAPIResponse(t, map[string]any{
-			"id": "zone-uuid-1",
+		_, _ = w.Write(cfAPIResponse(t, map[string]any{
+			"id": testZoneID,
 		}))
 	})
 
 	client := newTestZoneLifecycleClient(t, mux)
-	err := client.TriggerActivationCheck(context.Background(), "zone-uuid-1")
+	err := client.TriggerActivationCheck(context.Background(), testZoneID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -327,7 +329,7 @@ func TestZoneLifecycleClient_GetZone_APIError(t *testing.T) {
 			"messages": []any{},
 		}
 		data, _ := json.Marshal(resp)
-		w.Write(data)
+		_, _ = w.Write(data)
 	})
 
 	client := newTestZoneLifecycleClient(t, mux)
