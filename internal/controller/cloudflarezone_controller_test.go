@@ -118,7 +118,6 @@ func newTestCloudflareZone(name, namespace string) *cloudflarev1alpha1.Cloudflar
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
-			AccountID:      "acct-123",
 			Type:           "full",
 			DeletionPolicy: "Retain",
 			SecretRef: cloudflarev1alpha1.SecretReference{

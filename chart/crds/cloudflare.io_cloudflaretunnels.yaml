@@ -55,10 +55,6 @@ spec:
           spec:
             description: spec defines the desired state of CloudflareTunnel
             properties:
-              accountID:
-                description: AccountID is the Cloudflare Account ID.
-                minLength: 1
-                type: string
               generatedSecretName:
                 description: |-
                   GeneratedSecretName is the name of the Secret to create with tunnel credentials.
@@ -85,7 +81,6 @@ spec:
                 - name
                 type: object
             required:
-            - accountID
             - generatedSecretName
             - name
             - secretRef

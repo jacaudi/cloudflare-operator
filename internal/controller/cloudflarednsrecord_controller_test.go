@@ -147,7 +147,7 @@ func newTestDNSRecord(name, namespace string) *cloudflarev1alpha1.CloudflareDNSR
 	}
 }
 
-// Helper to create the Cloudflare API token secret.
+// Helper to create the Cloudflare API token + Account ID secret.
 func newTestSecret(namespace string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -155,7 +155,8 @@ func newTestSecret(namespace string) *corev1.Secret {
 			Namespace: namespace,
 		},
 		Data: map[string][]byte{
-			"apiToken": []byte("test-token"),
+			"apiToken":  []byte("test-token"),
+			"accountID": []byte("acct-123"),
 		},
 	}
 }
@@ -542,7 +543,6 @@ func TestDNSReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "example.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 	}
@@ -613,7 +613,6 @@ func TestDNSReconcile_ZoneRefNotReady(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "pending.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 	}
@@ -691,7 +690,6 @@ func TestDNSReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "example.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 	}

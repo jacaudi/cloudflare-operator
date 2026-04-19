@@ -443,7 +443,6 @@ func TestZoneConfigReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "example.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 	}
@@ -514,7 +513,6 @@ func TestZoneConfigReconcile_ZoneRefNotReady(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "pending.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 	}

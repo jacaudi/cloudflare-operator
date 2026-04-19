@@ -94,7 +94,6 @@ func newTestTunnel(name, namespace string) *cloudflarev1alpha1.CloudflareTunnel 
 		},
 		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
 			Name:                "my-tunnel",
-			AccountID:           "acct-123",
 			GeneratedSecretName: "tunnel-creds",
 			SecretRef: cloudflarev1alpha1.SecretReference{
 				Name: "cf-secret",

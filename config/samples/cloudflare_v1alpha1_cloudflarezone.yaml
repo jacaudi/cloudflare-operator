@@ -5,9 +5,9 @@ metadata:
   name: example-zone
 spec:
   name: "example.com"
-  accountID: "<account-id>"
   type: "full"
   deletionPolicy: Retain
   interval: 30m
+  # The referenced Secret must include both `apiToken` and `accountID` keys.
   secretRef:
     name: cloudflare-api-token
