@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -92,7 +93,11 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// 3.5. Resolve zone ID
 	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, &zoneConfig)
 	if err != nil {
-		logger.Error(err, "failed to resolve zone ID")
+		if stderrors.Is(err, ErrZoneRefNotReady) {
+			logger.Info("waiting for zone reference", "error", err.Error())
+		} else {
+			logger.Error(err, "failed to resolve zone ID")
+		}
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
 			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}

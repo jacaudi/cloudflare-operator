@@ -17,14 +17,23 @@ limitations under the License.
 package controller
 
 import (
-	"context"
+	"errors"
 	"fmt"
+
+	"context"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 )
+
+// ErrZoneRefNotReady is returned by ResolveZoneID when the referenced
+// CloudflareZone exists but has not yet populated its status.ZoneID. Callers
+// can check with errors.Is to log this as an Info-level "waiting on
+// dependency" rather than an Error, since it resolves on its own once the
+// zone reconciles.
+var ErrZoneRefNotReady = errors.New("zone reference is not ready")
 
 // zoneReferencer is implemented by CRDs whose spec either hardcodes a Cloudflare
 // zone ID or references a CloudflareZone CR. It lets ResolveZoneID accept any of
@@ -37,7 +46,8 @@ type zoneReferencer interface {
 
 // ResolveZoneID returns the Cloudflare zone ID for obj: either its inline
 // Spec.ZoneID, or the ZoneID from the CloudflareZone it references via
-// Spec.ZoneRef (looked up in obj's namespace).
+// Spec.ZoneRef (looked up in obj's namespace). Returns ErrZoneRefNotReady
+// (wrapped) when the referenced zone exists but hasn't populated ZoneID yet.
 func ResolveZoneID(ctx context.Context, k8sClient client.Client, obj zoneReferencer) (string, error) {
 	if id := obj.GetZoneID(); id != "" {
 		return id, nil
@@ -56,7 +66,7 @@ func ResolveZoneID(ctx context.Context, k8sClient client.Client, obj zoneReferen
 	}
 
 	if zone.Status.ZoneID == "" {
-		return "", fmt.Errorf("CloudflareZone %q does not have a zone ID yet (status: %s)", ref.Name, zone.Status.Status)
+		return "", fmt.Errorf("%w: CloudflareZone %q (status: %q)", ErrZoneRefNotReady, ref.Name, zone.Status.Status)
 	}
 
 	return zone.Status.ZoneID, nil

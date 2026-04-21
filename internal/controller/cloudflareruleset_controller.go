@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -90,7 +91,11 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// 3.5. Resolve zone ID
 	resolvedZoneID, err := ResolveZoneID(ctx, r.Client, &ruleset)
 	if err != nil {
-		logger.Error(err, "failed to resolve zone ID")
+		if stderrors.Is(err, ErrZoneRefNotReady) {
+			logger.Info("waiting for zone reference", "error", err.Error())
+		} else {
+			logger.Error(err, "failed to resolve zone ID")
+		}
 		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
 			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
