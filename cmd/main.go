@@ -93,9 +93,10 @@ func main() {
 	ipResolver := ipresolver.NewResolver()
 
 	if err := (&controller.CloudflareDNSRecordReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("cloudflarednsrecord-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor( //nolint:staticcheck // TODO: migrate to events.EventRecorder
+			"cloudflarednsrecord-controller"),
 		ClientFactory: clientFactory,
 		IPResolver:    ipResolver,
 	}).SetupWithManager(mgr); err != nil {
@@ -103,36 +104,40 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.CloudflareTunnelReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("cloudflaretunnel-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor( //nolint:staticcheck // TODO: migrate to events.EventRecorder
+			"cloudflaretunnel-controller"),
 		ClientFactory: clientFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareTunnel")
 		os.Exit(1)
 	}
 	if err := (&controller.CloudflareRulesetReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("cloudflareruleset-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor( //nolint:staticcheck // TODO: migrate to events.EventRecorder
+			"cloudflareruleset-controller"),
 		ClientFactory: clientFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareRuleset")
 		os.Exit(1)
 	}
 	if err := (&controller.CloudflareZoneConfigReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("cloudflarezoneconfig-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor( //nolint:staticcheck // TODO: migrate to events.EventRecorder
+			"cloudflarezoneconfig-controller"),
 		ClientFactory: clientFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareZoneConfig")
 		os.Exit(1)
 	}
 	if err := (&controller.CloudflareZoneReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("cloudflarezone-controller"),
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor( //nolint:staticcheck // TODO: migrate to events.EventRecorder
+			"cloudflarezone-controller"),
 		ClientFactory: clientFactory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareZone")

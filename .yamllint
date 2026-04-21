@@ -11,3 +11,4 @@ rules:
 ignore: |
   config/
   chart/templates/
+  chart/crds/
