@@ -55,10 +55,6 @@ spec:
           spec:
             description: spec defines the desired state of CloudflareZone
             properties:
-              accountID:
-                description: AccountID is the Cloudflare Account ID.
-                minLength: 1
-                type: string
               deletionPolicy:
                 default: Retain
                 description: |-
@@ -103,7 +99,6 @@ spec:
                 - secondary
                 type: string
             required:
-            - accountID
             - name
             - secretRef
             type: object

@@ -4,8 +4,8 @@ metadata:
   name: k8s-external-ingress
 spec:
   name: k8s-external-ingress
-  accountID: "<account-id>"
   generatedSecretName: cloudflare-tunnel-credentials
   interval: 30m
+  # The referenced Secret must include both `apiToken` and `accountID` keys.
   secretRef:
     name: cloudflare-api-token

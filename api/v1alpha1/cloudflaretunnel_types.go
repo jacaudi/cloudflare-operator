@@ -27,11 +27,6 @@ type CloudflareTunnelSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// AccountID is the Cloudflare Account ID.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	AccountID string `json:"accountID"`
-
 	// SecretRef references a Secret containing Cloudflare API credentials.
 	// +kubebuilder:validation:Required
 	SecretRef SecretReference `json:"secretRef"`

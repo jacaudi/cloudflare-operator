@@ -84,16 +84,23 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
-	// 4. Get API token
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zone.Spec.SecretRef.Name, zone.Namespace)
+	// 4. Get Cloudflare credentials (API token + Account ID)
+	creds, err := r.ClientFactory.GetCredentials(ctx, zone.Spec.SecretRef.Name, zone.Namespace)
 	if err != nil {
-		logger.Error(err, "failed to get API token")
+		logger.Error(err, "failed to get credentials")
+		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
+			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+	}
+	if creds.AccountID == "" {
+		err := fmt.Errorf("secret %s/%s does not contain %q key",
+			zone.Namespace, zone.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
+		logger.Error(err, "missing Account ID")
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
 	// 5. Reconcile the zone
-	result, err := r.reconcileZone(ctx, &zone, r.zoneLifecycleClient(apiToken))
+	result, err := r.reconcileZone(ctx, &zone, r.zoneLifecycleClient(creds.APIToken), creds.AccountID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
 		r.Recorder.Event(&zone, corev1.EventTypeWarning, "SyncFailed", err.Error())
@@ -117,7 +124,7 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return result, nil
 }
 
-func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *cloudflarev1alpha1.CloudflareZone, zoneClient cfclient.ZoneLifecycleClient) (ctrl.Result, error) {
+func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *cloudflarev1alpha1.CloudflareZone, zoneClient cfclient.ZoneLifecycleClient, accountID string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Try to find zone by stored ID
@@ -138,7 +145,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 
 	// Search by name (adopt existing)
 	if existing == nil {
-		zones, err := zoneClient.ListZonesByName(ctx, zone.Spec.AccountID, zone.Spec.Name)
+		zones, err := zoneClient.ListZonesByName(ctx, accountID, zone.Spec.Name)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("list zones: %w", err)
 		}
@@ -153,7 +160,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 
 	// Create if not found
 	if existing == nil {
-		created, err := zoneClient.CreateZone(ctx, zone.Spec.AccountID, cfclient.ZoneLifecycleParams{
+		created, err := zoneClient.CreateZone(ctx, accountID, cfclient.ZoneLifecycleParams{
 			Name: zone.Spec.Name,
 			Type: zone.Spec.Type,
 		})

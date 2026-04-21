@@ -16,7 +16,7 @@ A Kubernetes operator for managing Cloudflare resources declaratively. All resou
 
 ## Authentication
 
-All resources reference a Kubernetes Secret containing a Cloudflare API token:
+All resources reference a Kubernetes Secret containing a Cloudflare API token. `CloudflareZone` and `CloudflareTunnel` additionally require the Cloudflare Account ID to be stored in the same Secret (keeps account identifiers out of your CR manifests):
 
 ```yaml
 apiVersion: v1
@@ -26,6 +26,8 @@ metadata:
 type: Opaque
 stringData:
   apiToken: "<your-cloudflare-api-token>"
+  # Required for CloudflareZone and CloudflareTunnel; optional for others.
+  accountID: "<your-cloudflare-account-id>"
 ```
 
 Reference this secret in any resource via `secretRef`:
@@ -56,7 +58,6 @@ Manages domain lifecycle in Cloudflare: onboarding new domains, adopting existin
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | string | Yes | | Domain name (e.g., `example.com`) |
-| `accountID` | string | Yes | | Cloudflare Account ID |
 | `type` | enum | No | `full` | Zone type: `full`, `partial`, `secondary` |
 | `paused` | bool | No | | Pause zone (stop serving traffic through Cloudflare) |
 | `deletionPolicy` | enum | No | `Retain` | `Retain` leaves zone in CF on CR deletion; `Delete` removes it |
@@ -90,7 +91,6 @@ metadata:
   name: my-domain
 spec:
   name: "example.com"
-  accountID: "<account-id>"
   type: "full"
   deletionPolicy: Retain
   interval: 30m
@@ -226,9 +226,8 @@ Manages Cloudflare Tunnel lifecycle and auto-generates a credentials Secret for 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | string | Yes | | Tunnel name in Cloudflare |
-| `accountID` | string | Yes | | Cloudflare Account ID |
 | `generatedSecretName` | string | Yes | | Name of the Secret to create with tunnel credentials |
-| `secretRef` | object | Yes | | Reference to API token Secret |
+| `secretRef` | object | Yes | | Reference to API token + Account ID Secret |
 | `interval` | duration | No | `30m` | Reconciliation interval |
 
 ### Status
@@ -254,7 +253,6 @@ metadata:
   name: k8s-tunnel
 spec:
   name: k8s-external-ingress
-  accountID: "<account-id>"
   generatedSecretName: cloudflare-tunnel-credentials
   interval: 30m
   secretRef:

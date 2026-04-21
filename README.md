@@ -48,15 +48,16 @@ metrics:
     enabled: false      # set true if you run the Prometheus Operator
 ```
 
-### 2. Create the API token Secret
+### 2. Create the credentials Secret
 
 ```sh
 kubectl create secret generic cloudflare-api-token \
   --namespace cloudflare-operator \
-  --from-literal=apiToken=<your-cloudflare-api-token>
+  --from-literal=apiToken=<your-cloudflare-api-token> \
+  --from-literal=accountID=<your-cloudflare-account-id>
 ```
 
-Every CR references this Secret via `secretRef.name`. Place the Secret in the same namespace as the CRs that use it.
+Every CR references this Secret via `secretRef.name`. Place the Secret in the same namespace as the CRs that use it. `accountID` is required for `CloudflareZone` and `CloudflareTunnel`; other CRs only read `apiToken`.
 
 ### 3. Onboard your zone
 
@@ -70,7 +71,6 @@ metadata:
   namespace: cloudflare-operator
 spec:
   name: "example.com"
-  accountID: "<your-account-id>"
   deletionPolicy: Retain   # leaves the zone in Cloudflare on CR delete
   secretRef:
     name: cloudflare-api-token

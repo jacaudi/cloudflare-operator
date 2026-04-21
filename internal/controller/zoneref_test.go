@@ -53,7 +53,6 @@ func TestResolveZoneID_ZoneRefResolvesFromStatus(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "example.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 		Status: cloudflarev1alpha1.CloudflareZoneStatus{
@@ -95,7 +94,6 @@ func TestResolveZoneID_ZoneRefNoStatusZoneID(t *testing.T) {
 		},
 		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
 			Name:      "pending.com",
-			AccountID: "acct-1",
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
 		},
 		Status: cloudflarev1alpha1.CloudflareZoneStatus{

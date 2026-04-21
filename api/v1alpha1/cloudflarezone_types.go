@@ -27,11 +27,6 @@ type CloudflareZoneSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// AccountID is the Cloudflare Account ID.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	AccountID string `json:"accountID"`
-
 	// Type is the zone type. "full" means Cloudflare is the authoritative DNS.
 	// "partial" is a CNAME setup. Immutable after creation.
 	// +kubebuilder:validation:Enum=full;partial;secondary
