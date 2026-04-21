@@ -3,6 +3,7 @@ package cloudflare
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,276 +30,82 @@ func newTestRulesetClient(t *testing.T, handler http.Handler) RulesetClient {
 	return NewRulesetClientFromCF(cfClient)
 }
 
-func TestRulesetClient_GetRuleset(t *testing.T) {
+func TestRulesetClient_GetPhaseEntrypoint(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets/rs-1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/zones/zone-1/rulesets/phases/"+testRulesetPhase+"/entrypoint", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"id":          testRulesetID,
-			"name":        "My Custom Ruleset",
+			"name":        "Zone custom ruleset",
 			"phase":       testRulesetPhase,
-			"kind":        "custom",
+			"kind":        "zone",
 			"version":     "1",
-			"description": "Block bad bots",
+			"description": "Custom security rules",
 			"rules": []map[string]any{
 				{
-					"id":          "rule-1",
-					"action":      "block",
-					"expression":  "(cf.bot_management.score lt 30)",
-					"description": "Block low-score bots",
-					"enabled":     true,
-					"version":     "1",
-					"action_parameters": map[string]any{
-						"response": map[string]any{
-							"status_code":  403,
-							"content_type": "text/plain",
-						},
-					},
-					"last_updated": "2025-01-01T00:00:00Z",
-				},
-				{
-					"id":           "rule-2",
-					"action":       "log",
-					"expression":   "(cf.bot_management.score lt 50)",
-					"description":  "Log medium-score bots",
-					"enabled":      false,
-					"version":      "1",
-					"last_updated": "2025-01-01T00:00:00Z",
-				},
-			},
-			"last_updated": "2025-01-01T00:00:00Z",
-		}))
-	})
-
-	client := newTestRulesetClient(t, mux)
-	rs, err := client.GetRuleset(context.Background(), "zone-1", testRulesetID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if rs.ID != testRulesetID {
-		t.Errorf("expected ID rs-1, got %s", rs.ID)
-	}
-	if rs.Name != "My Custom Ruleset" {
-		t.Errorf("expected name 'My Custom Ruleset', got %s", rs.Name)
-	}
-	if rs.Phase != testRulesetPhase {
-		t.Errorf("expected phase http_request_firewall_custom, got %s", rs.Phase)
-	}
-	if len(rs.Rules) != 2 {
-		t.Fatalf("expected 2 rules, got %d", len(rs.Rules))
-	}
-
-	// Check first rule
-	if rs.Rules[0].ID != "rule-1" {
-		t.Errorf("expected rule ID rule-1, got %s", rs.Rules[0].ID)
-	}
-	if rs.Rules[0].Action != "block" {
-		t.Errorf("expected action block, got %s", rs.Rules[0].Action)
-	}
-	if rs.Rules[0].Expression != "(cf.bot_management.score lt 30)" {
-		t.Errorf("expected expression '(cf.bot_management.score lt 30)', got %s", rs.Rules[0].Expression)
-	}
-	if rs.Rules[0].Description != "Block low-score bots" {
-		t.Errorf("expected description 'Block low-score bots', got %s", rs.Rules[0].Description)
-	}
-	if !rs.Rules[0].Enabled {
-		t.Error("expected rule-1 enabled true")
-	}
-	if rs.Rules[0].ActionParameters == nil {
-		t.Error("expected action_parameters to be non-nil")
-	}
-
-	// Check second rule
-	if rs.Rules[1].ID != "rule-2" {
-		t.Errorf("expected rule ID rule-2, got %s", rs.Rules[1].ID)
-	}
-	if rs.Rules[1].Action != "log" {
-		t.Errorf("expected action log, got %s", rs.Rules[1].Action)
-	}
-	if rs.Rules[1].Enabled {
-		t.Error("expected rule-2 enabled false")
-	}
-}
-
-func TestRulesetClient_ListRulesetsByPhase(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("expected GET, got %s", r.Method)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		// List endpoint returns lightweight results (no rules)
-		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
-			{
-				"id":           testRulesetID,
-				"name":         "Custom Firewall",
-				"phase":        testRulesetPhase,
-				"kind":         "custom",
-				"version":      "1",
-				"last_updated": "2025-01-01T00:00:00Z",
-			},
-			{
-				"id":           "rs-2",
-				"name":         "Rate Limiting",
-				"phase":        "http_ratelimit",
-				"kind":         "custom",
-				"version":      "1",
-				"last_updated": "2025-01-01T00:00:00Z",
-			},
-			{
-				"id":           "rs-3",
-				"name":         "Another Firewall",
-				"phase":        testRulesetPhase,
-				"kind":         "custom",
-				"version":      "1",
-				"last_updated": "2025-01-01T00:00:00Z",
-			},
-		}))
-	})
-
-	client := newTestRulesetClient(t, mux)
-	rulesets, err := client.ListRulesetsByPhase(context.Background(), "zone-1", testRulesetPhase)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(rulesets) != 2 {
-		t.Fatalf("expected 2 rulesets for phase http_request_firewall_custom, got %d", len(rulesets))
-	}
-
-	if rulesets[0].ID != testRulesetID {
-		t.Errorf("expected first ruleset ID rs-1, got %s", rulesets[0].ID)
-	}
-	if rulesets[0].Name != "Custom Firewall" {
-		t.Errorf("expected first ruleset name 'Custom Firewall', got %s", rulesets[0].Name)
-	}
-	if rulesets[1].ID != "rs-3" {
-		t.Errorf("expected second ruleset ID rs-3, got %s", rulesets[1].ID)
-	}
-}
-
-func TestRulesetClient_ListRulesetsByPhase_NoMatch(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
-			{
-				"id":           testRulesetID,
-				"name":         "Custom Firewall",
-				"phase":        testRulesetPhase,
-				"kind":         "custom",
-				"version":      "1",
-				"last_updated": "2025-01-01T00:00:00Z",
-			},
-		}))
-	})
-
-	client := newTestRulesetClient(t, mux)
-	rulesets, err := client.ListRulesetsByPhase(context.Background(), "zone-1", "http_ratelimit")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(rulesets) != 0 {
-		t.Errorf("expected 0 rulesets, got %d", len(rulesets))
-	}
-}
-
-func TestRulesetClient_CreateRuleset(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("failed to decode request body: %v", err)
-		}
-
-		if body["name"] != "Block Bots" {
-			t.Errorf("expected name 'Block Bots', got %v", body["name"])
-		}
-		if body["phase"] != testRulesetPhase {
-			t.Errorf("expected phase http_request_firewall_custom, got %v", body["phase"])
-		}
-		if body["description"] != "Custom WAF rules" {
-			t.Errorf("expected description 'Custom WAF rules', got %v", body["description"])
-		}
-
-		rules, ok := body["rules"].([]any)
-		if !ok || len(rules) != 1 {
-			t.Fatalf("expected 1 rule in request, got %v", body["rules"])
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIResponse(t, map[string]any{
-			"id":          "rs-new",
-			"name":        "Block Bots",
-			"phase":       testRulesetPhase,
-			"kind":        "custom",
-			"version":     "1",
-			"description": "Custom WAF rules",
-			"rules": []map[string]any{
-				{
-					"id":           "rule-new",
+					"id":           "rule-1",
 					"action":       "block",
-					"expression":   "(cf.bot_management.score lt 30)",
-					"description":  "Block low-score bots",
+					"expression":   "(cf.client.bot)",
+					"description":  "Block bots",
 					"enabled":      true,
 					"version":      "1",
-					"last_updated": "2025-01-01T00:00:00Z",
+					"last_updated": "2026-01-01T00:00:00Z",
 				},
 			},
-			"last_updated": "2025-01-01T00:00:00Z",
+			"last_updated": "2026-01-01T00:00:00Z",
 		}))
 	})
 
 	client := newTestRulesetClient(t, mux)
-	rs, err := client.CreateRuleset(context.Background(), "zone-1", RulesetParams{
-		Name:        "Block Bots",
-		Description: "Custom WAF rules",
-		Phase:       testRulesetPhase,
-		Rules: []RulesetRule{
-			{
-				Action:      "block",
-				Expression:  "(cf.bot_management.score lt 30)",
-				Description: "Block low-score bots",
-				Enabled:     true,
-			},
-		},
-	})
+	rs, err := client.GetPhaseEntrypoint(context.Background(), "zone-1", testRulesetPhase)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if rs.ID != "rs-new" {
-		t.Errorf("expected ID rs-new, got %s", rs.ID)
-	}
-	if rs.Name != "Block Bots" {
-		t.Errorf("expected name 'Block Bots', got %s", rs.Name)
+	if rs.ID != testRulesetID {
+		t.Errorf("expected ID %s, got %s", testRulesetID, rs.ID)
 	}
 	if rs.Phase != testRulesetPhase {
-		t.Errorf("expected phase http_request_firewall_custom, got %s", rs.Phase)
+		t.Errorf("expected phase %s, got %s", testRulesetPhase, rs.Phase)
 	}
 	if len(rs.Rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rs.Rules))
 	}
-	if rs.Rules[0].ID != "rule-new" {
-		t.Errorf("expected rule ID rule-new, got %s", rs.Rules[0].ID)
-	}
 	if rs.Rules[0].Action != "block" {
 		t.Errorf("expected action block, got %s", rs.Rules[0].Action)
 	}
 }
 
-func TestRulesetClient_UpdateRuleset(t *testing.T) {
+func TestRulesetClient_GetPhaseEntrypoint_NotFound(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets/rs-1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/zones/zone-1/rulesets/phases/"+testRulesetPhase+"/entrypoint", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		resp := map[string]any{
+			"success":  false,
+			"result":   nil,
+			"errors":   []map[string]any{{"code": 10007, "message": "no entrypoint exists for the given phase"}},
+			"messages": []any{},
+		}
+		data, _ := json.Marshal(resp)
+		_, _ = w.Write(data)
+	})
+
+	client := newTestRulesetClient(t, mux)
+	_, err := client.GetPhaseEntrypoint(context.Background(), "zone-1", testRulesetPhase)
+	if err == nil {
+		t.Fatal("expected error for missing phase entrypoint")
+	}
+	if !errors.Is(err, ErrPhaseEntrypointNotFound) {
+		t.Errorf("expected ErrPhaseEntrypointNotFound, got %v", err)
+	}
+}
+
+func TestRulesetClient_UpsertPhaseEntrypoint(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/zones/zone-1/rulesets/phases/"+testRulesetPhase+"/entrypoint", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			t.Errorf("expected PUT, got %s", r.Method)
 		}
@@ -308,129 +115,68 @@ func TestRulesetClient_UpdateRuleset(t *testing.T) {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
 
-		if body["name"] != "Updated Ruleset" {
-			t.Errorf("expected name 'Updated Ruleset', got %v", body["name"])
+		// Verify a couple of request fields made it through.
+		if name, _ := body["name"].(string); name != "Zone custom ruleset" {
+			t.Errorf("expected name='Zone custom ruleset', got %q", name)
 		}
-
 		rules, ok := body["rules"].([]any)
-		if !ok || len(rules) != 2 {
-			t.Fatalf("expected 2 rules in request, got %v", body["rules"])
+		if !ok {
+			t.Fatal("expected rules to be an array in the request body")
+		}
+		if len(rules) != 2 {
+			t.Errorf("expected 2 rules in request body, got %d", len(rules))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(cfAPIResponse(t, map[string]any{
 			"id":          testRulesetID,
-			"name":        "Updated Ruleset",
+			"name":        "Zone custom ruleset",
 			"phase":       testRulesetPhase,
-			"kind":        "custom",
+			"kind":        "zone",
 			"version":     "2",
-			"description": "Updated rules",
+			"description": "Custom security rules",
 			"rules": []map[string]any{
 				{
 					"id":           "rule-1",
 					"action":       "block",
-					"expression":   "(cf.bot_management.score lt 20)",
-					"description":  "Block very low bots",
+					"expression":   "(cf.client.bot)",
+					"description":  "Block bots",
 					"enabled":      true,
 					"version":      "1",
-					"last_updated": "2025-01-01T00:00:00Z",
+					"last_updated": "2026-01-01T00:00:00Z",
 				},
 				{
 					"id":           "rule-2",
-					"action":       "log",
-					"expression":   "(cf.bot_management.score lt 50)",
-					"description":  "Log medium bots",
+					"action":       "block",
+					"expression":   "(ip.geoip.country ne \"US\")",
+					"description":  "Block non-US",
 					"enabled":      true,
 					"version":      "1",
-					"last_updated": "2025-01-01T00:00:00Z",
+					"last_updated": "2026-01-01T00:00:00Z",
 				},
 			},
-			"last_updated": "2025-01-02T00:00:00Z",
+			"last_updated": "2026-01-01T00:00:00Z",
 		}))
 	})
 
 	client := newTestRulesetClient(t, mux)
-	rs, err := client.UpdateRuleset(context.Background(), "zone-1", testRulesetID, RulesetParams{
-		Name:        "Updated Ruleset",
-		Description: "Updated rules",
+	params := RulesetParams{
+		Name:        "Zone custom ruleset",
+		Description: "Custom security rules",
 		Phase:       testRulesetPhase,
 		Rules: []RulesetRule{
-			{
-				Action:      "block",
-				Expression:  "(cf.bot_management.score lt 20)",
-				Description: "Block very low bots",
-				Enabled:     true,
-			},
-			{
-				Action:      "log",
-				Expression:  "(cf.bot_management.score lt 50)",
-				Description: "Log medium bots",
-				Enabled:     true,
-			},
+			{Action: "block", Expression: "(cf.client.bot)", Description: "Block bots", Enabled: true},
+			{Action: "block", Expression: "(ip.geoip.country ne \"US\")", Description: "Block non-US", Enabled: true},
 		},
-	})
+	}
+	rs, err := client.UpsertPhaseEntrypoint(context.Background(), "zone-1", testRulesetPhase, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if rs.ID != testRulesetID {
-		t.Errorf("expected ID rs-1, got %s", rs.ID)
-	}
-	if rs.Name != "Updated Ruleset" {
-		t.Errorf("expected name 'Updated Ruleset', got %s", rs.Name)
+		t.Errorf("expected ID %s, got %s", testRulesetID, rs.ID)
 	}
 	if len(rs.Rules) != 2 {
-		t.Fatalf("expected 2 rules, got %d", len(rs.Rules))
-	}
-	if rs.Rules[0].Expression != "(cf.bot_management.score lt 20)" {
-		t.Errorf("expected updated expression, got %s", rs.Rules[0].Expression)
-	}
-	if rs.Rules[1].Action != "log" {
-		t.Errorf("expected action log, got %s", rs.Rules[1].Action)
-	}
-}
-
-func TestRulesetClient_DeleteRuleset(t *testing.T) {
-	var deleteCalled bool
-	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets/rs-1", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Errorf("expected DELETE, got %s", r.Method)
-		}
-		deleteCalled = true
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	client := newTestRulesetClient(t, mux)
-	err := client.DeleteRuleset(context.Background(), "zone-1", testRulesetID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !deleteCalled {
-		t.Error("expected delete endpoint to be called")
-	}
-}
-
-func TestRulesetClient_GetRuleset_APIError(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/zones/zone-1/rulesets/rs-missing", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		resp := map[string]any{
-			"success":  false,
-			"result":   nil,
-			"errors":   []map[string]any{{"code": 7003, "message": "Could not route to /zones/zone-1/rulesets/rs-missing, perhaps your object identifier is invalid?"}},
-			"messages": []any{},
-		}
-		data, _ := json.Marshal(resp)
-		_, _ = w.Write(data)
-	})
-
-	client := newTestRulesetClient(t, mux)
-	_, err := client.GetRuleset(context.Background(), "zone-1", "rs-missing")
-	if err == nil {
-		t.Error("expected error for missing ruleset")
+		t.Errorf("expected 2 rules in response, got %d", len(rs.Rules))
 	}
 }

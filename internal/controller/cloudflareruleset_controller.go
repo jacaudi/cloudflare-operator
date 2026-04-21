@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -143,30 +144,15 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 		Rules:       desiredRules,
 	}
 
-	// Check if ruleset exists by ID
-	var existing *cfclient.Ruleset
-	if ruleset.Status.RulesetID != "" {
-		existing, err = rulesetClient.GetRuleset(ctx, zoneID, ruleset.Status.RulesetID)
-		if err != nil {
-			logger.Info("could not fetch ruleset by ID, will search by phase", "rulesetID", ruleset.Status.RulesetID)
-			ruleset.Status.RulesetID = ""
-			existing = nil
-		}
-	}
-
-	// Search by phase (adopt existing)
-	if existing == nil {
-		rulesets, err := rulesetClient.ListRulesetsByPhase(ctx, zoneID, ruleset.Spec.Phase)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("list rulesets: %w", err)
-		}
-		if len(rulesets) > 0 {
-			existing = &rulesets[0]
-			ruleset.Status.RulesetID = existing.ID
-			logger.Info("adopted existing ruleset", "rulesetID", existing.ID)
-			r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetAdopted",
-				fmt.Sprintf("Adopted existing ruleset %s", existing.ID))
-		}
+	// Fetch the current phase entrypoint ruleset. Cloudflare scopes one per
+	// phase per zone; it may or may not exist yet.
+	existing, err := rulesetClient.GetPhaseEntrypoint(ctx, zoneID, ruleset.Spec.Phase)
+	switch {
+	case stderrors.Is(err, cfclient.ErrPhaseEntrypointNotFound):
+		// First apply for this phase: Upsert below will create the entrypoint.
+		existing = nil
+	case err != nil:
+		return ctrl.Result{}, fmt.Errorf("get phase entrypoint: %w", err)
 	}
 
 	requeueAfter := 30 * time.Minute
@@ -176,31 +162,40 @@ func (r *CloudflareRulesetReconciler) reconcileRuleset(ctx context.Context, rule
 
 	switch {
 	case existing == nil:
-		// Create new ruleset
-		created, err := rulesetClient.CreateRuleset(ctx, zoneID, params)
+		// No entrypoint yet — Upsert creates it.
+		created, err := rulesetClient.UpsertPhaseEntrypoint(ctx, zoneID, ruleset.Spec.Phase, params)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("create ruleset: %w", err)
+			return ctrl.Result{}, fmt.Errorf("upsert phase entrypoint: %w", err)
 		}
 		ruleset.Status.RulesetID = created.ID
 		ruleset.Status.RuleCount = len(created.Rules)
-		logger.Info("created ruleset", "rulesetID", created.ID)
+		logger.Info("created phase entrypoint ruleset", "phase", ruleset.Spec.Phase, "rulesetID", created.ID)
 		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetCreated",
-			fmt.Sprintf("Created ruleset %s with ID %s", ruleset.Spec.Name, created.ID))
+			fmt.Sprintf("Created %s phase entrypoint with ID %s", ruleset.Spec.Phase, created.ID))
 
 	case rulesetMatches(existing, params):
 		// In sync — skip the PUT to avoid API churn.
+		ruleset.Status.RulesetID = existing.ID
 		ruleset.Status.RuleCount = len(existing.Rules)
 
 	default:
-		// PUT replaces all rules atomically.
-		updated, err := rulesetClient.UpdateRuleset(ctx, zoneID, existing.ID, params)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("update ruleset: %w", err)
+		// Drift detected (including first adoption of a pre-existing entrypoint
+		// whose rules differ from spec). Upsert replaces all rules atomically.
+		if ruleset.Status.RulesetID == "" {
+			logger.Info("adopted existing phase entrypoint, updating rules",
+				"phase", ruleset.Spec.Phase, "rulesetID", existing.ID)
+			r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetAdopted",
+				fmt.Sprintf("Adopted existing %s phase entrypoint %s", ruleset.Spec.Phase, existing.ID))
 		}
+		updated, err := rulesetClient.UpsertPhaseEntrypoint(ctx, zoneID, ruleset.Spec.Phase, params)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("upsert phase entrypoint: %w", err)
+		}
+		ruleset.Status.RulesetID = updated.ID
 		ruleset.Status.RuleCount = len(updated.Rules)
-		logger.Info("updated ruleset", "rulesetID", existing.ID)
+		logger.Info("updated phase entrypoint ruleset", "phase", ruleset.Spec.Phase, "rulesetID", updated.ID)
 		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetUpdated",
-			fmt.Sprintf("Updated ruleset %s", existing.ID))
+			fmt.Sprintf("Updated %s phase entrypoint %s", ruleset.Spec.Phase, updated.ID))
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
@@ -235,29 +230,17 @@ func (r *CloudflareRulesetReconciler) buildRules(specRules []cloudflarev1alpha1.
 func (r *CloudflareRulesetReconciler) reconcileDelete(ctx context.Context, ruleset *cloudflarev1alpha1.CloudflareRuleset) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	// Phase entrypoint rulesets are zone-scoped resources — one per phase per
+	// zone — owned by the zone itself, not by this CR. Deleting them entirely
+	// is destructive and would affect any other tooling touching the phase.
+	// Instead, on CR delete we leave the entrypoint in place. Users who want
+	// to clear their rules should empty spec.rules, wait for reconciliation,
+	// then delete the CR.
 	if ruleset.Status.RulesetID != "" {
-		resolvedZoneID, err := ResolveZoneID(ctx, r.Client, ruleset)
-		if err != nil {
-			logger.Error(err, "failed to resolve zone ID during deletion, will retry; remove the finalizer manually to force deletion")
-			return failReconcile(ctx, r.Client, ruleset, &ruleset.Status.Conditions,
-				cloudflarev1alpha1.ReasonZoneRefNotReady, wrapDeleteErr(err), 30*time.Second)
-		}
-
-		apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
-		if err != nil {
-			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
-			return failReconcile(ctx, r.Client, ruleset, &ruleset.Status.Conditions,
-				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
-		}
-
-		if err := r.rulesetClient(apiToken).DeleteRuleset(ctx, resolvedZoneID, ruleset.Status.RulesetID); err != nil {
-			logger.Error(err, "failed to delete ruleset from Cloudflare")
-			return failReconcile(ctx, r.Client, ruleset, &ruleset.Status.Conditions,
-				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
-		}
-		logger.Info("deleted ruleset from Cloudflare", "rulesetID", ruleset.Status.RulesetID)
-		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetDeleted",
-			fmt.Sprintf("Deleted ruleset %s from Cloudflare", ruleset.Spec.Name))
+		logger.Info("leaving phase entrypoint in Cloudflare on CR deletion (entrypoints are zone-owned)",
+			"phase", ruleset.Spec.Phase, "rulesetID", ruleset.Status.RulesetID)
+		r.Recorder.Event(ruleset, corev1.EventTypeNormal, "RulesetRetained",
+			fmt.Sprintf("Phase entrypoint %s retained in Cloudflare on CR deletion", ruleset.Status.RulesetID))
 	}
 
 	controllerutil.RemoveFinalizer(ruleset, cloudflarev1alpha1.FinalizerName)

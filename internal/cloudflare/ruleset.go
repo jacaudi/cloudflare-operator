@@ -3,11 +3,18 @@ package cloudflare
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	"github.com/cloudflare/cloudflare-go/v6/rulesets"
 )
+
+// ErrPhaseEntrypointNotFound is returned by GetPhaseEntrypoint when no
+// entrypoint ruleset has been created yet for the requested phase. The caller
+// should treat this as "start from scratch" and proceed to UpsertPhaseEntrypoint.
+var ErrPhaseEntrypointNotFound = errors.New("phase entrypoint not found")
 
 // rulesetClient wraps the cloudflare-go v6 SDK to implement RulesetClient.
 type rulesetClient struct {
@@ -19,105 +26,40 @@ func NewRulesetClientFromCF(cf *cfgo.Client) RulesetClient {
 	return &rulesetClient{cf: cf}
 }
 
-func (c *rulesetClient) GetRuleset(ctx context.Context, zoneID, rulesetID string) (*Ruleset, error) {
-	resp, err := c.cf.Rulesets.Get(ctx, rulesetID, rulesets.RulesetGetParams{
+func (c *rulesetClient) GetPhaseEntrypoint(ctx context.Context, zoneID, phase string) (*Ruleset, error) {
+	resp, err := c.cf.Rulesets.Phases.Get(ctx, rulesets.Phase(phase), rulesets.PhaseGetParams{
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get ruleset %s: %w", rulesetID, err)
-	}
-	return mapGetRulesetResponse(resp), nil
-}
-
-func (c *rulesetClient) ListRulesetsByPhase(ctx context.Context, zoneID, phase string) ([]Ruleset, error) {
-	page, err := c.cf.Rulesets.List(ctx, rulesets.RulesetListParams{
-		ZoneID: cfgo.F(zoneID),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list rulesets: %w", err)
-	}
-
-	var result []Ruleset
-	for _, rs := range page.Result {
-		if string(rs.Phase) == phase {
-			result = append(result, Ruleset{
-				ID:    rs.ID,
-				Name:  rs.Name,
-				Phase: string(rs.Phase),
-			})
+		var apiErr *cfgo.Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: phase %s in zone %s", ErrPhaseEntrypointNotFound, phase, zoneID)
 		}
+		return nil, fmt.Errorf("get phase entrypoint %s: %w", phase, err)
 	}
-	return result, nil
+	return mapPhaseGetResponse(resp), nil
 }
 
-func (c *rulesetClient) CreateRuleset(ctx context.Context, zoneID string, params RulesetParams) (*Ruleset, error) {
-	newRules := buildNewParamsRules(params.Rules)
-
-	resp, err := c.cf.Rulesets.New(ctx, rulesets.RulesetNewParams{
-		Kind:        cfgo.F(rulesets.KindCustom),
-		Name:        cfgo.F(params.Name),
-		Phase:       cfgo.F(rulesets.Phase(params.Phase)),
-		ZoneID:      cfgo.F(zoneID),
-		Description: cfgo.F(params.Description),
-		Rules:       cfgo.F(newRules),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create ruleset: %w", err)
-	}
-	return mapNewRulesetResponse(resp), nil
-}
-
-func (c *rulesetClient) UpdateRuleset(ctx context.Context, zoneID, rulesetID string, params RulesetParams) (*Ruleset, error) {
-	updateRules := buildUpdateParamsRules(params.Rules)
-
-	resp, err := c.cf.Rulesets.Update(ctx, rulesetID, rulesets.RulesetUpdateParams{
+func (c *rulesetClient) UpsertPhaseEntrypoint(ctx context.Context, zoneID, phase string, params RulesetParams) (*Ruleset, error) {
+	resp, err := c.cf.Rulesets.Phases.Update(ctx, rulesets.Phase(phase), rulesets.PhaseUpdateParams{
 		ZoneID:      cfgo.F(zoneID),
 		Name:        cfgo.F(params.Name),
 		Description: cfgo.F(params.Description),
-		Phase:       cfgo.F(rulesets.Phase(params.Phase)),
-		Kind:        cfgo.F(rulesets.KindCustom),
-		Rules:       cfgo.F(updateRules),
+		Rules:       cfgo.F(buildPhaseUpdateRules(params.Rules)),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("update ruleset %s: %w", rulesetID, err)
+		return nil, fmt.Errorf("upsert phase entrypoint %s: %w", phase, err)
 	}
-	return mapUpdateRulesetResponse(resp), nil
+	return mapPhaseUpdateResponse(resp), nil
 }
 
-func (c *rulesetClient) DeleteRuleset(ctx context.Context, zoneID, rulesetID string) error {
-	err := c.cf.Rulesets.Delete(ctx, rulesetID, rulesets.RulesetDeleteParams{
-		ZoneID: cfgo.F(zoneID),
-	})
-	if err != nil {
-		return fmt.Errorf("delete ruleset %s: %w", rulesetID, err)
-	}
-	return nil
-}
-
-// buildNewParamsRules converts internal RulesetRule slices to SDK RulesetNewParamsRuleUnion slices.
-func buildNewParamsRules(rules []RulesetRule) []rulesets.RulesetNewParamsRuleUnion {
-	sdkRules := make([]rulesets.RulesetNewParamsRuleUnion, 0, len(rules))
+// buildPhaseUpdateRules converts internal RulesetRule slices to the SDK's
+// phase-update rule union slice.
+func buildPhaseUpdateRules(rules []RulesetRule) []rulesets.PhaseUpdateParamsRuleUnion {
+	sdkRules := make([]rulesets.PhaseUpdateParamsRuleUnion, 0, len(rules))
 	for _, r := range rules {
-		rule := rulesets.RulesetNewParamsRule{
-			Action:      cfgo.F(rulesets.RulesetNewParamsRulesAction(r.Action)),
-			Expression:  cfgo.F(r.Expression),
-			Description: cfgo.F(r.Description),
-			Enabled:     cfgo.F(r.Enabled),
-		}
-		if r.ActionParameters != nil {
-			rule.ActionParameters = cfgo.F[any](r.ActionParameters)
-		}
-		sdkRules = append(sdkRules, rule)
-	}
-	return sdkRules
-}
-
-// buildUpdateParamsRules converts internal RulesetRule slices to SDK RulesetUpdateParamsRuleUnion slices.
-func buildUpdateParamsRules(rules []RulesetRule) []rulesets.RulesetUpdateParamsRuleUnion {
-	sdkRules := make([]rulesets.RulesetUpdateParamsRuleUnion, 0, len(rules))
-	for _, r := range rules {
-		rule := rulesets.RulesetUpdateParamsRule{
-			Action:      cfgo.F(rulesets.RulesetUpdateParamsRulesAction(r.Action)),
+		rule := rulesets.PhaseUpdateParamsRule{
+			Action:      cfgo.F(rulesets.PhaseUpdateParamsRulesAction(r.Action)),
 			Expression:  cfgo.F(r.Expression),
 			Description: cfgo.F(r.Description),
 			Enabled:     cfgo.F(r.Enabled),
@@ -152,8 +94,8 @@ func toMapStringAny(v any) map[string]any {
 	return m
 }
 
-// mapGetRulesetResponse converts a Cloudflare SDK RulesetGetResponse to our internal Ruleset.
-func mapGetRulesetResponse(resp *rulesets.RulesetGetResponse) *Ruleset {
+// mapPhaseGetResponse converts a Cloudflare SDK PhaseGetResponse to our internal Ruleset.
+func mapPhaseGetResponse(resp *rulesets.PhaseGetResponse) *Ruleset {
 	rs := &Ruleset{
 		ID:          resp.ID,
 		Name:        resp.Name,
@@ -174,30 +116,8 @@ func mapGetRulesetResponse(resp *rulesets.RulesetGetResponse) *Ruleset {
 	return rs
 }
 
-// mapNewRulesetResponse converts a Cloudflare SDK RulesetNewResponse to our internal Ruleset.
-func mapNewRulesetResponse(resp *rulesets.RulesetNewResponse) *Ruleset {
-	rs := &Ruleset{
-		ID:          resp.ID,
-		Name:        resp.Name,
-		Description: resp.Description,
-		Phase:       string(resp.Phase),
-	}
-	for _, r := range resp.Rules {
-		rule := RulesetRule{
-			ID:          r.ID,
-			Action:      string(r.Action),
-			Expression:  r.Expression,
-			Description: r.Description,
-			Enabled:     r.Enabled,
-		}
-		rule.ActionParameters = toMapStringAny(r.ActionParameters)
-		rs.Rules = append(rs.Rules, rule)
-	}
-	return rs
-}
-
-// mapUpdateRulesetResponse converts a Cloudflare SDK RulesetUpdateResponse to our internal Ruleset.
-func mapUpdateRulesetResponse(resp *rulesets.RulesetUpdateResponse) *Ruleset {
+// mapPhaseUpdateResponse converts a Cloudflare SDK PhaseUpdateResponse to our internal Ruleset.
+func mapPhaseUpdateResponse(resp *rulesets.PhaseUpdateResponse) *Ruleset {
 	rs := &Ruleset{
 		ID:          resp.ID,
 		Name:        resp.Name,
