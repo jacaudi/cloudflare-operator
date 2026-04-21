@@ -19,88 +19,62 @@ import (
 )
 
 // mockRulesetClient implements cfclient.RulesetClient for testing.
+//
+// Stores one ruleset per (zoneID, phase) tuple — matching Cloudflare's
+// single-entrypoint-per-phase semantics.
 type mockRulesetClient struct {
-	rulesets     map[string]*cfclient.Ruleset
+	entrypoints  map[string]*cfclient.Ruleset // key: zoneID + "/" + phase
 	nextID       int
-	createCalled bool
-	updateCalled bool
-	deleteCalled bool
+	upsertCalled bool
 	lastZoneID   string
-	createErr    error
-	updateErr    error
-	deleteErr    error
-	listErr      error
+	upsertErr    error
 	getErr       error
+	// When true, GetPhaseEntrypoint returns ErrPhaseEntrypointNotFound
+	// regardless of whether a ruleset is in the store.
+	forceNotFound bool
 }
 
 func newMockRulesetClient() *mockRulesetClient {
-	return &mockRulesetClient{rulesets: make(map[string]*cfclient.Ruleset)}
+	return &mockRulesetClient{entrypoints: make(map[string]*cfclient.Ruleset)}
 }
 
-func (m *mockRulesetClient) GetRuleset(_ context.Context, _, rulesetID string) (*cfclient.Ruleset, error) {
+func entrypointKey(zoneID, phase string) string { return zoneID + "/" + phase }
+
+func (m *mockRulesetClient) GetPhaseEntrypoint(_ context.Context, zoneID, phase string) (*cfclient.Ruleset, error) {
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
-	rs, ok := m.rulesets[rulesetID]
+	if m.forceNotFound {
+		return nil, fmt.Errorf("%w: phase %s in zone %s", cfclient.ErrPhaseEntrypointNotFound, phase, zoneID)
+	}
+	rs, ok := m.entrypoints[entrypointKey(zoneID, phase)]
 	if !ok {
-		return nil, fmt.Errorf("ruleset not found")
+		return nil, fmt.Errorf("%w: phase %s in zone %s", cfclient.ErrPhaseEntrypointNotFound, phase, zoneID)
 	}
 	return rs, nil
 }
 
-func (m *mockRulesetClient) ListRulesetsByPhase(_ context.Context, _, phase string) ([]cfclient.Ruleset, error) {
-	if m.listErr != nil {
-		return nil, m.listErr
+func (m *mockRulesetClient) UpsertPhaseEntrypoint(_ context.Context, zoneID, phase string, params cfclient.RulesetParams) (*cfclient.Ruleset, error) {
+	m.upsertCalled = true
+	m.lastZoneID = zoneID
+	if m.upsertErr != nil {
+		return nil, m.upsertErr
 	}
-	var results []cfclient.Ruleset
-	for _, rs := range m.rulesets {
-		if rs.Phase == phase {
-			results = append(results, *rs)
+	key := entrypointKey(zoneID, phase)
+	existing, ok := m.entrypoints[key]
+	if !ok {
+		m.nextID++
+		existing = &cfclient.Ruleset{
+			ID:    fmt.Sprintf("ruleset-%d", m.nextID),
+			Phase: phase,
 		}
+		m.entrypoints[key] = existing
 	}
-	return results, nil
-}
-
-func (m *mockRulesetClient) CreateRuleset(_ context.Context, zoneID string, params cfclient.RulesetParams) (*cfclient.Ruleset, error) {
-	m.createCalled = true
-	m.lastZoneID = zoneID
-	if m.createErr != nil {
-		return nil, m.createErr
-	}
-	m.nextID++
-	id := fmt.Sprintf("ruleset-%d", m.nextID)
-	rs := &cfclient.Ruleset{
-		ID:    id,
-		Name:  params.Name,
-		Phase: params.Phase,
-		Rules: params.Rules,
-	}
-	m.rulesets[id] = rs
-	return rs, nil
-}
-
-func (m *mockRulesetClient) UpdateRuleset(_ context.Context, _, rulesetID string, params cfclient.RulesetParams) (*cfclient.Ruleset, error) {
-	m.updateCalled = true
-	if m.updateErr != nil {
-		return nil, m.updateErr
-	}
-	rs, ok := m.rulesets[rulesetID]
-	if !ok {
-		return nil, fmt.Errorf("ruleset not found")
-	}
-	rs.Name = params.Name
-	rs.Rules = params.Rules
-	return rs, nil
-}
-
-func (m *mockRulesetClient) DeleteRuleset(_ context.Context, zoneID, rulesetID string) error {
-	m.deleteCalled = true
-	m.lastZoneID = zoneID
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-	delete(m.rulesets, rulesetID)
-	return nil
+	existing.Name = params.Name
+	existing.Description = params.Description
+	existing.Rules = params.Rules
+	m.forceNotFound = false
+	return existing, nil
 }
 
 // Helper to create a base CloudflareRuleset for tests.
@@ -199,8 +173,8 @@ func TestRulesetReconcile_CreatesRuleset(t *testing.T) {
 	}
 
 	// Verify the mock was called
-	if !mock.createCalled {
-		t.Error("expected CreateRuleset to be called")
+	if !mock.upsertCalled {
+		t.Error("expected UpsertPhaseEntrypoint to be called")
 	}
 
 	// Verify status was updated
@@ -217,15 +191,16 @@ func TestRulesetReconcile_CreatesRuleset(t *testing.T) {
 	}
 }
 
-func TestRulesetReconcile_AdoptsExistingRuleset(t *testing.T) {
+func TestRulesetReconcile_AdoptsExistingEntrypoint(t *testing.T) {
 	ruleset := newTestRuleset("test-ruleset", "default")
 	ruleset.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
-	// No RulesetID in status — should adopt
+	// No RulesetID in status — Cloudflare already has an entrypoint with
+	// different rules. The operator should upsert spec rules into that
+	// existing entrypoint.
 	secret := newTestRulesetSecret("default")
 
 	mock := newMockRulesetClient()
-	// Pre-populate an existing ruleset in Cloudflare that matches by phase
-	mock.rulesets["existing-rs-123"] = &cfclient.Ruleset{
+	mock.entrypoints[entrypointKey("zone-123", "http_request_firewall_custom")] = &cfclient.Ruleset{
 		ID:    "existing-rs-123",
 		Name:  "existing-waf",
 		Phase: "http_request_firewall_custom",
@@ -249,36 +224,29 @@ func TestRulesetReconcile_AdoptsExistingRuleset(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Should NOT have created a new ruleset
-	if mock.createCalled {
-		t.Error("expected CreateRuleset NOT to be called when adopting")
+	// Spec rules differ from the pre-existing rules, so we expect an Upsert.
+	if !mock.upsertCalled {
+		t.Error("expected UpsertPhaseEntrypoint to be called (rules differ from adopted entrypoint)")
 	}
 
-	// Should have updated the adopted ruleset with desired rules
-	if !mock.updateCalled {
-		t.Error("expected UpdateRuleset to be called for adopted ruleset")
-	}
-
-	// Verify the status has the adopted ruleset ID
+	// Status should reflect the adopted entrypoint's ID.
 	var updated cloudflarev1alpha1.CloudflareRuleset
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated ruleset: %v", err)
 	}
-
 	if updated.Status.RulesetID != "existing-rs-123" {
 		t.Errorf("expected RulesetID=existing-rs-123, got %q", updated.Status.RulesetID)
 	}
 }
 
-func TestRulesetReconcile_UpdatesRuleset(t *testing.T) {
+func TestRulesetReconcile_UpdatesEntrypoint(t *testing.T) {
 	ruleset := newTestRuleset("test-ruleset", "default")
 	ruleset.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
 	ruleset.Status.RulesetID = "rs-existing"
 	secret := newTestRulesetSecret("default")
 
 	mock := newMockRulesetClient()
-	// Existing ruleset with different rules
-	mock.rulesets["rs-existing"] = &cfclient.Ruleset{
+	mock.entrypoints[entrypointKey("zone-123", "http_request_firewall_custom")] = &cfclient.Ruleset{
 		ID:    "rs-existing",
 		Name:  "test-waf",
 		Phase: "http_request_firewall_custom",
@@ -302,16 +270,14 @@ func TestRulesetReconcile_UpdatesRuleset(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !mock.updateCalled {
-		t.Error("expected UpdateRuleset to be called for existing ruleset")
+	if !mock.upsertCalled {
+		t.Error("expected UpsertPhaseEntrypoint to be called to reconcile rule drift")
 	}
 
-	// Verify status
 	var updated cloudflarev1alpha1.CloudflareRuleset
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated); err != nil {
 		t.Fatalf("failed to get updated ruleset: %v", err)
 	}
-
 	if updated.Status.RulesetID != "rs-existing" {
 		t.Errorf("expected RulesetID=rs-existing, got %q", updated.Status.RulesetID)
 	}
@@ -320,7 +286,9 @@ func TestRulesetReconcile_UpdatesRuleset(t *testing.T) {
 	}
 }
 
-func TestRulesetReconcile_DeletesRuleset(t *testing.T) {
+func TestRulesetReconcile_DeleteRetainsEntrypoint(t *testing.T) {
+	// Phase entrypoints are zone-owned — CR deletion must NOT remove the
+	// entrypoint from Cloudflare. It just drops the finalizer.
 	ruleset := newTestRuleset("test-ruleset", "default")
 	ruleset.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
 	ruleset.Status.RulesetID = "rs-delete"
@@ -330,7 +298,8 @@ func TestRulesetReconcile_DeletesRuleset(t *testing.T) {
 	secret := newTestRulesetSecret("default")
 
 	mock := newMockRulesetClient()
-	mock.rulesets["rs-delete"] = &cfclient.Ruleset{
+	key := entrypointKey("zone-123", "http_request_firewall_custom")
+	mock.entrypoints[key] = &cfclient.Ruleset{
 		ID:    "rs-delete",
 		Name:  "test-waf",
 		Phase: "http_request_firewall_custom",
@@ -345,30 +314,27 @@ func TestRulesetReconcile_DeletesRuleset(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify delete was called on the mock
-	if !mock.deleteCalled {
-		t.Error("expected DeleteRuleset to be called")
+	// Entrypoint must still exist in Cloudflare after CR delete.
+	if _, exists := mock.entrypoints[key]; !exists {
+		t.Error("expected phase entrypoint to be retained in Cloudflare after CR deletion")
 	}
 
-	// Verify the ruleset was removed from the mock
-	if _, exists := mock.rulesets["rs-delete"]; exists {
-		t.Error("expected ruleset to be removed from mock after deletion")
+	// No Upsert during delete path.
+	if mock.upsertCalled {
+		t.Error("expected no Cloudflare writes on CR deletion")
 	}
 
-	// The fake client with DeletionTimestamp set will garbage-collect the object
-	// once the finalizer is removed, so we verify the object is gone (which proves
-	// the finalizer was successfully removed).
+	// Finalizer should be removed (object may be garbage-collected by the
+	// fake client, which is equivalent to finalizer removal from our POV).
 	var updated cloudflarev1alpha1.CloudflareRuleset
 	err = r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &updated)
 	if err == nil {
-		// Object still exists — verify finalizer was removed
 		for _, f := range updated.Finalizers {
 			if f == cloudflarev1alpha1.FinalizerName {
 				t.Error("expected finalizer to be removed after deletion")
 			}
 		}
 	}
-	// If err is not-found, the object was garbage-collected after finalizer removal — that's correct
 }
 
 func TestRulesetReconcile_SecretNotFound(t *testing.T) {
@@ -490,7 +456,7 @@ func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	}
 
 	// Verify the mock ruleset client's CreateRuleset was called with the resolved zone ID
-	if !mock.createCalled {
+	if !mock.upsertCalled {
 		t.Error("expected CreateRuleset to be called after resolving zone ID from CloudflareZone")
 	}
 	if mock.lastZoneID != testResolvedZoneID {
@@ -599,144 +565,7 @@ func TestRulesetReconcile_ZoneRefNotReady(t *testing.T) {
 	}
 }
 
-func TestRulesetReconcile_ZoneRefDeleteWithResolvedZone(t *testing.T) {
-	s := testScheme(t)
-	mock := newMockRulesetClient()
-
-	zone := &cloudflarev1alpha1.CloudflareZone{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-zone",
-			Namespace: "default",
-		},
-		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
-			Name:      "example.com",
-			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
-		},
-	}
-
-	enabled := true
-	now := metav1.Now()
-	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "test-ruleset",
-			Namespace:         "default",
-			Generation:        1,
-			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
-			DeletionTimestamp: &now,
-		},
-		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
-			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "my-zone"},
-			Name:      "Test Rules",
-			Phase:     "http_request_firewall_custom",
-			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
-			Interval:  &metav1.Duration{Duration: 30 * time.Minute},
-			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
-				{Action: "block", Expression: "(cf.client.bot)", Enabled: &enabled},
-			},
-		},
-		Status: cloudflarev1alpha1.CloudflareRulesetStatus{
-			RulesetID: "existing-ruleset-id",
-		},
-	}
-
-	secret := newTestRulesetSecret("default")
-
-	builder := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(zone, ruleset, secret).
-		WithStatusSubresource(zone, ruleset)
-	fakeClient := builder.Build()
-
-	zone.Status.ZoneID = testResolvedZoneID
-	zone.Status.Status = testZoneActive
-	if err := fakeClient.Status().Update(context.Background(), zone); err != nil {
-		t.Fatalf("failed to update zone status: %v", err)
-	}
-
-	r := &CloudflareRulesetReconciler{
-		Client:        fakeClient,
-		Scheme:        s,
-		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
-		RulesetClientFn: func(_ string) cfclient.RulesetClient {
-			return mock
-		},
-	}
-
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if !mock.deleteCalled {
-		t.Error("expected DeleteRuleset to be called")
-	}
-	if mock.lastZoneID != testResolvedZoneID {
-		t.Errorf("expected zone ID %q for delete, got %q", testResolvedZoneID, mock.lastZoneID)
-	}
-}
-
-func TestRulesetReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
-	s := testScheme(t)
-	mock := newMockRulesetClient()
-
-	enabled := true
-	now := metav1.Now()
-	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "test-ruleset",
-			Namespace:         "default",
-			Generation:        1,
-			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
-			DeletionTimestamp: &now,
-		},
-		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
-			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "deleted-zone"},
-			Name:      "Test Rules",
-			Phase:     "http_request_firewall_custom",
-			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
-			Interval:  &metav1.Duration{Duration: 30 * time.Minute},
-			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
-				{Action: "block", Expression: "(cf.client.bot)", Enabled: &enabled},
-			},
-		},
-		Status: cloudflarev1alpha1.CloudflareRulesetStatus{
-			RulesetID: "existing-ruleset-id",
-		},
-	}
-
-	secret := newTestRulesetSecret("default")
-
-	builder := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(ruleset, secret).
-		WithStatusSubresource(ruleset)
-	fakeClient := builder.Build()
-
-	r := &CloudflareRulesetReconciler{
-		Client:        fakeClient,
-		Scheme:        s,
-		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
-		RulesetClientFn: func(_ string) cfclient.RulesetClient {
-			return mock
-		},
-	}
-
-	result, err := r.Reconcile(context.Background(), reconcile.Request{
-		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.RequeueAfter != 30*time.Second {
-		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
-	}
-
-	if mock.deleteCalled {
-		t.Error("DeleteRuleset should NOT be called when zone can't be resolved")
-	}
-}
+// Deletion behavior no longer depends on zone-ref resolution because the new
+// delete path doesn't call Cloudflare at all (phase entrypoints are retained).
+// The TestRulesetReconcile_DeleteRetainsEntrypoint test above covers the
+// full scenario.

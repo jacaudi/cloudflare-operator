@@ -1,11 +1,14 @@
+---
+# Security rules — custom rules in the http_request_firewall_custom phase
+# entrypoint (Cloudflare dashboard: Security → Custom rules).
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareRuleset
 metadata:
-  name: waf-custom-rules
+  name: security-rules
 spec:
   zoneID: "<zone-id>"
-  name: "Custom WAF Rules"
-  description: "Custom WAF rules for zone protection"
+  name: "Custom security rules"
+  description: "Zone-level custom security rules"
   phase: "http_request_firewall_custom"
   interval: 30m
   secretRef:
@@ -19,20 +22,16 @@ spec:
       expression: '(not ip.geoip.country in {"CA" "US" "GB"})'
       description: "Block non-allowed countries"
       enabled: true
-    - action: block
-      expression: '(http.host eq "plex.wx4wnc.io" and not ip.geoip.country in {"CA" "US" "GB"})'
-      description: "Block Plex access from non-allowed countries"
-      enabled: true
 ---
-# Using zoneRef instead of zoneID
+# Same ruleset, but referencing a CloudflareZone by name instead of a raw zoneID.
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareRuleset
 metadata:
-  name: waf-custom-rules-with-zoneref
+  name: security-rules-with-zoneref
 spec:
   zoneRef:
     name: my-zone
-  name: "Custom WAF Rules"
+  name: "Custom security rules"
   phase: "http_request_firewall_custom"
   interval: 30m
   secretRef:

@@ -84,13 +84,24 @@ type RulesetParams struct {
 	Rules       []RulesetRule
 }
 
-// RulesetClient manages Cloudflare Rulesets.
+// RulesetClient manages a zone's phase-entrypoint rulesets.
+//
+// Cloudflare has two ruleset kinds: "zone" (the phase entrypoint — one per
+// phase per zone, what the dashboard surfaces as Security rules / Custom
+// rules / Rate limiting rules / etc.) and "custom" (standalone rulesets, a
+// Business+ feature). The operator manages the phase entrypoint so it works
+// on all plans.
 type RulesetClient interface {
-	GetRuleset(ctx context.Context, zoneID, rulesetID string) (*Ruleset, error)
-	ListRulesetsByPhase(ctx context.Context, zoneID, phase string) ([]Ruleset, error)
-	CreateRuleset(ctx context.Context, zoneID string, params RulesetParams) (*Ruleset, error)
-	UpdateRuleset(ctx context.Context, zoneID, rulesetID string, params RulesetParams) (*Ruleset, error)
-	DeleteRuleset(ctx context.Context, zoneID, rulesetID string) error
+	// GetPhaseEntrypoint returns the zone's entrypoint ruleset for the given
+	// phase. Returns ErrPhaseEntrypointNotFound when the entrypoint has not
+	// been created yet (no Update has ever been made for that phase on this
+	// zone). Any other error indicates an API / transport failure.
+	GetPhaseEntrypoint(ctx context.Context, zoneID, phase string) (*Ruleset, error)
+
+	// UpsertPhaseEntrypoint writes the given rules to the zone's entrypoint
+	// ruleset for the given phase. Creates the entrypoint if it does not
+	// already exist, otherwise replaces its rule set.
+	UpsertPhaseEntrypoint(ctx context.Context, zoneID, phase string, params RulesetParams) (*Ruleset, error)
 }
 
 // ZoneSetting is a key-value pair for a zone setting.
