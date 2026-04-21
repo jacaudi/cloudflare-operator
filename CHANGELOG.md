@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.4.0...v0.5.0) (2026-04-21)
+
+* feat!: account ID to secret + pipeline alignment with nextdns-operator ([#38](https://github.com/jacaudi/cloudflare-operator/issues/38)) ([32989f9](https://github.com/jacaudi/cloudflare-operator/commit/32989f98be742ecd928c633c2e39e105682104e6))
+
+
+### BREAKING CHANGES
+
+* spec.accountID has been removed from CloudflareZone
+and CloudflareTunnel. Add an `accountID` key to the API token Secret
+and remove the field from existing CRs before upgrading.
+
 ## [0.4.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.3.1...v0.4.0) (2026-04-19)
 
 ### Features
