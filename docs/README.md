@@ -388,7 +388,17 @@ zone-settings   abc123...     True    5d
 
 ## CloudflareRuleset
 
-Manages Cloudflare WAF rulesets with support for 14+ phases and free-form action parameters.
+Manages Cloudflare's per-zone phase entrypoint rulesets — the object that holds custom rules for a given phase. This covers **Security → Custom rules** (`http_request_firewall_custom`), **Rate limiting rules** (`http_ratelimit`), transforms, redirects, and the other 14+ Cloudflare Rulesets-Engine phases.
+
+### How ruleset ownership works
+
+Each Cloudflare zone has exactly one **entrypoint ruleset** per phase. The operator manages that entrypoint directly: on reconcile it fetches the existing entrypoint (or treats it as empty if none exists yet) and applies `spec.rules` via `PUT`. There is no separate "create vs update" decision — `UpsertPhaseEntrypoint` handles both.
+
+This means:
+
+- **`CloudflareRuleset` is declarative.** Whatever `spec.rules` contains is what Cloudflare will have after reconciliation. Rules not in `spec.rules` are removed from the entrypoint.
+- **Adoption is automatic.** If the entrypoint already exists (because another tool — Terraform, the dashboard, another cluster — previously wrote to it), the operator adopts it on first reconcile. If `spec.rules` matches existing rules the reconcile is a no-op; otherwise the spec wins.
+- **Deletion retains the entrypoint.** Entrypoints are zone-owned, not CR-owned, and removing them would break unrelated tooling. When the CR is deleted the operator drops the finalizer and leaves the entrypoint alone. To actually clear rules, empty `spec.rules` first, let it reconcile, then delete the CR.
 
 ### Spec
 
@@ -436,8 +446,17 @@ Manages Cloudflare WAF rulesets with support for 14+ phases and free-form action
 
 | Field | Description |
 |-------|-------------|
-| `rulesetID` | Cloudflare Ruleset ID |
-| `ruleCount` | Number of rules in the ruleset |
+| `rulesetID` | Cloudflare Ruleset ID of the phase entrypoint (populated on first successful reconcile) |
+| `ruleCount` | Number of rules in the entrypoint |
+
+### Events
+
+| Reason | When |
+|--------|------|
+| `RulesetCreated` | First reconcile for a phase whose entrypoint did not exist yet |
+| `RulesetAdopted` | First reconcile where a pre-existing entrypoint is taken under management |
+| `RulesetUpdated` | Drift detected between spec and entrypoint; entrypoint rewritten |
+| `RulesetRetained` | CR deletion: entrypoint left intact in Cloudflare |
 
 ### Example
 
@@ -445,11 +464,11 @@ Manages Cloudflare WAF rulesets with support for 14+ phases and free-form action
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareRuleset
 metadata:
-  name: waf-custom-rules
+  name: security-rules
 spec:
   zoneID: "<zone-id>"
-  name: "Custom WAF Rules"
-  description: "Custom WAF rules for zone protection"
+  name: "Custom security rules"
+  description: "Custom security rules for zone protection"
   phase: "http_request_firewall_custom"
   interval: 30m
   secretRef:
@@ -465,11 +484,19 @@ spec:
       enabled: true
 ```
 
+### Migrating from externally-managed rulesets
+
+If your zone's phase entrypoint is already populated (by Terraform, the Cloudflare dashboard, or another controller), follow this order to hand ownership to the operator cleanly:
+
+1. **Mirror the existing rules in `spec.rules`**. Apply the CR. On first reconcile the operator adopts the entrypoint and — if `spec.rules` matches — does nothing else. A `RulesetAdopted` event confirms the handover.
+2. **Retire the external source**. For Terraform: `terraform state rm cloudflare_ruleset.<name>` and delete the resource from code. Cloudflare keeps the entrypoint untouched; the operator continues to own it.
+3. **Edit rules through the CR from here on.** Any out-of-band edits (dashboard, API, re-added Terraform) get reverted on the next reconcile.
+
 ### Print Columns
 
 ```
-NAME              RULESET NAME       PHASE                             RULES   READY   AGE
-waf-custom-rules  Custom WAF Rules   http_request_firewall_custom      2       True    5d
+NAME            RULESET NAME            PHASE                             RULES   READY   AGE
+security-rules  Custom security rules   http_request_firewall_custom      2       True    5d
 ```
 
 ---

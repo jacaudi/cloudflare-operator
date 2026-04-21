@@ -1,6 +1,6 @@
 # cloudflare-operator
 
-A Kubernetes operator that manages Cloudflare resources declaratively via Custom Resources. Define DNS records, tunnels, WAF rulesets, zone settings, and zone lifecycle as Kubernetes objects with drift detection and automatic reconciliation.
+A Kubernetes operator that manages Cloudflare resources declaratively via Custom Resources. Define DNS records, tunnels, security + transform rulesets, zone settings, and zone lifecycle as Kubernetes objects with drift detection and automatic reconciliation.
 
 ## Custom Resources
 
@@ -10,7 +10,7 @@ A Kubernetes operator that manages Cloudflare resources declaratively via Custom
 | `CloudflareDNSRecord` | Manage DNS records (A, AAAA, CNAME, SRV, MX, TXT, NS) with dynamic IP support |
 | `CloudflareTunnel` | Create tunnels and auto-generate `cloudflared` credentials Secrets |
 | `CloudflareZoneConfig` | Declaratively configure zone settings (SSL, security, performance, network) |
-| `CloudflareRuleset` | Manage WAF rulesets and firewall rules across 14+ phases |
+| `CloudflareRuleset` | Manage a zone's phase entrypoint ruleset (security / custom rules, rate limiting, transforms, redirects, …) across 14+ Rulesets-Engine phases |
 
 See [`docs/README.md`](docs/README.md) for the full CRD reference, field-by-field specs, and examples.
 
@@ -111,7 +111,7 @@ kubectl describe cloudflarednsrecord homelab -n cloudflare-operator
 
 `Ready=True` means the record is in sync with Cloudflare. Prefer `zoneRef` — the controller resolves the zone ID from status and waits for the zone to be ready. `zoneID: "<id>"` is still supported for standalone cases.
 
-More examples — CNAME, SRV, tunnels, WAF rulesets, zone settings — live in [`config/samples/`](config/samples) and [`docs/README.md`](docs/README.md).
+More examples — CNAME, SRV, tunnels, rulesets, zone settings — live in [`config/samples/`](config/samples) and [`docs/README.md`](docs/README.md).
 
 ## Upgrading
 
