@@ -21,19 +21,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-// TunnelReference identifies a CloudflareTunnel this rule attaches to.
-type TunnelReference struct {
-	// Name of the CloudflareTunnel resource.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
-
-	// Namespace of the CloudflareTunnel. Defaults to the rule's own namespace
-	// when empty.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
-}
-
 // TunnelRuleServiceRef identifies a Kubernetes Service to route traffic to.
 type TunnelRuleServiceRef struct {
 	// Name of the Service.
@@ -150,7 +137,7 @@ type CloudflareTunnelRuleSpec struct {
 	// metadata.name ascending.
 	// +kubebuilder:default=100
 	// +optional
-	Priority int `json:"priority,omitempty"`
+	Priority int `json:"priority"`
 }
 
 // CloudflareTunnelRuleStatus is the observed state.

@@ -17,6 +17,19 @@ type ZoneReference struct {
 	Name string `json:"name"`
 }
 
+// TunnelReference identifies a CloudflareTunnel this rule attaches to.
+type TunnelReference struct {
+	// Name of the CloudflareTunnel resource.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace of the CloudflareTunnel. Defaults to the rule's own namespace
+	// when empty.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
 // Condition type constants used across all CRDs.
 const (
 	ConditionTypeReady             = "Ready"
