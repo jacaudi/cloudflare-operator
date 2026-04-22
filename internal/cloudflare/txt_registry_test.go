@@ -21,6 +21,8 @@ import (
 	"testing"
 )
 
+const testPayloadMinimal = `"heritage=external-dns,external-dns/owner=foo"`
+
 func TestEncodeRegistryPayload(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -200,5 +202,66 @@ func TestAffixName(t *testing.T) {
 				t.Errorf("AffixName() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestEncryptDecryptPayload(t *testing.T) {
+	key32 := []byte("01234567890123456789012345678901") // 32 bytes
+	plaintext := `"heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=service/ns/svc"`
+
+	encoded, err := EncryptPayload(plaintext, key32)
+	if err != nil {
+		t.Fatalf("EncryptPayload() err = %v", err)
+	}
+	if encoded == plaintext {
+		t.Fatalf("encrypted payload equals plaintext")
+	}
+
+	got, err := DecryptPayload(encoded, [][]byte{key32})
+	if err != nil {
+		t.Fatalf("DecryptPayload() err = %v", err)
+	}
+	if got != plaintext {
+		t.Errorf("DecryptPayload() = %q, want %q", got, plaintext)
+	}
+}
+
+func TestDecryptPayload_PlaintextPassthrough(t *testing.T) {
+	got, err := DecryptPayload(testPayloadMinimal, nil)
+	if err != nil {
+		t.Fatalf("DecryptPayload() on plaintext err = %v", err)
+	}
+	if got != testPayloadMinimal {
+		t.Errorf("got %q, want %q (plaintext should pass through)", got, testPayloadMinimal)
+	}
+}
+
+func TestDecryptPayload_TriesKeysInOrder(t *testing.T) {
+	keyOld := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	keyNew := []byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	encoded, err := EncryptPayload(testPayloadMinimal, keyOld)
+	if err != nil {
+		t.Fatalf("EncryptPayload() err = %v", err)
+	}
+
+	got, err := DecryptPayload(encoded, [][]byte{keyNew, keyOld})
+	if err != nil {
+		t.Fatalf("DecryptPayload() err = %v", err)
+	}
+	if got != testPayloadMinimal {
+		t.Errorf("DecryptPayload() = %q, want %q", got, testPayloadMinimal)
+	}
+}
+
+func TestDecryptPayload_AllKeysFail(t *testing.T) {
+	realKey := []byte("cccccccccccccccccccccccccccccccc")
+	wrongKey := []byte("dddddddddddddddddddddddddddddddd")
+
+	encoded, _ := EncryptPayload(testPayloadMinimal, realKey)
+
+	_, err := DecryptPayload(encoded, [][]byte{wrongKey})
+	if err == nil {
+		t.Fatalf("DecryptPayload() with wrong key should error, got nil")
 	}
 }
