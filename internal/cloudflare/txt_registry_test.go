@@ -258,10 +258,26 @@ func TestDecryptPayload_AllKeysFail(t *testing.T) {
 	realKey := []byte("cccccccccccccccccccccccccccccccc")
 	wrongKey := []byte("dddddddddddddddddddddddddddddddd")
 
-	encoded, _ := EncryptPayload(testPayloadMinimal, realKey)
+	encoded, err := EncryptPayload(testPayloadMinimal, realKey)
+	if err != nil {
+		t.Fatalf("EncryptPayload() err = %v", err)
+	}
 
-	_, err := DecryptPayload(encoded, [][]byte{wrongKey})
+	_, err = DecryptPayload(encoded, [][]byte{wrongKey})
 	if err == nil {
 		t.Fatalf("DecryptPayload() with wrong key should error, got nil")
+	}
+}
+
+func TestDecryptPayload_EmptyKeysPassthroughOnBlockAlignedBase64(t *testing.T) {
+	// Valid base64 that decodes to exactly 32 bytes (2 AES blocks, block-aligned).
+	// With no keys configured, this must pass through unchanged — not error.
+	input := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	got, err := DecryptPayload(input, nil)
+	if err != nil {
+		t.Fatalf("DecryptPayload() err = %v; want passthrough with nil error", err)
+	}
+	if got != input {
+		t.Errorf("DecryptPayload() = %q, want %q (passthrough)", got, input)
 	}
 }

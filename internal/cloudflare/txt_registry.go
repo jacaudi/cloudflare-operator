@@ -191,6 +191,9 @@ func DecryptPayload(input string, keys [][]byte) (string, error) {
 	if err != nil || len(data) < aes.BlockSize*2 || len(data)%aes.BlockSize != 0 {
 		return input, nil // plaintext passthrough
 	}
+	if len(keys) == 0 {
+		return input, nil
+	}
 	iv, ct := data[:aes.BlockSize], data[aes.BlockSize:]
 	var lastErr error
 	for _, key := range keys {
