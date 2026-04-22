@@ -49,6 +49,18 @@ type AffixConfig struct {
 
 // ErrRegistryMalformed is returned when a TXT payload cannot be parsed as an
 // external-dns registry entry.
+//
+// This error deliberately covers BOTH cases:
+//  1. The TXT is not an external-dns registry record at all (e.g. an SPF
+//     record, a user-managed TXT, or any other non-registry payload whose
+//     heritage key is missing or not "external-dns").
+//  2. The TXT looks like a registry record but is structurally invalid
+//     (e.g. missing owner, malformed resource tuple, missing '=' separator).
+//
+// Callers MUST NOT try to distinguish these two cases: both mean "do not
+// treat this TXT as ownership metadata." Wrapping them under a single
+// sentinel keeps adoption logic simple — any error from DecodeRegistryPayload
+// means "ignore this record for registry purposes."
 var ErrRegistryMalformed = errors.New("txt registry: malformed payload")
 
 // EncodeRegistryPayload produces the canonical quoted wire form of a

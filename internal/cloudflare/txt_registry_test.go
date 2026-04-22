@@ -17,6 +17,7 @@ limitations under the License.
 package cloudflare
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -45,6 +46,11 @@ func TestEncodeRegistryPayload(t *testing.T) {
 				SourceName:      "rickroll",
 			},
 			want: `"heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=service/selfhosted/rickroll"`,
+		},
+		{
+			name:  "owner only, no resource — legacy external-dns shape",
+			input: RegistryPayload{Owner: "external-dns-home"},
+			want:  `"heritage=external-dns,external-dns/owner=external-dns-home"`,
 		},
 	}
 	for _, tc := range tests {
@@ -109,6 +115,9 @@ func TestDecodeRegistryPayload(t *testing.T) {
 				t.Fatalf("DecodeRegistryPayload() err = %v, wantErr %v", err, tc.wantErr)
 			}
 			if err != nil {
+				if !errors.Is(err, ErrRegistryMalformed) {
+					t.Errorf("expected ErrRegistryMalformed, got %v", err)
+				}
 				return
 			}
 			if got != tc.want {
@@ -172,6 +181,12 @@ func TestAffixName(t *testing.T) {
 			fqdn:       "example.com",
 			recordType: "A",
 			want:       "a-example.com",
+		},
+		{
+			name:       "TXT record uses lowercased type prefix",
+			fqdn:       "foo.example.com",
+			recordType: "TXT",
+			want:       "txt-foo.example.com",
 		},
 	}
 	for _, tc := range tests {
