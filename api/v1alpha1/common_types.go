@@ -19,7 +19,14 @@ type ZoneReference struct {
 
 // Condition type constants used across all CRDs.
 const (
-	ConditionTypeReady = "Ready"
+	ConditionTypeReady             = "Ready"
+	ConditionTypeValid             = "Valid"
+	ConditionTypeTunnelAccepted    = "TunnelAccepted"
+	ConditionTypeConflict          = "Conflict"
+	ConditionTypeConnectorReady    = "ConnectorReady"
+	ConditionTypeIngressConfigured = "IngressConfigured"
+	ConditionTypeDNSAdopted        = "DNSAdopted"
+	ConditionTypeOwnershipVerified = "OwnershipVerified"
 )
 
 // Condition reason constants.
@@ -35,6 +42,22 @@ const (
 	ReasonZonePending       = "ZonePending"
 	ReasonZoneNotActive     = "ZoneNotActive"
 	ReasonZoneRefNotReady   = "ZoneRefNotReady"
+
+	// Added for Gateway API source + tunnel runtime (v1).
+	ReasonInvalidAnnotation       = "InvalidAnnotation"
+	ReasonNoMatchingZone          = "NoMatchingZone"
+	ReasonAmbiguousZone           = "AmbiguousZone"
+	ReasonTunnelNotFound          = "TunnelNotFound"
+	ReasonTunnelNotReady          = "TunnelNotReady"
+	ReasonGatewayAddressNotReady  = "GatewayAddressNotReady"
+	ReasonRecordConflict          = "RecordConflict"
+	ReasonRecordOwnershipConflict = "RecordOwnershipConflict"
+	ReasonTxtRegistryGap          = "TxtRegistryGap"
+	ReasonTxtDecryptFailed        = "TxtDecryptFailed"
+	ReasonRecordAdopted           = "RecordAdopted"
+	ReasonDNSReconciled           = "DNSReconciled"
+	ReasonDuplicateHostname       = "DuplicateHostname"
+	ReasonDeploymentConflict      = "DeploymentConflict"
 )
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.
