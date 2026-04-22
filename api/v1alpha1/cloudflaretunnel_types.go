@@ -66,7 +66,7 @@ type ConnectorSpec struct {
 	// +kubebuilder:default=2
 	// +kubebuilder:validation:Minimum=1
 	// +optional
-	Replicas int32 `json:"replicas,omitempty"`
+	Replicas int32 `json:"replicas"`
 
 	// Image specifies the cloudflared container image. When omitted, the
 	// operator uses a compile-time default bumped per operator release.
@@ -96,10 +96,15 @@ type ConnectorSpec struct {
 
 // ConnectorImage specifies the cloudflared container image.
 type ConnectorImage struct {
+	// Repository is the container image repository, for example
+	// "docker.io/cloudflare/cloudflared". Defaults to the upstream
+	// Cloudflare image.
 	// +kubebuilder:default="docker.io/cloudflare/cloudflared"
 	// +optional
-	Repository string `json:"repository,omitempty"`
+	Repository string `json:"repository"`
 
+	// Tag is the image tag. When omitted, the operator uses a
+	// compile-time default bumped per operator release.
 	// +optional
 	Tag string `json:"tag,omitempty"`
 }
@@ -176,6 +181,7 @@ type ConnectorStatus struct {
 // +kubebuilder:printcolumn:name="CNAME",type=string,JSONPath=`.status.tunnelCNAME`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.routing) || !has(self.spec.routing.defaultBackend) || (has(self.spec.routing.defaultBackend.serviceRef) ? 1 : 0) + (has(self.spec.routing.defaultBackend.url) ? 1 : 0) + (has(self.spec.routing.defaultBackend.httpStatus) ? 1 : 0) == 1",message="routing.defaultBackend: exactly one of serviceRef, url, httpStatus must be set"
 
 // CloudflareTunnel is the Schema for the cloudflaretunnels API
 type CloudflareTunnel struct {

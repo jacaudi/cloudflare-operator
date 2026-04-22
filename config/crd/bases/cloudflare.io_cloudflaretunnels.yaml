@@ -991,8 +991,15 @@ spec:
                     properties:
                       repository:
                         default: docker.io/cloudflare/cloudflared
+                        description: |-
+                          Repository is the container image repository, for example
+                          "docker.io/cloudflare/cloudflared". Defaults to the upstream
+                          Cloudflare image.
                         type: string
                       tag:
+                        description: |-
+                          Tag is the image tag. When omitted, the operator uses a
+                          compile-time default bumped per operator release.
                         type: string
                     type: object
                   nodeSelector:
@@ -1488,6 +1495,13 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: 'routing.defaultBackend: exactly one of serviceRef, url, httpStatus
+            must be set'
+          rule: '!has(self.spec.routing) || !has(self.spec.routing.defaultBackend)
+            || (has(self.spec.routing.defaultBackend.serviceRef) ? 1 : 0) + (has(self.spec.routing.defaultBackend.url)
+            ? 1 : 0) + (has(self.spec.routing.defaultBackend.httpStatus) ? 1 : 0)
+            == 1'
     served: true
     storage: true
     subresources:
