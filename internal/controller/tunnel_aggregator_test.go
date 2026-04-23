@@ -333,6 +333,141 @@ func TestAggregate_RuleInvalid(t *testing.T) {
 	})
 }
 
+// TestAggregate_WildcardSortsAfterSpecific verifies that at equal priority, a
+// literal hostname renders before a wildcard hostname even when the wildcard
+// rule's name sorts lexicographically first. This guards against the shadowing
+// bug described in adyanth/cloudflare-operator#147: cloudflared matches
+// top-down, so a wildcard that renders first would shadow any literal that
+// follows.
+func TestAggregate_WildcardSortsAfterSpecific(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		// "alpha" sorts before "beta" lexicographically; alpha has the wildcard.
+		ruleAt("alpha", "apps", t0, 100, "home", []string{"*.example.com"}, "http://alpha:8080"),
+		ruleAt("beta", "apps", t0, 100, "home", []string{"api.example.com"}, "http://beta:8080"),
+	}
+	result := Aggregate(rules, nil)
+
+	got := string(result.Rendered)
+	idxLiteral := strings.Index(got, "api.example.com")
+	idxWildcard := strings.Index(got, "*.example.com")
+	if idxLiteral < 0 {
+		t.Fatalf("api.example.com missing from render:\n%s", got)
+	}
+	if idxWildcard < 0 {
+		t.Fatalf("*.example.com missing from render:\n%s", got)
+	}
+	if idxLiteral > idxWildcard {
+		t.Errorf("wildcard *.example.com must render AFTER literal api.example.com; got wrong order:\n%s", got)
+	}
+	// Both rules are included (no duplicate hostname).
+	if result.Decisions[nn("apps", "alpha")].Status != RuleIncluded {
+		t.Errorf("alpha: want Included, got %v", result.Decisions[nn("apps", "alpha")])
+	}
+	if result.Decisions[nn("apps", "beta")].Status != RuleIncluded {
+		t.Errorf("beta: want Included, got %v", result.Decisions[nn("apps", "beta")])
+	}
+}
+
+// TestAggregate_WildcardSpecificityWithinRule verifies that a single rule
+// whose hostnames slice contains a mix of wildcards and literals renders them
+// in specificity order (more-specific first) rather than input order.
+func TestAggregate_WildcardSpecificityWithinRule(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		// Input order: wildcard-broad, literal, wildcard-narrow — render must reorder.
+		ruleAt("mixed", "apps", t0, 100, "home",
+			[]string{"*.example.com", "api.example.com", "*.api.example.com"},
+			"http://mixed:8080"),
+	}
+	result := Aggregate(rules, nil)
+
+	got := string(result.Rendered)
+	idxLiteral := strings.Index(got, "api.example.com")
+	idxNarrowWild := strings.Index(got, "*.api.example.com")
+	idxBroadWild := strings.Index(got, "*.example.com")
+	for _, pair := range []struct {
+		name  string
+		token string
+		idx   int
+	}{
+		{"api.example.com", "api.example.com", idxLiteral},
+		{"*.api.example.com", "*.api.example.com", idxNarrowWild},
+		{"*.example.com", "*.example.com", idxBroadWild},
+	} {
+		if pair.idx < 0 {
+			t.Fatalf("%s missing from render:\n%s", pair.name, got)
+		}
+	}
+	// Expected order: api.example.com < *.api.example.com < *.example.com
+	if idxLiteral > idxNarrowWild {
+		t.Errorf("api.example.com must render before *.api.example.com:\n%s", got)
+	}
+	if idxNarrowWild > idxBroadWild {
+		t.Errorf("*.api.example.com must render before *.example.com:\n%s", got)
+	}
+}
+
+// TestAggregate_PriorityBeatsSpecificity verifies that priority is the primary
+// sort key: a higher-priority wildcard rule must render before a lower-priority
+// literal rule, even though specificity would prefer the literal. Specificity
+// is a tiebreak only at equal priority.
+func TestAggregate_PriorityBeatsSpecificity(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		ruleAt("wildcard-high", "apps", t0, 200, "home", []string{"*.example.com"}, "http://wild:8080"),
+		ruleAt("literal-low", "apps", t0, 100, "home", []string{"api.example.com"}, "http://lit:8080"),
+	}
+	result := Aggregate(rules, nil)
+
+	got := string(result.Rendered)
+	idxWildcard := strings.Index(got, "*.example.com")
+	idxLiteral := strings.Index(got, "api.example.com")
+	if idxWildcard < 0 {
+		t.Fatalf("*.example.com missing from render:\n%s", got)
+	}
+	if idxLiteral < 0 {
+		t.Fatalf("api.example.com missing from render:\n%s", got)
+	}
+	// Higher priority must come first, even though it's a wildcard.
+	if idxWildcard > idxLiteral {
+		t.Errorf("higher-priority wildcard must render BEFORE lower-priority literal:\n%s", got)
+	}
+	if result.Decisions[nn("apps", "wildcard-high")].Status != RuleIncluded {
+		t.Errorf("wildcard-high: want Included, got %v", result.Decisions[nn("apps", "wildcard-high")])
+	}
+	if result.Decisions[nn("apps", "literal-low")].Status != RuleIncluded {
+		t.Errorf("literal-low: want Included, got %v", result.Decisions[nn("apps", "literal-low")])
+	}
+}
+
+// TestHostnameSpecificity verifies the specificity tuple (wildcardCount asc,
+// labelCount desc, hostname asc) returned by hostnameSpecificity.
+func TestHostnameSpecificity(t *testing.T) {
+	cases := []struct {
+		hostname      string
+		wantWildcards int
+		wantLabels    int
+	}{
+		{"api.example.com", 0, 3},
+		{"*.example.com", 1, 3},
+		{"*.api.example.com", 1, 4},
+		{"*.*.example.com", 2, 4},
+		{"example.com", 0, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.hostname, func(t *testing.T) {
+			gotW, gotL := hostnameSpecificity(tc.hostname)
+			if gotW != tc.wantWildcards {
+				t.Errorf("hostnameSpecificity(%q) wildcardCount = %d, want %d", tc.hostname, gotW, tc.wantWildcards)
+			}
+			if gotL != tc.wantLabels {
+				t.Errorf("hostnameSpecificity(%q) labelCount = %d, want %d", tc.hostname, gotL, tc.wantLabels)
+			}
+		})
+	}
+}
+
 // TestMergedOriginRequest exercises the originRequest merge semantics
 // indirectly through Aggregate's rendered output. mergedOriginRequest is not
 // exposed for direct testing.

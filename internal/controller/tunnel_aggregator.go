@@ -175,17 +175,39 @@ func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudfl
 	}
 	included = final
 
-	// Render included rules and record resolved backends.
+	// Flatten included rules to per-(rule, hostname) entries for render ordering.
+	// This allows specificity-based tiebreaking within and across rules at equal
+	// priority — without this, a rule with hostnames=["*.example.com",
+	// "api.example.com"] would emit them in input order, and a wildcard rule
+	// whose name sorts before a literal rule at equal priority would shadow the
+	// literal in cloudflared's top-down first-match evaluation.
+	//
+	// Sort key: (priority desc, wildcardCount asc, labelCount desc, hostname asc,
+	// namespace asc, name asc). Priority is the primary key; specificity is a
+	// tiebreak at equal priority. See hostnameSpecificity for the specificity
+	// tuple definition.
+	totalHostnames := 0
+	for _, r := range included {
+		totalHostnames += len(r.Spec.Hostnames)
+	}
+	entries := make([]renderEntry, 0, totalHostnames)
+	for _, r := range included {
+		for _, h := range r.Spec.Hostnames {
+			entries = append(entries, renderEntry{rule: r, hostname: h})
+		}
+	}
+	sort.SliceStable(entries, renderEntryLess(entries))
+
+	// Render in flat order and record resolved backends.
 	var b strings.Builder
 	b.WriteString("ingress:\n")
-	for _, r := range included {
+	for _, e := range entries {
+		r := e.rule
 		ub := renderBackend(&r.Spec.Backend, r.Namespace)
 		resolvedBackend[types.NamespacedName{Namespace: r.Namespace, Name: r.Name}] = ub
-		for _, h := range r.Spec.Hostnames {
-			fmt.Fprintf(&b, "  - hostname: %s\n    service: %s\n", h, ub)
-			if oReq := mergedOriginRequest(r, routing); oReq != "" {
-				b.WriteString(oReq)
-			}
+		fmt.Fprintf(&b, "  - hostname: %s\n    service: %s\n", e.hostname, ub)
+		if oReq := mergedOriginRequest(r, routing); oReq != "" {
+			b.WriteString(oReq)
 		}
 	}
 	if routing != nil && routing.DefaultBackend != nil {
@@ -207,6 +229,61 @@ func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudfl
 		ConfigHash: hex.EncodeToString(sum[:]),
 		Decisions:  decisions,
 	}
+}
+
+// renderEntry is a flattened per-(rule, hostname) unit used during the render
+// phase of Aggregate. Flattening allows the specificity sort to reorder
+// hostnames both within a single rule and across rules at equal priority.
+type renderEntry struct {
+	rule     *cloudflarev1alpha1.CloudflareTunnelRule
+	hostname string
+}
+
+// renderEntryLess returns a less function for sort.SliceStable over a
+// []renderEntry. Sort key: (priority desc, wildcardCount asc, labelCount desc,
+// hostname asc, namespace asc, name asc).
+func renderEntryLess(entries []renderEntry) func(i, j int) bool {
+	return func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.rule.Spec.Priority != b.rule.Spec.Priority {
+			return a.rule.Spec.Priority > b.rule.Spec.Priority
+		}
+		aw, al := hostnameSpecificity(a.hostname)
+		bw, bl := hostnameSpecificity(b.hostname)
+		if aw != bw {
+			return aw < bw // fewer wildcards = more specific = earlier
+		}
+		if al != bl {
+			return al > bl // more labels = more specific = earlier
+		}
+		if a.hostname != b.hostname {
+			return a.hostname < b.hostname
+		}
+		if a.rule.Namespace != b.rule.Namespace {
+			return a.rule.Namespace < b.rule.Namespace
+		}
+		return a.rule.Name < b.rule.Name
+	}
+}
+
+// hostnameSpecificity returns a two-element tuple used to order hostnames so
+// that more-specific entries render before broader wildcards. cloudflared
+// evaluates ingress rules top-down with first-match semantics (equivalent to
+// adyanth/cloudflare-operator issue #147): if *.example.com appears before
+// api.example.com, cloudflared matches api.example.com requests to the
+// wildcard and api.example.com's rule is never reached.
+//
+// The tuple is compared as (wildcardCount asc, labelCount desc):
+//   - wildcardCount: number of '*' characters. Zero wildcards = most specific.
+//   - labelCount: len(strings.Split(hostname, ".")). More labels = more
+//     specific (e.g. *.api.example.com has 4 labels vs *.example.com's 3).
+//
+// Callers that need a fully deterministic tiebreak should also compare the
+// hostname string lexicographically after this tuple.
+func hostnameSpecificity(hostname string) (wildcardCount int, labelCount int) {
+	wildcardCount = strings.Count(hostname, "*")
+	labelCount = len(strings.Split(hostname, "."))
+	return wildcardCount, labelCount
 }
 
 // earlier returns true when rule a has an earlier creationTimestamp than b,
