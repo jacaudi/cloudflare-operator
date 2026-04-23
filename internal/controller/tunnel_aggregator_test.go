@@ -46,6 +46,11 @@ func ruleAt(name, ns string, created time.Time, priority int, tunnel string, hos
 
 func strPtr(s string) *string { return &s }
 
+// nn is a small helper for building NamespacedName lookups in tests.
+func nn(ns, name string) types.NamespacedName {
+	return types.NamespacedName{Namespace: ns, Name: name}
+}
+
 func TestAggregate_SortAndRender(t *testing.T) {
 	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
 	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
@@ -81,8 +86,8 @@ func TestAggregate_SortAndRender(t *testing.T) {
 	}
 	// All three rules should be Included.
 	for _, name := range []string{"a-high", "b-low", "c-mid"} {
-		if result.Decisions[types.NamespacedName{Namespace: "apps", Name: name}].Status != RuleIncluded {
-			t.Errorf("%s: expected Included, got %v", name, result.Decisions[types.NamespacedName{Namespace: "apps", Name: name}])
+		if result.Decisions[nn("apps", name)].Status != RuleIncluded {
+			t.Errorf("%s: expected Included, got %v", name, result.Decisions[nn("apps", name)])
 		}
 	}
 	// Map length must match the number of rules processed.
@@ -100,11 +105,11 @@ func TestAggregate_DuplicateHostname_FirstWriterWins(t *testing.T) {
 	}
 	result := Aggregate(rules, nil)
 
-	if result.Decisions[types.NamespacedName{Namespace: "apps", Name: "earlier"}].Status != RuleIncluded {
-		t.Errorf("earlier should win, got decision %+v", result.Decisions[types.NamespacedName{Namespace: "apps", Name: "earlier"}])
+	if result.Decisions[nn("apps", "earlier")].Status != RuleIncluded {
+		t.Errorf("earlier should win, got decision %+v", result.Decisions[nn("apps", "earlier")])
 	}
-	if result.Decisions[types.NamespacedName{Namespace: "apps", Name: "later"}].Status != RuleDuplicateHostname {
-		t.Errorf("later should be rejected as duplicate, got %+v", result.Decisions[types.NamespacedName{Namespace: "apps", Name: "later"}])
+	if result.Decisions[nn("apps", "later")].Status != RuleDuplicateHostname {
+		t.Errorf("later should be rejected as duplicate, got %+v", result.Decisions[nn("apps", "later")])
 	}
 	// The rendered config should contain "http://a:8080" and NOT "http://b:8080".
 	got := string(result.Rendered)
@@ -120,6 +125,95 @@ func TestAggregate_DuplicateHostname_FirstWriterWins(t *testing.T) {
 	}
 }
 
+// TestAggregate_DuplicateHostname_SwapEvictsHigherPriority exercises the
+// swap path: higher-priority rule X is processed first (because Aggregate
+// orders by priority desc), but rule Y has an earlier creationTimestamp and
+// thus wins the first-writer tiebreak — X is evicted from the included set
+// and Y takes the hostname.
+func TestAggregate_DuplicateHostname_SwapEvictsHigherPriority(t *testing.T) {
+	early := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		// X: high priority but later creation — processed first by sort.
+		ruleAt("x-high", "apps", late, 200, "home", []string{"a.example.com"}, "http://x:8080"),
+		// Y: lower priority but earlier creation — wins the first-writer tiebreak.
+		ruleAt("y-low", "apps", early, 50, "home", []string{"a.example.com"}, "http://y:8080"),
+	}
+	result := Aggregate(rules, nil)
+
+	if got := result.Decisions[nn("apps", "y-low")].Status; got != RuleIncluded {
+		t.Errorf("y-low (earlier creationTimestamp) should be Included, got %v", got)
+	}
+	if got := result.Decisions[nn("apps", "x-high")].Status; got != RuleDuplicateHostname {
+		t.Errorf("x-high should be evicted as DuplicateHostname, got %v", got)
+	}
+	rendered := string(result.Rendered)
+	if !strings.Contains(rendered, "http://y:8080") {
+		t.Errorf("expected y's backend in render:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "http://x:8080") {
+		t.Errorf("did NOT expect x's backend in render after eviction:\n%s", rendered)
+	}
+	if len(result.Decisions) != len(rules) {
+		t.Errorf("expected %d decisions, got %d", len(rules), len(result.Decisions))
+	}
+}
+
+// TestAggregate_DuplicateHostname_ReleasedClaimReusable verifies that when an
+// included rule is evicted, all hostnames it had claimed are released, so a
+// later-processed rule can claim the now-free hostname.
+//
+// Setup:
+//   - P (mid priority, mid creationTimestamp): claims A AND B.
+//   - Q (highest priority, earliest creationTimestamp): claims A. Processed
+//     before P due to priority. Q wins fresh; nothing yet on A.
+//   - Wait, that won't trigger eviction. Reorder so the swap happens:
+//   - P (highest priority, MID creation): claims A,B. Processed first.
+//   - Q (mid priority, EARLIEST creation): claims A. Processed after P, finds
+//     conflict on A, wins tiebreak by earlier creation, evicts P (releasing
+//     both A AND B).
+//   - R (lowest priority, LATEST creation): claims B. Processed last; B is
+//     free again because P was evicted, so R is included.
+func TestAggregate_DuplicateHostname_ReleasedClaimReusable(t *testing.T) {
+	earliest := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	mid := time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		ruleAt("p", "apps", mid, 300, "home", []string{"a.example.com", "b.example.com"}, "http://p:8080"),
+		ruleAt("q", "apps", earliest, 200, "home", []string{"a.example.com"}, "http://q:8080"),
+		ruleAt("r", "apps", latest, 50, "home", []string{"b.example.com"}, "http://r:8080"),
+	}
+	result := Aggregate(rules, nil)
+
+	// P is evicted by Q (Q has earlier creationTimestamp).
+	if got := result.Decisions[nn("apps", "p")].Status; got != RuleDuplicateHostname {
+		t.Errorf("p should be evicted as DuplicateHostname, got %v", got)
+	}
+	// Q is included.
+	if got := result.Decisions[nn("apps", "q")].Status; got != RuleIncluded {
+		t.Errorf("q should be Included, got %v", got)
+	}
+	// R must be included because P's claim on B was released when P was evicted.
+	if got := result.Decisions[nn("apps", "r")].Status; got != RuleIncluded {
+		t.Errorf("r should be Included (B was released by P's eviction), got %v", got)
+	}
+
+	rendered := string(result.Rendered)
+	if !strings.Contains(rendered, "http://q:8080") {
+		t.Errorf("expected q's backend in render:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "http://r:8080") {
+		t.Errorf("expected r's backend in render (released-claim reuse):\n%s", rendered)
+	}
+	if strings.Contains(rendered, "http://p:8080") {
+		t.Errorf("did NOT expect p's backend in render after eviction:\n%s", rendered)
+	}
+	// R must specifically be paired with hostname b.example.com.
+	if !strings.Contains(rendered, "hostname: b.example.com\n    service: http://r:8080") {
+		t.Errorf("expected R to be the rule rendered for b.example.com:\n%s", rendered)
+	}
+}
+
 func TestAggregate_HashStableAcrossShuffle(t *testing.T) {
 	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
 	rulesA := []cloudflarev1alpha1.CloudflareTunnelRule{
@@ -132,6 +226,25 @@ func TestAggregate_HashStableAcrossShuffle(t *testing.T) {
 	}
 	if Aggregate(rulesA, nil).ConfigHash != Aggregate(rulesB, nil).ConfigHash {
 		t.Fatal("hash must be stable regardless of input order")
+	}
+}
+
+// TestAggregate_HashChangesWithRouting locks in that routing.DefaultBackend
+// participates in the rendered config and therefore the ConfigHash. If this
+// test ever passes for the wrong reason (i.e. hashes match), the rollout
+// gating in the tunnel controller would silently miss routing changes.
+func TestAggregate_HashChangesWithRouting(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		ruleAt("a", "apps", t0, 100, "home", []string{"a.example.com"}, "http://a:8080"),
+	}
+	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{URL: strPtr("https://default.svc:443")},
+	}
+	hashWithout := Aggregate(rules, nil).ConfigHash
+	hashWith := Aggregate(rules, routing).ConfigHash
+	if hashWithout == hashWith {
+		t.Fatalf("ConfigHash must differ when routing.DefaultBackend changes; both = %s", hashWithout)
 	}
 }
 
@@ -158,4 +271,171 @@ func TestAggregate_ResolvesServiceRef(t *testing.T) {
 	if !strings.Contains(got, "http://rickroll.selfhosted.svc.cluster.local:8080") {
 		t.Errorf("expected resolved serviceRef in render:\n%s", got)
 	}
+}
+
+// TestAggregate_RuleInvalid covers the validation path that produces a
+// RuleInvalid decision and excludes the rule from the rendered config.
+func TestAggregate_RuleInvalid(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+
+	t.Run("empty hostnames", func(t *testing.T) {
+		bad := cloudflarev1alpha1.CloudflareTunnelRule{
+			ObjectMeta: metav1.ObjectMeta{Name: "bad", Namespace: "apps", UID: "bad-uid", CreationTimestamp: metav1.NewTime(t0)},
+			Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+				TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home"},
+				Hostnames: nil,
+				Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: strPtr("http://x:8080")},
+				Priority:  100,
+			},
+		}
+		good := ruleAt("good", "apps", t0, 100, "home", []string{"good.example.com"}, "http://good:8080")
+		result := Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{bad, good}, nil)
+
+		if got := result.Decisions[nn("apps", "bad")].Status; got != RuleInvalid {
+			t.Errorf("bad rule status = %v, want RuleInvalid", got)
+		}
+		if msg := result.Decisions[nn("apps", "bad")].Message; !strings.Contains(msg, "hostnames") {
+			t.Errorf("bad rule Message should mention hostnames, got %q", msg)
+		}
+		if strings.Contains(string(result.Rendered), "http://x:8080") {
+			t.Errorf("rendered config must not contain invalid rule's backend:\n%s", string(result.Rendered))
+		}
+		if len(result.Decisions) != 2 {
+			t.Errorf("expected 2 decisions, got %d", len(result.Decisions))
+		}
+	})
+
+	t.Run("multi-set backend", func(t *testing.T) {
+		status := 503
+		bad := cloudflarev1alpha1.CloudflareTunnelRule{
+			ObjectMeta: metav1.ObjectMeta{Name: "bad", Namespace: "apps", UID: "bad-uid", CreationTimestamp: metav1.NewTime(t0)},
+			Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+				TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home"},
+				Hostnames: []string{"bad.example.com"},
+				Backend: cloudflarev1alpha1.TunnelRuleBackend{
+					URL:        strPtr("http://x:8080"),
+					HTTPStatus: &status,
+				},
+				Priority: 100,
+			},
+		}
+		result := Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{bad}, nil)
+
+		if got := result.Decisions[nn("apps", "bad")].Status; got != RuleInvalid {
+			t.Errorf("bad rule status = %v, want RuleInvalid", got)
+		}
+		if msg := result.Decisions[nn("apps", "bad")].Message; !strings.Contains(msg, "exactly one") {
+			t.Errorf("bad rule Message should mention 'exactly one', got %q", msg)
+		}
+		if strings.Contains(string(result.Rendered), "bad.example.com") {
+			t.Errorf("rendered config must not contain invalid rule's hostname:\n%s", string(result.Rendered))
+		}
+	})
+}
+
+// TestMergedOriginRequest exercises the originRequest merge semantics
+// indirectly through Aggregate's rendered output. mergedOriginRequest is not
+// exposed for direct testing.
+func TestMergedOriginRequest(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	mkRule := func(own *cloudflarev1alpha1.TunnelRuleOriginRequest) cloudflarev1alpha1.CloudflareTunnelRule {
+		return cloudflarev1alpha1.CloudflareTunnelRule{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps", UID: "r-uid", CreationTimestamp: metav1.NewTime(t0)},
+			Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+				TunnelRef:     cloudflarev1alpha1.TunnelReference{Name: "home"},
+				Hostnames:     []string{"h.example.com"},
+				Backend:       cloudflarev1alpha1.TunnelRuleBackend{URL: strPtr("http://b:8080")},
+				Priority:      100,
+				OriginRequest: own,
+			},
+		}
+	}
+
+	t.Run("tunnel default only", func(t *testing.T) {
+		routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+			OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+				NoTLSVerify:      true,
+				OriginServerName: "tunnel.example.com",
+			},
+		}
+		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(nil)}, routing).Rendered)
+		if !strings.Contains(got, "originRequest:") {
+			t.Errorf("expected originRequest block in render:\n%s", got)
+		}
+		if !strings.Contains(got, "noTLSVerify: true") {
+			t.Errorf("expected tunnel noTLSVerify:true in render:\n%s", got)
+		}
+		if !strings.Contains(got, "originServerName: tunnel.example.com") {
+			t.Errorf("expected tunnel originServerName in render:\n%s", got)
+		}
+	})
+
+	t.Run("rule only", func(t *testing.T) {
+		own := &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			NoTLSVerify:      true,
+			OriginServerName: "rule.example.com",
+		}
+		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, nil).Rendered)
+		if !strings.Contains(got, "noTLSVerify: true") {
+			t.Errorf("expected rule noTLSVerify:true in render:\n%s", got)
+		}
+		if !strings.Contains(got, "originServerName: rule.example.com") {
+			t.Errorf("expected rule originServerName in render:\n%s", got)
+		}
+	})
+
+	t.Run("both set: rule wins entirely", func(t *testing.T) {
+		routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+			OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+				NoTLSVerify:      true,
+				OriginServerName: "tunnel.example.com",
+				HTTPHostHeader:   "tunnel-host",
+			},
+		}
+		own := &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			NoTLSVerify:      true,
+			OriginServerName: "rule.example.com",
+			// No HTTPHostHeader on rule — must NOT inherit from tunnel.
+		}
+		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, routing).Rendered)
+		if !strings.Contains(got, "originServerName: rule.example.com") {
+			t.Errorf("expected rule originServerName to win:\n%s", got)
+		}
+		if strings.Contains(got, "originServerName: tunnel.example.com") {
+			t.Errorf("did NOT expect tunnel originServerName when rule overrides:\n%s", got)
+		}
+		if strings.Contains(got, "tunnel-host") {
+			t.Errorf("did NOT expect tunnel HTTPHostHeader to leak through (rule wins entirely):\n%s", got)
+		}
+	})
+
+	t.Run("rule explicit false overrides tunnel true (no noTLSVerify line)", func(t *testing.T) {
+		routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+			OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+				NoTLSVerify: true,
+			},
+		}
+		// Rule sets NoTLSVerify=false (zero value) but provides a non-nil
+		// OriginRequest — per the documented merge semantic, the rule wins
+		// entirely, so the rendered output must NOT contain a noTLSVerify line
+		// (cloudflared's default of false then takes effect).
+		own := &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			NoTLSVerify:      false,
+			OriginServerName: "rule.example.com",
+		}
+		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, routing).Rendered)
+		if strings.Contains(got, "noTLSVerify") {
+			t.Errorf("rule's NoTLSVerify=false must suppress the noTLSVerify line entirely (rule wins):\n%s", got)
+		}
+		if !strings.Contains(got, "originServerName: rule.example.com") {
+			t.Errorf("expected rule originServerName in render:\n%s", got)
+		}
+	})
+
+	t.Run("neither set: no originRequest block", func(t *testing.T) {
+		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(nil)}, nil).Rendered)
+		if strings.Contains(got, "originRequest") {
+			t.Errorf("did NOT expect originRequest block when neither side sets it:\n%s", got)
+		}
+	})
 }

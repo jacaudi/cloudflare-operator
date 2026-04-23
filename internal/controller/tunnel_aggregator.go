@@ -41,6 +41,13 @@ const (
 	RuleInvalid RuleDecisionStatus = "Invalid"
 )
 
+// originRequestHeader is the literal indented header line written before any
+// originRequest field rendering. Centralising the string lets the empty-block
+// guard (in mergedOriginRequest) compare lengths against the header, instead
+// of duplicating the literal — so changes to indent don't silently break
+// suppression.
+const originRequestHeader = "    originRequest:\n"
+
 // RuleDecision records why a rule was or was not included.
 type RuleDecision struct {
 	Status          RuleDecisionStatus
@@ -104,15 +111,11 @@ func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudfl
 		return a.Namespace < b.Namespace
 	})
 
-	// claimant returns the workItem pointer for the given key, used during the
-	// first-writer swap path to retrieve the original rule for comparison.
-	claimant := func(k types.NamespacedName) *cloudflarev1alpha1.CloudflareTunnelRule {
-		for _, w := range work {
-			if w.key == k {
-				return w.rule
-			}
-		}
-		return nil
+	// Pre-build a key->rule lookup so the swap path doesn't do an O(N) scan
+	// of work for every conflict.
+	byKey := make(map[types.NamespacedName]*cloudflarev1alpha1.CloudflareTunnelRule, len(work))
+	for _, w := range work {
+		byKey[w.key] = w.rule
 	}
 
 	// Walk in priority order; for each hostname, if a prior claim exists,
@@ -129,7 +132,7 @@ func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudfl
 			}
 		}
 		if conflictWith.Name != "" {
-			priorRule := claimant(conflictWith)
+			priorRule := byKey[conflictWith]
 			// First-writer tiebreak: whichever rule has an earlier
 			// creationTimestamp (then UID) wins, regardless of priority order.
 			if earlier(w.rule, priorRule) {
@@ -176,7 +179,7 @@ func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudfl
 	var b strings.Builder
 	b.WriteString("ingress:\n")
 	for _, r := range included {
-		ub := resolveBackend(r, routing)
+		ub := renderBackend(&r.Spec.Backend, r.Namespace)
 		resolvedBackend[types.NamespacedName{Namespace: r.Namespace, Name: r.Name}] = ub
 		for _, h := range r.Spec.Hostnames {
 			fmt.Fprintf(&b, "  - hostname: %s\n    service: %s\n", h, ub)
@@ -207,20 +210,15 @@ func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudfl
 }
 
 // earlier returns true when rule a has an earlier creationTimestamp than b,
-// or, if timestamps are equal, when a's UID sorts before b's UID.
+// or, if timestamps are equal, when a's UID sorts before b's UID. UIDs are
+// RFC4122-style strings, deterministic across the cluster, so lexicographic
+// ordering serves as a stable (semantically arbitrary) tiebreak.
 func earlier(a, b *cloudflarev1alpha1.CloudflareTunnelRule) bool {
 	at, bt := a.CreationTimestamp.Time, b.CreationTimestamp.Time
 	if !at.Equal(bt) {
 		return at.Before(bt)
 	}
 	return a.UID < b.UID
-}
-
-// resolveBackend returns the cloudflared service URL for a rule, inheriting
-// routing defaults for context (currently unused at render time; reserved for
-// future per-rule scheme defaulting based on tunnel-level config).
-func resolveBackend(r *cloudflarev1alpha1.CloudflareTunnelRule, _ *cloudflarev1alpha1.TunnelRoutingSpec) string {
-	return renderBackend(&r.Spec.Backend, r.Namespace)
 }
 
 // renderBackend produces the cloudflared "service:" value for a TunnelRuleBackend.
@@ -245,6 +243,11 @@ func renderBackend(b *cloudflarev1alpha1.TunnelRuleBackend, ruleNamespace string
 	case b.HTTPStatus != nil:
 		return fmt.Sprintf("http_status:%d", *b.HTTPStatus)
 	default:
+		// Defense-in-depth fallback for a malformed routing.DefaultBackend
+		// that bypassed CRD CEL validation (e.g. backend with all three fields
+		// nil). Rule backends cannot reach here because Aggregate filters them
+		// upstream via IsExactlyOne(). 500 (rather than 404) is chosen so
+		// operators see a distinct server-error signal from the catch-all 404.
 		return "http_status:500"
 	}
 }
@@ -280,7 +283,7 @@ func mergedOriginRequest(r *cloudflarev1alpha1.CloudflareTunnelRule, routing *cl
 	}
 
 	var b strings.Builder
-	b.WriteString("    originRequest:\n")
+	b.WriteString(originRequestHeader)
 	if merge.NoTLSVerify {
 		b.WriteString("      noTLSVerify: true\n")
 	}
@@ -288,16 +291,18 @@ func mergedOriginRequest(r *cloudflarev1alpha1.CloudflareTunnelRule, routing *cl
 		fmt.Fprintf(&b, "      originServerName: %s\n", merge.OriginServerName)
 	}
 	if merge.ConnectTimeout != nil {
+		// cloudflared accepts Go's time.Duration string format here
+		// (e.g. "30s", "1m30s") for connectTimeout.
 		fmt.Fprintf(&b, "      connectTimeout: %s\n", merge.ConnectTimeout.Duration.String())
 	}
 	if merge.HTTPHostHeader != "" {
 		fmt.Fprintf(&b, "      httpHostHeader: %s\n", merge.HTTPHostHeader)
 	}
-	// If the header was written but nothing was added (all fields zero after
-	// merge), return empty to avoid a dangling "originRequest:\n" block.
-	result := b.String()
-	if result == "    originRequest:\n" {
+	// Empty-block suppression: if only the header was written (every merged
+	// field is zero), return "" so the caller emits nothing — avoids a
+	// dangling "originRequest:\n" with no fields underneath.
+	if b.Len() == len(originRequestHeader) {
 		return ""
 	}
-	return result
+	return b.String()
 }
