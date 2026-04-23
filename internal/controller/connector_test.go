@@ -17,9 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"reflect"
 	"testing"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -87,40 +90,49 @@ func TestBuildConnectorResources_Basic(t *testing.T) {
 	if dep.Spec.Template.Spec.ServiceAccountName != sa.Name {
 		t.Errorf("pod SA = %q, want %q", dep.Spec.Template.Spec.ServiceAccountName, sa.Name)
 	}
-	// Security posture
-	psc := dep.Spec.Template.Spec.SecurityContext
-	if psc == nil || psc.RunAsNonRoot == nil || !*psc.RunAsNonRoot {
-		t.Errorf("pod must runAsNonRoot=true")
-	}
 	if len(dep.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("expected 1 container, got %d", len(dep.Spec.Template.Spec.Containers))
 	}
 	c := dep.Spec.Template.Spec.Containers[0]
-	if c.SecurityContext == nil || c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem {
-		t.Errorf("container must ReadOnlyRootFilesystem=true")
-	}
-	if c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
-		t.Errorf("container must AllowPrivilegeEscalation=false")
-	}
-	// Credentials Secret mounted.
-	foundCreds := false
+
+	// Credentials Secret mounted (Volume + VolumeMount).
+	foundCredsVol := false
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.Secret != nil && v.Secret.SecretName == tun.Spec.GeneratedSecretName {
-			foundCreds = true
+			foundCredsVol = true
 		}
 	}
-	if !foundCreds {
-		t.Errorf("pod does not mount credentials Secret %q", tun.Spec.GeneratedSecretName)
+	if !foundCredsVol {
+		t.Errorf("pod does not mount credentials Secret %q as a Volume", tun.Spec.GeneratedSecretName)
 	}
-	// Config ConfigMap mounted.
-	foundConfig := false
+	foundCredsMount := false
+	for _, m := range c.VolumeMounts {
+		if m.Name == "credentials" && m.MountPath == "/etc/cloudflared/credentials" && m.ReadOnly {
+			foundCredsMount = true
+		}
+	}
+	if !foundCredsMount {
+		t.Errorf("container missing read-only VolumeMount of credentials at /etc/cloudflared/credentials: %+v", c.VolumeMounts)
+	}
+
+	// Config ConfigMap mounted (Volume + VolumeMount).
+	foundConfigVol := false
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.ConfigMap != nil && v.ConfigMap.Name == ConnectorNames(tun).ConfigMap {
-			foundConfig = true
+			foundConfigVol = true
 		}
 	}
-	if !foundConfig {
-		t.Errorf("pod does not mount config ConfigMap")
+	if !foundConfigVol {
+		t.Errorf("pod does not mount config ConfigMap as a Volume")
+	}
+	foundConfigMount := false
+	for _, m := range c.VolumeMounts {
+		if m.Name == "config" && m.MountPath == "/etc/cloudflared" && m.ReadOnly {
+			foundConfigMount = true
+		}
+	}
+	if !foundConfigMount {
+		t.Errorf("container missing read-only VolumeMount of config at /etc/cloudflared: %+v", c.VolumeMounts)
 	}
 }
 
@@ -143,6 +155,39 @@ func TestBuildConnectorDeployment_ImageExplicit(t *testing.T) {
 	dep := BuildConnectorDeployment(tun, "h")
 	if got, want := dep.Spec.Template.Spec.Containers[0].Image, "quay.io/my/cloudflared:2026.3.0"; got != want {
 		t.Errorf("image = %q, want %q", got, want)
+	}
+}
+
+// TestBuildConnectorDeployment_ImageRepoOnly verifies that when the user sets
+// only Image.Repository (no Tag), the default tag is combined with the
+// user-supplied repository — NOT silently discarded in favor of the full
+// default image reference.
+func TestBuildConnectorDeployment_ImageRepoOnly(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Image = &cloudflarev1alpha1.ConnectorImage{
+		Repository: "quay.io/mirror/cloudflared",
+	}
+	dep := BuildConnectorDeployment(tun, "h")
+	got := dep.Spec.Template.Spec.Containers[0].Image
+	want := "quay.io/mirror/cloudflared:2026.3.0"
+	if got != want {
+		t.Errorf("image = %q, want %q (user repo must combine with default tag)", got, want)
+	}
+}
+
+// TestBuildConnectorDeployment_ImageTagOnly verifies that when the user sets
+// only Image.Tag (no Repository), the default repo is combined with the
+// user-supplied tag.
+func TestBuildConnectorDeployment_ImageTagOnly(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Image = &cloudflarev1alpha1.ConnectorImage{
+		Tag: "2026.4.1",
+	}
+	dep := BuildConnectorDeployment(tun, "h")
+	got := dep.Spec.Template.Spec.Containers[0].Image
+	want := "docker.io/cloudflare/cloudflared:2026.4.1"
+	if got != want {
+		t.Errorf("image = %q, want %q (user tag must combine with default repo)", got, want)
 	}
 }
 
@@ -197,5 +242,138 @@ func TestBuildConnectorDeployment_NilConnector(t *testing.T) {
 	}
 	if *dep.Spec.Replicas != 2 {
 		t.Errorf("Replicas with nil connector = %d, want 2", *dep.Spec.Replicas)
+	}
+}
+
+// TestBuildConnectorDeployment_SecurityPosture asserts the full
+// PodSecurityStandard "restricted" posture: runAsNonRoot, runAsUser/Group,
+// drop-ALL caps, no privilege escalation, RO root FS, runtime-default seccomp.
+func TestBuildConnectorDeployment_SecurityPosture(t *testing.T) {
+	tun := tunnelFixture(true)
+	dep := BuildConnectorDeployment(tun, "h")
+
+	psc := dep.Spec.Template.Spec.SecurityContext
+	if psc == nil {
+		t.Fatal("PodSecurityContext is nil")
+	}
+	if psc.RunAsNonRoot == nil || !*psc.RunAsNonRoot {
+		t.Errorf("pod must runAsNonRoot=true")
+	}
+	if psc.RunAsUser == nil || *psc.RunAsUser != 65532 {
+		t.Errorf("pod RunAsUser = %v, want 65532", psc.RunAsUser)
+	}
+	if psc.RunAsGroup == nil || *psc.RunAsGroup != 65532 {
+		t.Errorf("pod RunAsGroup = %v, want 65532", psc.RunAsGroup)
+	}
+	if psc.FSGroup != nil {
+		t.Errorf("pod FSGroup must be unset for read-only mounts, got %d", *psc.FSGroup)
+	}
+	if psc.SeccompProfile == nil || psc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Errorf("pod SeccompProfile = %+v, want RuntimeDefault", psc.SeccompProfile)
+	}
+
+	if len(dep.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(dep.Spec.Template.Spec.Containers))
+	}
+	csc := dep.Spec.Template.Spec.Containers[0].SecurityContext
+	if csc == nil {
+		t.Fatal("container SecurityContext is nil")
+	}
+	if csc.ReadOnlyRootFilesystem == nil || !*csc.ReadOnlyRootFilesystem {
+		t.Errorf("container must ReadOnlyRootFilesystem=true")
+	}
+	if csc.AllowPrivilegeEscalation == nil || *csc.AllowPrivilegeEscalation {
+		t.Errorf("container must AllowPrivilegeEscalation=false")
+	}
+	if csc.Capabilities == nil {
+		t.Fatal("container Capabilities is nil")
+	}
+	wantDrop := []corev1.Capability{"ALL"}
+	if !reflect.DeepEqual(csc.Capabilities.Drop, wantDrop) {
+		t.Errorf("container Capabilities.Drop = %v, want %v", csc.Capabilities.Drop, wantDrop)
+	}
+	if len(csc.Capabilities.Add) != 0 {
+		t.Errorf("container Capabilities.Add = %v, want empty", csc.Capabilities.Add)
+	}
+}
+
+// TestBuildConnectorDeployment_ReadinessProbe asserts the cloudflared
+// readiness probe is wired correctly so failing connectors are flagged unready.
+func TestBuildConnectorDeployment_ReadinessProbe(t *testing.T) {
+	tun := tunnelFixture(true)
+	dep := BuildConnectorDeployment(tun, "h")
+	if len(dep.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(dep.Spec.Template.Spec.Containers))
+	}
+	probe := dep.Spec.Template.Spec.Containers[0].ReadinessProbe
+	if probe == nil {
+		t.Fatal("ReadinessProbe is nil")
+	}
+	if probe.Exec == nil {
+		t.Fatal("ReadinessProbe.Exec is nil")
+	}
+	wantCmd := []string{"cloudflared", "tunnel", "--config", "/etc/cloudflared/config.yaml", "ready"}
+	if !reflect.DeepEqual(probe.Exec.Command, wantCmd) {
+		t.Errorf("ReadinessProbe.Exec.Command = %v, want %v", probe.Exec.Command, wantCmd)
+	}
+	if probe.PeriodSeconds != 10 {
+		t.Errorf("ReadinessProbe.PeriodSeconds = %d, want 10", probe.PeriodSeconds)
+	}
+}
+
+// TestBuildConnectorDeployment_PartialResources ensures Requests and Limits
+// are defaulted independently. A user who specifies only Requests must still
+// receive the Memory limit safety floor.
+func TestBuildConnectorDeployment_PartialResources(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("50m"),
+			corev1.ResourceMemory: resource.MustParse("64Mi"),
+		},
+	}
+	dep := BuildConnectorDeployment(tun, "h")
+	got := dep.Spec.Template.Spec.Containers[0].Resources
+
+	// User-supplied Requests must be preserved exactly.
+	if q := got.Requests[corev1.ResourceCPU]; !q.Equal(resource.MustParse("50m")) {
+		t.Errorf("Requests[CPU] = %s, want 50m", q.String())
+	}
+	if q := got.Requests[corev1.ResourceMemory]; !q.Equal(resource.MustParse("64Mi")) {
+		t.Errorf("Requests[Memory] = %s, want 64Mi", q.String())
+	}
+	// Limits default must still fire (Memory only).
+	if got.Limits == nil {
+		t.Fatal("Limits is nil; default Memory limit did not fire")
+	}
+	if q := got.Limits[corev1.ResourceMemory]; !q.Equal(resource.MustParse("256Mi")) {
+		t.Errorf("Limits[Memory] = %s, want 256Mi", q.String())
+	}
+}
+
+// TestBuildConnectorDeployment_PartialResources_LimitsOnly mirrors the above
+// for the user-set-only-Limits case: Requests defaults must still fire.
+func TestBuildConnectorDeployment_PartialResources_LimitsOnly(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Resources = corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+	}
+	dep := BuildConnectorDeployment(tun, "h")
+	got := dep.Spec.Template.Spec.Containers[0].Resources
+
+	if got.Requests == nil {
+		t.Fatal("Requests is nil; default did not fire")
+	}
+	if q := got.Requests[corev1.ResourceCPU]; !q.Equal(resource.MustParse("10m")) {
+		t.Errorf("Requests[CPU] = %s, want 10m", q.String())
+	}
+	if q := got.Requests[corev1.ResourceMemory]; !q.Equal(resource.MustParse("128Mi")) {
+		t.Errorf("Requests[Memory] = %s, want 128Mi", q.String())
+	}
+	// User-supplied Limits preserved.
+	if q := got.Limits[corev1.ResourceMemory]; !q.Equal(resource.MustParse("512Mi")) {
+		t.Errorf("Limits[Memory] = %s, want 512Mi", q.String())
 	}
 }

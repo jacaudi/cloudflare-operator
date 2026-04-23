@@ -26,9 +26,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// DefaultConnectorImage is used when spec.connector.image is unset. Bumped
-// per operator release and documented in release notes.
-const DefaultConnectorImage = "docker.io/cloudflare/cloudflared:2026.3.0"
+// Default connector image components. DefaultConnectorImage is built from
+// these so version bumps stay consistent with the partial-image fallback in
+// resolveConnectorImage. Bumped per operator release.
+const (
+	defaultConnectorRepo = "docker.io/cloudflare/cloudflared"
+	defaultConnectorTag  = "2026.3.0"
+)
+
+// DefaultConnectorImage is used when spec.connector.image is unset.
+const DefaultConnectorImage = defaultConnectorRepo + ":" + defaultConnectorTag
 
 // ConnectorResourceNames are the deterministic names of the resources the
 // connector sub-reconciler manages for a given CloudflareTunnel.
@@ -69,6 +76,32 @@ func connectorOwnerRef(tun *cloudflarev1alpha1.CloudflareTunnel) []metav1.OwnerR
 	}}
 }
 
+// resolveConnectorImage picks the image reference for the cloudflared
+// container. The four cases:
+//
+//  1. img == nil                          -> DefaultConnectorImage
+//  2. img.Repository == "" && Tag == ""   -> DefaultConnectorImage
+//  3. img.Repository set, Tag == ""       -> "<repo>:" + defaultConnectorTag
+//  4. img.Repository == "", Tag set       -> defaultConnectorRepo + ":<tag>"
+//  5. both set                            -> "<repo>:<tag>"
+//
+// Cases 3 and 4 deliberately combine the user-supplied half with the default
+// for the other half, so partial overrides do not silently discard user input.
+func resolveConnectorImage(img *cloudflarev1alpha1.ConnectorImage) string {
+	if img == nil {
+		return DefaultConnectorImage
+	}
+	repo := img.Repository
+	if repo == "" {
+		repo = defaultConnectorRepo
+	}
+	tag := img.Tag
+	if tag == "" {
+		tag = defaultConnectorTag
+	}
+	return fmt.Sprintf("%s:%s", repo, tag)
+}
+
 // BuildConnectorServiceAccount produces the desired ServiceAccount for tun.
 func BuildConnectorServiceAccount(tun *cloudflarev1alpha1.CloudflareTunnel) *corev1.ServiceAccount {
 	n := ConnectorNames(tun)
@@ -102,11 +135,22 @@ func BuildConnectorConfigMap(tun *cloudflarev1alpha1.CloudflareTunnel, renderedC
 
 // BuildConnectorDeployment produces the desired Deployment running cloudflared.
 //
-// Replicas handling: when cspec is nil (defensive path), default to 2. When
-// cspec is non-nil, use cspec.Replicas directly — this preserves a user-set
-// value of 0 (scale-down intent). The apiserver default of 2 fires only on
-// field-absent creates, so by the time the controller reads the spec the value
-// is always meaningful.
+// Replicas: when cspec is nil (defensive path), default to 2. When cspec is
+// non-nil, use cspec.Replicas directly — this preserves a user-set value of 0
+// (scale-down intent). The apiserver default of 2 fires only on field-absent
+// creates, so by the time the controller reads the spec the value is always
+// meaningful.
+//
+// Image: see resolveConnectorImage for the four-case partial-override matrix.
+//
+// Resources: cspec.Resources.Requests and cspec.Resources.Limits are defaulted
+// independently so a user supplying only Requests still gets the Memory limit
+// safety floor (and vice versa). Defaults: 10m CPU + 128Mi Memory requests,
+// 256Mi Memory limit.
+//
+// Note: cspec.Resources is shallow-copied into the container; ResourceList and
+// other map fields share storage with the input. Build* functions never mutate
+// the spec in place, so this aliasing is safe.
 func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHash string) *appsv1.Deployment {
 	n := ConnectorNames(tun)
 	cspec := tun.Spec.Connector
@@ -119,16 +163,7 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 		replicas = cspec.Replicas
 	}
 
-	image := DefaultConnectorImage
-	if cspec.Image != nil {
-		repo := cspec.Image.Repository
-		if repo == "" {
-			repo = "docker.io/cloudflare/cloudflared"
-		}
-		if cspec.Image.Tag != "" {
-			image = fmt.Sprintf("%s:%s", repo, cspec.Image.Tag)
-		}
-	}
+	image := resolveConnectorImage(cspec.Image)
 
 	labels := connectorLabels(tun)
 	nonRoot := true
@@ -136,17 +171,19 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 	readOnlyFS := true
 	privEsc := false
 
+	// Independently default Requests and Limits so partial user input still
+	// receives the corresponding safety floor for the unset half. Aliasing the
+	// user's ResourceList maps is intentional (no in-place mutation occurs).
 	containerResources := cspec.Resources
-	if containerResources.Limits == nil && containerResources.Requests == nil {
-		// Apply a safe default so OOMKills are less likely.
-		containerResources = corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("10m"),
-				corev1.ResourceMemory: resource.MustParse("128Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceMemory: resource.MustParse("256Mi"),
-			},
+	if containerResources.Requests == nil {
+		containerResources.Requests = corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("10m"),
+			corev1.ResourceMemory: resource.MustParse("128Mi"),
+		}
+	}
+	if containerResources.Limits == nil {
+		containerResources.Limits = corev1.ResourceList{
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
 		}
 	}
 
@@ -156,11 +193,12 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 		Tolerations:               cspec.Tolerations,
 		Affinity:                  cspec.Affinity,
 		TopologySpreadConstraints: cspec.TopologySpreadConstraints,
+		// FSGroup is intentionally unset: both volumes are read-only, and
+		// FSGroup forces a recursive chown on some CSI drivers.
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsNonRoot: &nonRoot,
 			RunAsUser:    &runAsUID,
 			RunAsGroup:   &runAsUID,
-			FSGroup:      &runAsUID,
 			SeccompProfile: &corev1.SeccompProfile{
 				Type: corev1.SeccompProfileTypeRuntimeDefault,
 			},
