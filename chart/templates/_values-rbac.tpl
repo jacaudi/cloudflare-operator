@@ -14,10 +14,31 @@ rbac:
         - apiGroups:
             - ""
           resources:
+            - configmaps
+            - serviceaccounts
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
+        - apiGroups:
+            - ""
+          resources:
             - events
           verbs:
             - create
             - patch
+        - apiGroups:
+            - ""
+          resources:
+            - pods
+          verbs:
+            - get
+            - list
+            - watch
         - apiGroups:
             - ""
           resources:
@@ -28,6 +49,26 @@ rbac:
             - list
             - patch
             - update
+            - watch
+        - apiGroups:
+            - apps
+          resources:
+            - deployments
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
+        - apiGroups:
+            - apps
+          resources:
+            - replicasets
+          verbs:
+            - get
+            - list
             - watch
         - apiGroups:
             - cloudflare.io
@@ -60,6 +101,7 @@ rbac:
           resources:
             - cloudflarednsrecords/status
             - cloudflarerulesets/status
+            - cloudflaretunnelrules/status
             - cloudflaretunnels/status
             - cloudflarezoneconfigs/status
             - cloudflarezones/status
@@ -67,6 +109,14 @@ rbac:
             - get
             - patch
             - update
+        - apiGroups:
+            - cloudflare.io
+          resources:
+            - cloudflaretunnelrules
+          verbs:
+            - get
+            - list
+            - watch
 {{- if .Values.leaderElection.enabled }}
     leader-election:
       enabled: true

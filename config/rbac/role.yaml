@@ -7,10 +7,31 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - events
   verbs:
   - create
   - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -21,6 +42,26 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - replicasets
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - cloudflare.io
@@ -53,6 +94,7 @@ rules:
   resources:
   - cloudflarednsrecords/status
   - cloudflarerulesets/status
+  - cloudflaretunnelrules/status
   - cloudflaretunnels/status
   - cloudflarezoneconfigs/status
   - cloudflarezones/status
@@ -60,3 +102,11 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - cloudflare.io
+  resources:
+  - cloudflaretunnelrules
+  verbs:
+  - get
+  - list
+  - watch
