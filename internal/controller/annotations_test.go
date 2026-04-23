@@ -99,6 +99,9 @@ func TestMergeAnnotations(t *testing.T) {
 			t.Errorf("key %q = %q, want %q", k, got[k], v)
 		}
 	}
+	if len(got) != len(want) {
+		t.Errorf("MergeCloudflareAnnotations returned %d keys, want %d: %v", len(got), len(want), got)
+	}
 	gw["unrelated.annotation"] = "noise"
 	route["another.unrelated"] = "noise"
 	got = MergeCloudflareAnnotations(gw, route)

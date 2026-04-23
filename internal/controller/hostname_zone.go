@@ -31,6 +31,11 @@ import (
 // CloudflareZone's spec.name is a suffix of the hostname.
 var ErrNoMatchingZone = errors.New("no CloudflareZone matches hostname")
 
+// ErrAmbiguousZone is returned by ResolveZoneForHostname when two or more
+// CloudflareZones share an identical spec.Name matching the hostname. This
+// is a configuration error, not a transient one.
+var ErrAmbiguousZone = errors.New("ambiguous CloudflareZone for hostname")
+
 // ResolveZoneForHostname picks the CloudflareZone with the longest spec.name
 // suffix match against hostname. If two zones are equally-specific, returns
 // an error (expected in practice only when zones are literally identical; CR
@@ -58,7 +63,7 @@ func ResolveZoneForHostname(hostname string, zones []cloudflarev1alpha1.Cloudfla
 		return nil, fmt.Errorf("%w: %s", ErrNoMatchingZone, hostname)
 	}
 	if ambiguous {
-		return nil, fmt.Errorf("ambiguous zone for hostname %s", hostname)
+		return nil, fmt.Errorf("%w: %s", ErrAmbiguousZone, hostname)
 	}
 	return best, nil
 }

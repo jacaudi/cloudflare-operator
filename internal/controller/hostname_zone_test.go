@@ -74,4 +74,15 @@ func TestResolveZoneForHostname(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("ambiguous — two zones share the same spec.Name", func(t *testing.T) {
+		ambiguousZones := []cloudflarev1alpha1.CloudflareZone{
+			{ObjectMeta: metav1.ObjectMeta{Name: "z1", Namespace: "network"}, Spec: cloudflarev1alpha1.CloudflareZoneSpec{Name: "example.com"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "z2", Namespace: "network"}, Spec: cloudflarev1alpha1.CloudflareZoneSpec{Name: "example.com"}},
+		}
+		_, err := ResolveZoneForHostname("foo.example.com", ambiguousZones)
+		if err == nil || !errors.Is(err, ErrAmbiguousZone) {
+			t.Fatalf("expected ErrAmbiguousZone, got %v", err)
+		}
+	})
 }

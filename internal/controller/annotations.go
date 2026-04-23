@@ -82,7 +82,9 @@ type TargetSpec struct {
 // ErrInvalidTarget is returned by ParseTarget on malformed input.
 var ErrInvalidTarget = errors.New("invalid cloudflare.io/target value")
 
-// ParseTarget parses a cloudflare.io/target value.
+// ParseTarget parses a cloudflare.io/target value. Kinds are matched
+// case-sensitively ("tunnel", "cname", "address") — callers MUST use the
+// lowercase canonical form.
 func ParseTarget(raw string) (TargetSpec, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
