@@ -54,8 +54,6 @@ func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloud
 
 	agg := Aggregate(filtered, tun.Spec.Routing)
 
-	// Gate: flat boolean AND chain. A future observe-only mode can add one
-	// more clause here without restructuring.
 	if tun.Spec.Connector != nil && tun.Spec.Connector.Enabled {
 		if err := reconcileConnectorResources(ctx, c, tun, agg); err != nil {
 			return err
