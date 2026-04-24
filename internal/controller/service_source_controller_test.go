@@ -19,13 +19,13 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -221,7 +221,7 @@ func TestServiceSource_TargetAddressOnService_Rejected(t *testing.T) {
 	evts := drainEvents(rec)
 	found := false
 	for _, e := range evts {
-		if containsStr(e, string(cloudflarev1alpha1.ReasonInvalidAnnotation)) || containsStr(e, "Warning") {
+		if strings.Contains(e, string(cloudflarev1alpha1.ReasonInvalidAnnotation)) || strings.Contains(e, "Warning") {
 			found = true
 			break
 		}
@@ -760,7 +760,7 @@ func TestServiceSource_WildcardHostname_Sanitized(t *testing.T) {
 				t.Errorf("CR name %q contains invalid character %q", rec.Name, ch)
 			}
 		}
-		if containsStr(rec.Name, "wild") {
+		if strings.Contains(rec.Name, "wild") {
 			found = true
 		}
 	}
@@ -882,7 +882,7 @@ func TestServiceSource_TunnelNotFound_Warns(t *testing.T) {
 	evts := drainEvents(rec)
 	found := false
 	for _, e := range evts {
-		if containsStr(e, string(cloudflarev1alpha1.ReasonTunnelNotFound)) || containsStr(e, "Warning") {
+		if strings.Contains(e, string(cloudflarev1alpha1.ReasonTunnelNotFound)) || strings.Contains(e, "Warning") {
 			found = true
 			break
 		}
@@ -1067,18 +1067,57 @@ func TestServiceSource_ServiceNotFound_NoError(t *testing.T) {
 	}
 }
 
-// ---- helpers ----------------------------------------------------------------
+// ---- TestServiceSource_MapTunnelToServices_CrossNamespace ------------------
+// TDD: write the failing test first, then fix the mapper.
 
-func containsStr(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && func() bool {
-		for i := 0; i <= len(s)-len(sub); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	}())
+func TestServiceSource_MapTunnelToServices_CrossNamespace(t *testing.T) {
+	s := svcTestScheme(t)
+	// Service in "apps" references a tunnel in "network" via annotation.
+	svc := newSvc("my-svc", "apps", map[string]string{
+		AnnotationTarget:             "tunnel:home",
+		AnnotationTunnelRefNamespace: "network",
+	})
+	tun := newReadyTunnel("home", "network")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(svc, tun).
+		Build()
+	r := &ServiceSourceReconciler{Client: c}
+
+	reqs := r.mapTunnelToServices(context.Background(), tun)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d: %v", len(reqs), reqs)
+	}
+	if reqs[0].Namespace != "apps" || reqs[0].Name != "my-svc" {
+		t.Errorf("expected {apps/my-svc}, got %v", reqs[0])
+	}
 }
 
-// Ensure intstr helper works as expected.
-var _ = intstr.FromInt(0)
+// ---- TestServiceSource_MapTunnelToServices_SameNamespace -------------------
+// Lock the existing same-namespace behavior: a Service with no tunnel-ref-namespace
+// annotation should match a tunnel in the same namespace.
+
+func TestServiceSource_MapTunnelToServices_SameNamespace(t *testing.T) {
+	s := svcTestScheme(t)
+	// Service in "network" with no tunnel-ref-namespace → should match tunnel network/home.
+	svc := newSvc("my-svc", "network", map[string]string{
+		AnnotationTarget: "tunnel:home",
+		// no AnnotationTunnelRefNamespace
+	})
+	tun := newReadyTunnel("home", "network")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(svc, tun).
+		Build()
+	r := &ServiceSourceReconciler{Client: c}
+
+	reqs := r.mapTunnelToServices(context.Background(), tun)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d: %v", len(reqs), reqs)
+	}
+	if reqs[0].Namespace != "network" || reqs[0].Name != "my-svc" {
+		t.Errorf("expected {network/my-svc}, got %v", reqs[0])
+	}
+}

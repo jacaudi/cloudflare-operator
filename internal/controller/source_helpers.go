@@ -153,9 +153,11 @@ func ownerRefsFor(obj client.Object) []metav1.OwnerReference {
 	}
 }
 
-// upsertDNSRecord creates or updates a CloudflareDNSRecord in the cluster.
-// If a record with desired.Name and desired.Namespace already exists, its Spec
-// is overwritten. Otherwise a new record is created.
+// upsertDNSRecord creates desired if absent, otherwise updates the existing
+// record to match. Spec, Labels, Annotations, and OwnerReferences are fully
+// replaced — the operator is the sole authority for these fields. Callers
+// that want to preserve foreign labels/annotations should use a different
+// pattern.
 func upsertDNSRecord(ctx context.Context, c client.Client, desired *cloudflarev1alpha1.CloudflareDNSRecord) error {
 	existing := &cloudflarev1alpha1.CloudflareDNSRecord{}
 	err := c.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
@@ -172,9 +174,11 @@ func upsertDNSRecord(ctx context.Context, c client.Client, desired *cloudflarev1
 	return c.Update(ctx, existing)
 }
 
-// upsertTunnelRule creates or updates a CloudflareTunnelRule in the cluster.
-// If a rule with desired.Name and desired.Namespace already exists, its Spec
-// is overwritten. Otherwise a new rule is created.
+// upsertTunnelRule creates desired if absent, otherwise updates the existing
+// rule to match. Spec, Labels, Annotations, and OwnerReferences are fully
+// replaced — the operator is the sole authority for these fields. Callers
+// that want to preserve foreign labels/annotations should use a different
+// pattern.
 func upsertTunnelRule(ctx context.Context, c client.Client, desired *cloudflarev1alpha1.CloudflareTunnelRule) error {
 	existing := &cloudflarev1alpha1.CloudflareTunnelRule{}
 	err := c.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)

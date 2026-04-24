@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -319,6 +320,7 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 			Name:      txtFQDN,
 			Type:      "TXT",
 			Content:   strPtr(txtContent),
+			TTL:       120,
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: zone.Spec.SecretRef.Name},
 			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: zone.Name},
 		},
@@ -332,6 +334,10 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 // resolveServiceBackend determines the TunnelRuleServiceRef for a Service.
 // It picks the first port (or the port matching cloudflare.io/port annotation)
 // and infers the scheme from the port name.
+//
+// Named and numeric port annotations are disambiguated numeric-first: an
+// annotation value that parses as an integer matches a port by Port number
+// before falling through to a name match.
 func (r *ServiceSourceReconciler) resolveServiceBackend(svc *corev1.Service) (*cloudflarev1alpha1.TunnelRuleServiceRef, error) {
 	if len(svc.Spec.Ports) == 0 {
 		return nil, ErrNoServicePorts
@@ -405,34 +411,47 @@ func inferScheme(override, portName string) string {
 	}
 }
 
-// mapTunnelToServices returns reconcile requests for all Services in the same
-// namespace as the CloudflareTunnel object that was updated. This ensures that
-// Services which reference a tunnel are re-reconciled when the tunnel's CNAME
-// becomes available.
+// mapTunnelToServices returns reconcile requests for all Services that reference
+// the updated CloudflareTunnel. Services are listed cluster-wide so that
+// cross-namespace references (Service in namespace A referencing a tunnel in
+// namespace B via cloudflare.io/tunnel-ref-namespace) are enqueued promptly
+// instead of waiting for periodic resync.
+//
+// Namespace resolution: if a Service carries cloudflare.io/tunnel-ref-namespace,
+// that value is used as the tunnel namespace; otherwise the Service's own
+// namespace is assumed. Only Services whose resolved tunnel namespace matches
+// the updated tunnel's namespace are enqueued.
 func (r *ServiceSourceReconciler) mapTunnelToServices(ctx context.Context, obj client.Object) []reconcile.Request {
-	var svcs corev1.ServiceList
-	if err := r.List(ctx, &svcs, client.InNamespace(obj.GetNamespace())); err != nil {
+	tun, ok := obj.(*cloudflarev1alpha1.CloudflareTunnel)
+	if !ok {
 		return nil
 	}
-	var reqs []reconcile.Request
-	for _, svc := range svcs.Items {
+	var list corev1.ServiceList
+	if err := r.List(ctx, &list); err != nil { // cluster-wide, no InNamespace
+		return nil
+	}
+	out := make([]reconcile.Request, 0)
+	for i := range list.Items {
+		svc := &list.Items[i]
 		ann := svc.Annotations
 		if ann == nil {
 			continue
 		}
-		raw, ok := ann[AnnotationTarget]
-		if !ok {
+		if ann[AnnotationTarget] != "tunnel:"+tun.Name {
 			continue
 		}
-		ts, err := ParseTarget(raw)
-		if err != nil || ts.Kind != TargetKindTunnel || ts.Name != obj.GetName() {
+		refNs := ann[AnnotationTunnelRefNamespace]
+		if refNs == "" {
+			refNs = svc.Namespace
+		}
+		if refNs != tun.Namespace {
 			continue
 		}
-		reqs = append(reqs, reconcile.Request{
-			NamespacedName: client.ObjectKeyFromObject(&svc),
+		out = append(out, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name},
 		})
 	}
-	return reqs
+	return out
 }
 
 // SetupWithManager registers the ServiceSourceReconciler with the manager.
