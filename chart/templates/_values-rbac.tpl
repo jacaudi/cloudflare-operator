@@ -35,6 +35,7 @@ rbac:
             - ""
           resources:
             - pods
+            - services
           verbs:
             - get
             - list
@@ -114,8 +115,11 @@ rbac:
           resources:
             - cloudflaretunnelrules
           verbs:
+            - create
             - get
             - list
+            - patch
+            - update
             - watch
 {{- if .Values.leaderElection.enabled }}
     leader-election:

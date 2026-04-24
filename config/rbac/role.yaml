@@ -28,6 +28,7 @@ rules:
   - ""
   resources:
   - pods
+  - services
   verbs:
   - get
   - list
@@ -107,6 +108,9 @@ rules:
   resources:
   - cloudflaretunnelrules
   verbs:
+  - create
   - get
   - list
+  - patch
+  - update
   - watch

@@ -44,8 +44,6 @@ func ruleAt(name, ns string, created time.Time, priority int, tunnel string, hos
 	}
 }
 
-func strPtr(s string) *string { return &s }
-
 // nn is a small helper for building NamespacedName lookups in tests.
 func nn(ns, name string) types.NamespacedName {
 	return types.NamespacedName{Namespace: ns, Name: name}
