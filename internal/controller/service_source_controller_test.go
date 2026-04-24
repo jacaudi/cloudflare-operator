@@ -150,9 +150,9 @@ func drainEvents(recorder *record.FakeRecorder) []string {
 	}
 }
 
-// ---- TestServiceSource_NoAnnotations ----------------------------------------
+// ---- TestServiceSource_MissingAnnotationIgnored ----------------------------------------
 
-func TestServiceSource_NoAnnotations(t *testing.T) {
+func TestServiceSource_MissingAnnotationIgnored(t *testing.T) {
 	s := svcTestScheme(t)
 	svc := newSvc("my-svc", "apps", nil)
 	r, rec := buildSvcReconciler(s, "owner1", svc)
@@ -671,7 +671,7 @@ func TestServiceSource_UpsertExistingRecord(t *testing.T) {
 	// Pre-create a DNS record at the expected name with wrong content.
 	existingRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-svc-foo-example-com",
+			Name:      "svc-apps-my-svc-foo-example-com",
 			Namespace: "apps",
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
@@ -692,7 +692,7 @@ func TestServiceSource_UpsertExistingRecord(t *testing.T) {
 	// Re-fetch the record and verify it was updated.
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
 	if err := r.Get(context.Background(),
-		types.NamespacedName{Namespace: "apps", Name: "my-svc-foo-example-com"},
+		types.NamespacedName{Namespace: "apps", Name: "svc-apps-my-svc-foo-example-com"},
 		&updated); err != nil {
 		t.Fatalf("get updated record: %v", err)
 	}
@@ -899,9 +899,9 @@ func TestServiceSource_TunnelNotFound_Warns(t *testing.T) {
 	}
 }
 
-// ---- TestServiceSource_TunnelNotReady_Requeues ------------------------------
+// ---- TestServiceSource_TunnelNotReady_Requeue ------------------------------
 
-func TestServiceSource_TunnelNotReady_Requeues(t *testing.T) {
+func TestServiceSource_TunnelNotReady_Requeue(t *testing.T) {
 	s := svcTestScheme(t)
 	zone := newZone("example-com", "apps", "example.com", "cf-secret")
 	// Tunnel exists but no CNAME yet.
@@ -1011,10 +1011,10 @@ func TestServiceSource_ErrPortNotFound_SentinelWrapped(t *testing.T) {
 	}
 }
 
-// ---- TestServiceSource_TunnelTarget_EmitsDNSAndTunnelRule ------------------
+// ---- TestServiceSource_EmitDNSAndRule ------------------
 // This is the "golden path" test from the plan.
 
-func TestServiceSource_TunnelTarget_EmitsDNSAndTunnelRule(t *testing.T) {
+func TestServiceSource_EmitDNSAndRule(t *testing.T) {
 	s := svcTestScheme(t)
 	zone := newZone("example-com", "apps", "example.com", "cf-secret")
 	tunnel := newReadyTunnel("home", "apps")

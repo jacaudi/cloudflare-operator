@@ -69,6 +69,7 @@ rules:
   resources:
   - cloudflarednsrecords
   - cloudflarerulesets
+  - cloudflaretunnelrules
   - cloudflaretunnels
   - cloudflarezoneconfigs
   - cloudflarezones
@@ -103,14 +104,3 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - cloudflare.io
-  resources:
-  - cloudflaretunnelrules
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch

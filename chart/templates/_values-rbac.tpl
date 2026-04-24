@@ -76,6 +76,7 @@ rbac:
           resources:
             - cloudflarednsrecords
             - cloudflarerulesets
+            - cloudflaretunnelrules
             - cloudflaretunnels
             - cloudflarezoneconfigs
             - cloudflarezones
@@ -110,17 +111,6 @@ rbac:
             - get
             - patch
             - update
-        - apiGroups:
-            - cloudflare.io
-          resources:
-            - cloudflaretunnelrules
-          verbs:
-            - create
-            - get
-            - list
-            - patch
-            - update
-            - watch
 {{- if .Values.leaderElection.enabled }}
     leader-election:
       enabled: true
