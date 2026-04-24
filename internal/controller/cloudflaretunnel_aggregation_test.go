@@ -230,11 +230,17 @@ func TestReconcileAggregation_HappyPath(t *testing.T) {
 		t.Errorf("expected 3 conditions on rule, got %d: %+v", len(updatedRule.Status.Conditions), updatedRule.Status.Conditions)
 	}
 
+	// --- Tunnel status: re-fetch to verify persistence ---
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+
 	// --- Tunnel status: IngressConfigured=True ---
-	assertCondition(t, tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured, metav1.ConditionTrue)
+	assertCondition(t, tunOut.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured, metav1.ConditionTrue)
 
 	// --- ConnectorReady=False (no ready replicas) ---
-	assertCondition(t, tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady, metav1.ConditionFalse)
+	assertCondition(t, tunOut.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady, metav1.ConditionFalse)
 }
 
 // TestReconcileAggregation_EmptyRuleList verifies that zero rules still produces
@@ -252,7 +258,12 @@ func TestReconcileAggregation_EmptyRuleList(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: n.ConfigMap}, &cm); err != nil {
 		t.Fatalf("ConfigMap not created: %v", err)
 	}
-	assertCondition(t, tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured, metav1.ConditionTrue)
+
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+	assertCondition(t, tunOut.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured, metav1.ConditionTrue)
 }
 
 // TestReconcileAggregation_ConnectorDisabled verifies that no Deployment or
@@ -278,16 +289,22 @@ func TestReconcileAggregation_ConnectorDisabled(t *testing.T) {
 		t.Error("expected ConfigMap NOT to be created when connector disabled")
 	}
 
+	// Re-fetch tunnel to verify persisted status.
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+
 	// ConnectorReady condition must be absent (not just False).
-	for _, cond := range tun.Status.Conditions {
+	for _, cond := range tunOut.Status.Conditions {
 		if cond.Type == cloudflarev1alpha1.ConditionTypeConnectorReady {
 			t.Errorf("ConnectorReady condition must be absent when connector disabled, got: %+v", cond)
 		}
 	}
 
 	// Connector sub-status must be nil.
-	if tun.Status.Connector != nil {
-		t.Errorf("tun.Status.Connector must be nil when connector disabled, got: %+v", tun.Status.Connector)
+	if tunOut.Status.Connector != nil {
+		t.Errorf("tun.Status.Connector must be nil when connector disabled, got: %+v", tunOut.Status.Connector)
 	}
 }
 
@@ -302,12 +319,16 @@ func TestReconcileAggregation_ConnectorNilSpec(t *testing.T) {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
-	for _, cond := range tun.Status.Conditions {
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+	for _, cond := range tunOut.Status.Conditions {
 		if cond.Type == cloudflarev1alpha1.ConditionTypeConnectorReady {
 			t.Errorf("ConnectorReady must be absent when spec.connector is nil")
 		}
 	}
-	if tun.Status.Connector != nil {
+	if tunOut.Status.Connector != nil {
 		t.Errorf("tun.Status.Connector must be nil when spec.connector is nil")
 	}
 }
@@ -468,7 +489,15 @@ func TestReconcileAggregation_ConfigHashPropagation(t *testing.T) {
 	}
 	cmHash := cm.Annotations[AnnotationConfigHash]
 	depHash := dep.Spec.Template.Annotations[AnnotationConfigHash]
-	connHash := tun.Status.Connector.ConfigHash
+
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+	if tunOut.Status.Connector == nil {
+		t.Fatal("tun.Status.Connector is nil after reconcile")
+	}
+	connHash := tunOut.Status.Connector.ConfigHash
 
 	if cmHash == "" || depHash == "" || connHash == "" {
 		t.Fatalf("one or more hashes empty: cm=%q dep=%q conn=%q", cmHash, depHash, connHash)
@@ -490,13 +519,17 @@ func TestReconcileAggregation_ConnectorReadyReplicas_NotFound(t *testing.T) {
 
 	// After first call the Deployment IS created; but .Status.ReadyReplicas is
 	// 0 since the fake client doesn't run controllers.
-	assertConditionWithReason(t, tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady,
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+	assertConditionWithReason(t, tunOut.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady,
 		metav1.ConditionFalse, cloudflarev1alpha1.ReasonReconciling)
-	if tun.Status.Connector == nil {
+	if tunOut.Status.Connector == nil {
 		t.Fatal("tun.Status.Connector is nil")
 	}
-	if tun.Status.Connector.ReadyReplicas != 0 {
-		t.Errorf("ReadyReplicas = %d, want 0", tun.Status.Connector.ReadyReplicas)
+	if tunOut.Status.Connector.ReadyReplicas != 0 {
+		t.Errorf("ReadyReplicas = %d, want 0", tunOut.Status.Connector.ReadyReplicas)
 	}
 }
 
@@ -510,8 +543,14 @@ func TestReconcileAggregation_ConnectorReadyReplicas_ZeroReadyReplicas(t *testin
 	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
 		t.Fatalf("first ReconcileConnectorAndRules: %v", err)
 	}
+
+	// Re-fetch tunnel to verify persisted status.
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
 	// ReadyReplicas is already 0 (fake client default). Confirm condition.
-	assertConditionWithReason(t, tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady,
+	assertConditionWithReason(t, tunOut.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady,
 		metav1.ConditionFalse, cloudflarev1alpha1.ReasonReconciling)
 }
 
@@ -542,13 +581,18 @@ func TestReconcileAggregation_ConnectorReadyReplicas_Ready(t *testing.T) {
 		t.Fatalf("second ReconcileConnectorAndRules: %v", err)
 	}
 
-	assertConditionWithReason(t, tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady,
+	// Re-fetch tunnel to verify persisted status.
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+	assertConditionWithReason(t, tunOut.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady,
 		metav1.ConditionTrue, cloudflarev1alpha1.ReasonReconcileSuccess)
-	if tun.Status.Connector == nil {
+	if tunOut.Status.Connector == nil {
 		t.Fatal("tun.Status.Connector is nil after ready")
 	}
-	if tun.Status.Connector.ReadyReplicas != 2 {
-		t.Errorf("ReadyReplicas = %d, want 2", tun.Status.Connector.ReadyReplicas)
+	if tunOut.Status.Connector.ReadyReplicas != 2 {
+		t.Errorf("ReadyReplicas = %d, want 2", tunOut.Status.Connector.ReadyReplicas)
 	}
 }
 
@@ -563,7 +607,11 @@ func TestReconcileAggregation_ConnectorStatusPopulated(t *testing.T) {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
-	cs := tun.Status.Connector
+	var tunOut cloudflarev1alpha1.CloudflareTunnel
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &tunOut); err != nil {
+		t.Fatalf("re-fetch tunnel: %v", err)
+	}
+	cs := tunOut.Status.Connector
 	if cs == nil {
 		t.Fatal("tun.Status.Connector is nil")
 	}
@@ -599,6 +647,64 @@ func TestReconcileAggregation_RuleObservedGeneration(t *testing.T) {
 	if updated.Status.ObservedGeneration != 3 {
 		t.Errorf("ObservedGeneration = %d, want 3 (rule's generation)", updated.Status.ObservedGeneration)
 	}
+}
+
+// TestReconcileAggregation_ResolvedBackendClearedOnNonIncluded verifies that
+// writeRuleStatus clears ResolvedBackend when the rule transitions to a
+// non-Included decision (Fix 2). The rule is pre-seeded with a stale backend
+// URL via the fake client's status subresource so the backing store holds the
+// value before reconcile.
+func TestReconcileAggregation_ResolvedBackendClearedOnNonIncluded(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false)
+
+	// Two rules share the same hostname → one will be DuplicateHostname.
+	goodURL := strPtr("http://svc:8080")
+	r1 := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{"a.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  200,
+		},
+	}
+	// r2 has the same hostname but lower priority → DuplicateHostname.
+	// Pre-seed its status with a stale ResolvedBackend.
+	r2 := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r2", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{"a.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  100,
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelRuleStatus{
+			ResolvedBackend: "http://stale",
+		},
+	}
+
+	c := buildAggFakeClient(tun, r1, r2)
+
+	// Persist the stale status into the fake client's status subresource store.
+	if err := c.Status().Update(context.Background(), r2); err != nil {
+		t.Fatalf("seed r2 stale status: %v", err)
+	}
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	// Re-fetch r2 and assert ResolvedBackend is cleared.
+	var ur2 cloudflarev1alpha1.CloudflareTunnelRule
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "network", Name: "r2"}, &ur2); err != nil {
+		t.Fatalf("re-fetch r2: %v", err)
+	}
+	if ur2.Status.ResolvedBackend != "" {
+		t.Errorf("ResolvedBackend = %q, want empty string after DuplicateHostname decision", ur2.Status.ResolvedBackend)
+	}
+	// Confirm it is indeed a DuplicateHostname decision (TunnelAccepted=False, Conflict=True).
+	assertCondition(t, ur2.Status.Conditions, cloudflarev1alpha1.ConditionTypeTunnelAccepted, metav1.ConditionFalse)
+	assertCondition(t, ur2.Status.Conditions, cloudflarev1alpha1.ConditionTypeConflict, metav1.ConditionTrue)
 }
 
 // ---- assertion helpers ------------------------------------------------------

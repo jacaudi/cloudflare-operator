@@ -212,6 +212,8 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 	r.Status.ObservedGeneration = r.Generation
 	if decision.Status == RuleIncluded {
 		r.Status.ResolvedBackend = decision.ResolvedBackend
+	} else {
+		r.Status.ResolvedBackend = ""
 	}
 
 	return c.Status().Update(ctx, r)
@@ -235,7 +237,7 @@ func writeTunnelAggStatus(ctx context.Context, c client.Client, tun *cloudflarev
 		tun.Status.Connector = nil
 	}
 
-	return nil
+	return c.Status().Update(ctx, tun)
 }
 
 // writeTunnelConnectorStatus fetches the live Deployment and writes the
