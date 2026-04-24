@@ -111,6 +111,15 @@ rbac:
             - get
             - patch
             - update
+        - apiGroups:
+            - gateway.networking.k8s.io
+          resources:
+            - gateways
+            - httproutes
+          verbs:
+            - get
+            - list
+            - watch
 {{- if .Values.leaderElection.enabled }}
     leader-election:
       enabled: true

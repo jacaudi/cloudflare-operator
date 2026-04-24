@@ -37,6 +37,7 @@ import (
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/controller"
 	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -48,6 +49,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(cloudflarev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gwv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -145,10 +147,18 @@ func main() {
 	}
 	if err := (&controller.ServiceSourceReconciler{
 		Client:     mgr.GetClient(),
-		Recorder:   mgr.GetEventRecorderFor("service-source"),
+		Recorder:   mgr.GetEventRecorderFor("service-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
 		TxtOwnerID: os.Getenv("TXT_OWNER_ID"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ServiceSource")
+		os.Exit(1)
+	}
+	if err := (&controller.HTTPRouteSourceReconciler{
+		Client:     mgr.GetClient(),
+		Recorder:   mgr.GetEventRecorderFor("httproute-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
+		TxtOwnerID: os.Getenv("TXT_OWNER_ID"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "HTTPRouteSource")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
