@@ -117,7 +117,7 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	// 8. Determine proxied flag.
-	proxied := r.resolveProxied(ctx, &route, ts, ann)
+	proxied := r.resolveProxied(&route, ts, ann)
 
 	// 9. TTL.
 	ttl := ttlFromAnnotation(ann)
@@ -251,14 +251,10 @@ func (r *HTTPRouteSourceReconciler) resolveBackendContent(
 // true. For other targets, parses the annotation (emitting a warning on parse
 // failure and keeping the default).
 func (r *HTTPRouteSourceReconciler) resolveProxied(
-	ctx context.Context,
 	route *gwv1.HTTPRoute,
 	ts TargetSpec,
 	ann map[string]string,
 ) bool {
-	// Suppress unused-parameter lint; ctx is available but not needed here.
-	_ = ctx
-
 	proxied := ts.Kind == TargetKindTunnel
 	if raw, ok := ann[AnnotationProxied]; ok && raw != "" {
 		v, parseErr := strconv.ParseBool(raw)
@@ -481,9 +477,11 @@ func (r *HTTPRouteSourceReconciler) readParentAnnotations(ctx context.Context, r
 	return nil
 }
 
-// firstGatewayAddress looks up the first parent Gateway in route.Spec.ParentRefs
-// and returns its first status address. Returns ErrNoGatewayAddress when the
-// Gateway exists but has no addresses yet.
+// firstGatewayAddress iterates all parent Gateways in route.Spec.ParentRefs
+// and returns the first address found across all ready Gateways.
+// Get errors and Gateways with empty Status.Addresses are skipped (continued),
+// matching the plan semantics for multi-parent fallback.
+// Returns ErrNoGatewayAddress when no parent Gateway has addresses populated yet.
 func (r *HTTPRouteSourceReconciler) firstGatewayAddress(ctx context.Context, route *gwv1.HTTPRoute) (string, error) {
 	for _, p := range route.Spec.ParentRefs {
 		if p.Kind != nil && string(*p.Kind) != kindGateway {
@@ -495,14 +493,16 @@ func (r *HTTPRouteSourceReconciler) firstGatewayAddress(ctx context.Context, rou
 		}
 		var gw gwv1.Gateway
 		if err := r.Get(ctx, types.NamespacedName{Name: string(p.Name), Namespace: ns}, &gw); err != nil {
-			return "", fmt.Errorf("get Gateway %s/%s: %w", ns, p.Name, err)
+			// Skip unresolvable parents; another parent may have addresses.
+			continue
 		}
 		if len(gw.Status.Addresses) == 0 {
-			return "", fmt.Errorf("%w: %s/%s", ErrNoGatewayAddress, ns, p.Name)
+			// This Gateway has no addresses yet; try the next parent.
+			continue
 		}
 		return gw.Status.Addresses[0].Value, nil
 	}
-	return "", fmt.Errorf("%w: no parent Gateways found", ErrNoGatewayAddress)
+	return "", fmt.Errorf("%w", ErrNoGatewayAddress)
 }
 
 // mapGatewayToRoutes returns reconcile requests for all HTTPRoutes that
@@ -558,10 +558,9 @@ func (r *HTTPRouteSourceReconciler) mapTunnelToRoutes(ctx context.Context, obj c
 	out := make([]reconcile.Request, 0)
 	for i := range list.Items {
 		route := &list.Items[i]
-		ann := route.Annotations
-		if ann == nil {
-			ann = map[string]string{}
-		}
+		// Use mergedAnnotations so Routes that inherit cloudflare.io/* from a
+		// parent Gateway are also enqueued when the target tunnel changes.
+		ann := r.mergedAnnotations(ctx, route)
 		if ann[AnnotationTarget] != "tunnel:"+tun.Name {
 			continue
 		}

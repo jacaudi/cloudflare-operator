@@ -39,11 +39,12 @@ import (
 // ---- test constants ---------------------------------------------------------
 
 const (
-	testTunnelName  = "home"
-	testNsApps      = "apps"
-	testNsNetwork   = "network"
-	testGatewayName = "internal"
-	testRouteName   = "my-route"
+	testTunnelName    = "home"
+	testNsApps        = "apps"
+	testNsNetwork     = "network"
+	testGatewayName   = "internal"
+	testRouteName     = "my-route"
+	testRecordTypeTXT = "TXT"
 )
 
 // ---- test infrastructure ----------------------------------------------------
@@ -488,7 +489,7 @@ func TestHTTPRouteSource_AddressTarget_GatewayHasAddresses(t *testing.T) {
 	// Find the CNAME/A record and check its content.
 	found := false
 	for _, rec := range records.Items {
-		if rec.Spec.Type != "TXT" {
+		if rec.Spec.Type != testRecordTypeTXT {
 			if rec.Spec.Content != nil && *rec.Spec.Content == "1.2.3.4" {
 				found = true
 			}
@@ -743,7 +744,7 @@ func TestHTTPRouteSource_AnnotationRegistryFor_IsHostname(t *testing.T) {
 	}
 
 	for _, rec := range records.Items {
-		if rec.Spec.Type == "TXT" {
+		if rec.Spec.Type == testRecordTypeTXT {
 			got := rec.Annotations[AnnotationRegistryFor]
 			if got != "foo.example.com" {
 				t.Errorf("AnnotationRegistryFor on TXT: expected %q, got %q", "foo.example.com", got)
@@ -754,6 +755,8 @@ func TestHTTPRouteSource_AnnotationRegistryFor_IsHostname(t *testing.T) {
 
 // ---- TestHTTPRouteSource_Inherited_RouteOverridesParent --------------------
 // Both Gateway and Route have cloudflare.io/target; Route's value wins.
+// Asserts on TunnelRule.Spec.TunnelRef.Name to definitively distinguish
+// route-tunnel from gw-tunnel without depending on CNAME string content.
 
 func TestHTTPRouteSource_Inherited_RouteOverridesParent(t *testing.T) {
 	s := httpRouteScheme(t)
@@ -763,7 +766,8 @@ func TestHTTPRouteSource_Inherited_RouteOverridesParent(t *testing.T) {
 		AnnotationTarget: "tunnel:gw-tunnel",
 	})
 	route := newHTTPRoute("apps", "my-route", map[string]string{
-		AnnotationTarget: "tunnel:route-tunnel", // Route overrides Gateway
+		AnnotationTarget:         "tunnel:route-tunnel", // Route overrides Gateway
+		AnnotationTunnelUpstream: "http://route-backend:8080",
 	}, hostnames("foo.example.com"),
 		[]gwv1.ParentReference{parentRef("apps", "internal")})
 	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone, gw, tunnel)
@@ -773,21 +777,17 @@ func TestHTTPRouteSource_Inherited_RouteOverridesParent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var records cloudflarev1alpha1.CloudflareDNSRecordList
-	if err := r.List(context.Background(), &records); err != nil {
-		t.Fatalf("list: %v", err)
+	// Assert the TunnelRule references route-tunnel, not gw-tunnel.
+	var rules cloudflarev1alpha1.CloudflareTunnelRuleList
+	if err := r.List(context.Background(), &rules); err != nil {
+		t.Fatalf("list rules: %v", err)
 	}
-	// Should emit DNS using route-tunnel (not gw-tunnel).
-	for _, rec := range records.Items {
-		if rec.Spec.Type == testRecordTypeCNAME {
-			if rec.Spec.Content != nil && strings.Contains(*rec.Spec.Content, "route-tunnel") {
-				return // pass
-			}
-		}
+	if len(rules.Items) != 1 {
+		t.Fatalf("expected 1 TunnelRule, got %d", len(rules.Items))
 	}
-	// If no CNAME found (e.g., only TXT emitted), check that at least 2 records were emitted.
-	if len(records.Items) < 2 {
-		t.Errorf("expected DNS emissions using route-tunnel; got %d records", len(records.Items))
+	if rules.Items[0].Spec.TunnelRef.Name != "route-tunnel" {
+		t.Errorf("expected TunnelRef.Name=route-tunnel (Route annotation overrides Gateway), got %q",
+			rules.Items[0].Spec.TunnelRef.Name)
 	}
 }
 
@@ -1125,8 +1125,8 @@ func TestHTTPRouteSource_SourceRef_IsHTTPRoute(t *testing.T) {
 	if sr.Kind != "HTTPRoute" {
 		t.Errorf("expected SourceRef.Kind=HTTPRoute, got %q", sr.Kind)
 	}
-	if sr.Namespace != "apps" {
-		t.Errorf("expected SourceRef.Namespace=apps, got %q", sr.Namespace)
+	if sr.Namespace != testNsApps {
+		t.Errorf("expected SourceRef.Namespace=%s, got %q", testNsApps, sr.Namespace)
 	}
 	if sr.Name != "my-route" {
 		t.Errorf("expected SourceRef.Name=my-route, got %q", sr.Name)
@@ -1160,5 +1160,239 @@ func TestHTTPRouteSource_ZoneRef_ExplicitWins(t *testing.T) {
 		if rec.Spec.ZoneRef != nil && rec.Spec.ZoneRef.Name != "my-zone" {
 			t.Errorf("expected ZoneRef my-zone, got %q", rec.Spec.ZoneRef.Name)
 		}
+	}
+}
+
+// ---- TestHTTPRouteSource_MapTunnelToRoutes_InheritedAnnotations ------------
+// Route has NO cloudflare.io annotations itself; they come from the parent
+// Gateway. mapTunnelToRoutes must still enqueue the Route when the target
+// tunnel transitions (Fix 1: use mergedAnnotations instead of route.Annotations).
+
+func TestHTTPRouteSource_MapTunnelToRoutes_InheritedAnnotations(t *testing.T) {
+	s := httpRouteScheme(t)
+
+	// Gateway in "network" carries the cloudflare.io annotations.
+	gw := newGateway("network", "internal", map[string]string{
+		AnnotationTarget:             "tunnel:home",
+		AnnotationTunnelRefNamespace: "network",
+	})
+
+	// Route in "apps" with no cloudflare.io annotations; references the Gateway.
+	route := newHTTPRoute("apps", "myapp", nil, hostnames("foo.example.com"),
+		[]gwv1.ParentReference{parentRef("network", "internal")})
+
+	// Tunnel in "network".
+	tun := newReadyTunnel("home", "network")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gw, route, tun).
+		Build()
+	r := &HTTPRouteSourceReconciler{Client: c}
+
+	reqs := r.mapTunnelToRoutes(context.Background(), tun)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request (inherited annotation route), got %d: %v", len(reqs), reqs)
+	}
+	got := reqs[0]
+	if got.Namespace != "apps" || got.Name != "myapp" {
+		t.Errorf("expected {apps/myapp}, got %v", got)
+	}
+}
+
+// ---- TestHTTPRouteSource_FirstGatewayAddress_MultiParent_FirstUnready_SecondReady
+// When the first parent Gateway has no addresses but the second does, the
+// reconciler must continue past the first and use the second's address
+// (Fix 2: continue instead of early-return on empty addresses).
+
+func TestHTTPRouteSource_FirstGatewayAddress_MultiParent_FirstUnready_SecondReady(t *testing.T) {
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+
+	// First parent: Gateway with no addresses yet.
+	gwUnready := newGateway("network", "unready", map[string]string{
+		AnnotationTarget: "address",
+	})
+
+	// Second parent: Gateway with a ready address.
+	gwReady := newGatewayWithAddress("network", "ready", "203.0.113.42", map[string]string{
+		AnnotationTarget: "address",
+	})
+
+	// Route references both parents; first is unready, second is ready.
+	route := newHTTPRoute("apps", "my-route", nil, hostnames("foo.example.com"),
+		[]gwv1.ParentReference{
+			parentRef("network", "unready"),
+			parentRef("network", "ready"),
+		})
+
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone, gwUnready, gwReady)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list DNS records: %v", err)
+	}
+	found := false
+	for _, rec := range records.Items {
+		if rec.Spec.Type != testRecordTypeTXT && rec.Spec.Content != nil && *rec.Spec.Content == "203.0.113.42" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected DNS record with content=203.0.113.42 from second ready Gateway; records: %+v", records.Items)
+	}
+}
+
+// ---- TestHTTPRouteSource_FirstGatewayAddress_SkipNonGatewayParent ---------
+// A non-Gateway ParentRef (e.g. Kind: "Service") must be skipped; the next
+// Gateway parent's address should be used (Fix 2: continue on non-Gateway kind).
+
+func TestHTTPRouteSource_FirstGatewayAddress_SkipNonGatewayParent(t *testing.T) {
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+
+	// Gateway parent with a ready address (the "second" parent logically).
+	gwReady := newGatewayWithAddress("network", "ready", "198.51.100.7", map[string]string{
+		AnnotationTarget: "address",
+	})
+
+	// Build a non-Gateway ParentRef as the first parent.
+	svcKind := gwv1.Kind("Service")
+	svcGroup := gwv1.Group("")
+	svcNs := gwv1.Namespace("network")
+	nonGatewayParent := gwv1.ParentReference{
+		Group:     &svcGroup,
+		Kind:      &svcKind,
+		Name:      gwv1.ObjectName("some-service"),
+		Namespace: &svcNs,
+	}
+
+	route := newHTTPRoute("apps", "my-route", nil, hostnames("foo.example.com"),
+		[]gwv1.ParentReference{
+			nonGatewayParent,
+			parentRef("network", "ready"),
+		})
+
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone, gwReady)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list DNS records: %v", err)
+	}
+	found := false
+	for _, rec := range records.Items {
+		if rec.Spec.Type != testRecordTypeTXT && rec.Spec.Content != nil && *rec.Spec.Content == "198.51.100.7" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected DNS record with content=198.51.100.7 from Gateway parent; records: %+v", records.Items)
+	}
+}
+
+// ---- TestHTTPRouteSource_ReadParentAnnotations_FirstWinsWithCFKey ----------
+// When multiple parent Gateways carry cloudflare.io/* annotations, the first
+// one's values win (Fix 3: lock first-parent-wins semantics).
+
+func TestHTTPRouteSource_ReadParentAnnotations_FirstWinsWithCFKey(t *testing.T) {
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+
+	// Both tunnels in "apps" so tunnel lookup doesn't need tunnel-ref-namespace.
+	tunnelA := newReadyTunnel("tunnel-a", "apps")
+	tunnelB := newReadyTunnel("tunnel-b", "apps")
+
+	gwFirst := newGateway("apps", "first", map[string]string{
+		AnnotationTarget:         "tunnel:tunnel-a",
+		AnnotationTunnelUpstream: "http://backend-a:8080",
+	})
+	gwSecond := newGateway("apps", "second", map[string]string{
+		AnnotationTarget:         "tunnel:tunnel-b",
+		AnnotationTunnelUpstream: "http://backend-b:8080",
+	})
+
+	// Route references first, then second.
+	route := newHTTPRoute("apps", "my-route", nil, hostnames("foo.example.com"),
+		[]gwv1.ParentReference{
+			parentRef("apps", "first"),
+			parentRef("apps", "second"),
+		})
+
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone, gwFirst, gwSecond, tunnelA, tunnelB)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// TunnelRule should reference tunnel-a (from the first Gateway), not tunnel-b.
+	var rules cloudflarev1alpha1.CloudflareTunnelRuleList
+	if err := r.List(context.Background(), &rules); err != nil {
+		t.Fatalf("list rules: %v", err)
+	}
+	if len(rules.Items) != 1 {
+		t.Fatalf("expected 1 TunnelRule, got %d", len(rules.Items))
+	}
+	if rules.Items[0].Spec.TunnelRef.Name != "tunnel-a" {
+		t.Errorf("expected TunnelRef.Name=tunnel-a (first Gateway wins), got %q", rules.Items[0].Spec.TunnelRef.Name)
+	}
+}
+
+// ---- TestHTTPRouteSource_ReadParentAnnotations_SkipsNonGatewayKind ---------
+// A non-Gateway kind in ParentRefs must be skipped when reading parent
+// annotations; the first actual Gateway's annotations should be used (Fix 4).
+
+func TestHTTPRouteSource_ReadParentAnnotations_SkipsNonGatewayKind(t *testing.T) {
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+	tunnel := newReadyTunnel("gw-tunnel", "apps")
+
+	gw := newGateway("apps", "real-gw", map[string]string{
+		AnnotationTarget:         "tunnel:gw-tunnel",
+		AnnotationTunnelUpstream: "http://gw-backend:8080",
+	})
+
+	// Build a non-Gateway ParentRef as the first parent.
+	svcKind := gwv1.Kind("Service")
+	svcGroup := gwv1.Group("")
+	nonGatewayParent := gwv1.ParentReference{
+		Group: &svcGroup,
+		Kind:  &svcKind,
+		Name:  gwv1.ObjectName("some-service"),
+	}
+
+	route := newHTTPRoute("apps", "my-route", nil, hostnames("foo.example.com"),
+		[]gwv1.ParentReference{
+			nonGatewayParent,
+			parentRef("apps", "real-gw"),
+		})
+
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone, gw, tunnel)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should emit rule using the Gateway's tunnel (non-Gateway parent was skipped).
+	var rules cloudflarev1alpha1.CloudflareTunnelRuleList
+	if err := r.List(context.Background(), &rules); err != nil {
+		t.Fatalf("list rules: %v", err)
+	}
+	if len(rules.Items) != 1 {
+		t.Fatalf("expected 1 TunnelRule (Gateway annotations used), got %d", len(rules.Items))
+	}
+	if rules.Items[0].Spec.TunnelRef.Name != "gw-tunnel" {
+		t.Errorf("expected TunnelRef.Name=gw-tunnel (Gateway parent used), got %q", rules.Items[0].Spec.TunnelRef.Name)
 	}
 }
