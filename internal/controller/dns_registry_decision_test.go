@@ -25,135 +25,163 @@ import (
 
 // helpers
 
-func ptr[T any](v T) *T { return &v }
-
-func ownPayload(owner string) cfclient.RegistryPayload {
-	return cfclient.RegistryPayload{
+func ownPayload(owner string) string {
+	return cfclient.EncodeRegistryPayload(cfclient.RegistryPayload{
 		Owner:           owner,
 		SourceKind:      "httproute",
 		SourceNamespace: "default",
 		SourceName:      "my-route",
-	}
+	})
 }
 
-// TestRegistryDecide covers all six verdicts plus additional edge cases
-// called out in pattern #8.
-func TestRegistryDecide(t *testing.T) {
+// TestRegistryDecision covers all six plan cases plus additional edge cases.
+func TestRegistryDecision(t *testing.T) {
 	const ownerID = "cloudflare-operator"
 
+	baseCfg := RegistryConfig{
+		TxtOwnerID: ownerID,
+	}
+
 	tests := []struct {
-		name        string
-		existingTXT *cfclient.RegistryPayload // nil = no companion TXT found
-		existing    *cfclient.DNSRecord       // nil = no matching A/CNAME record found
-		adoptOptIn  bool                      // cloudflare.io/adopt annotation present
-		wantAction  RegistryAction
-		wantErrIs   error // nil = no error expected
+		name               string
+		cfg                RegistryConfig
+		existingTXTContent string              // "" = no companion TXT found
+		existing           *cfclient.DNSRecord // nil = no matching A/CNAME record found
+		adoptOptIn         bool                // cloudflare.io/adopt annotation present
+		wantAction         RegistryAction
 	}{
-		// --- The six base verdicts ---
+		// --- The six plan cases (§11.3) ---
 		{
-			name:        "no existing record and no TXT -> Create",
-			existingTXT: nil,
-			existing:    nil,
-			adoptOptIn:  false,
-			wantAction:  RegistryActionCreate,
+			// Case 1: no record, no TXT — create both
+			name:               "no existing record and no TXT -> Create",
+			cfg:                baseCfg,
+			existingTXTContent: "",
+			existing:           nil,
+			adoptOptIn:         false,
+			wantAction:         RegistryActionCreate,
 		},
 		{
-			name:        "existing record claimed by us -> Reconcile",
-			existingTXT: ptr(ownPayload(ownerID)),
-			existing:    &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
-			adoptOptIn:  false,
-			wantAction:  RegistryActionReconcile,
+			// Case 2: our TXT — reconcile normally
+			name:               "existing record claimed by us -> Reconcile",
+			cfg:                baseCfg,
+			existingTXTContent: ownPayload(ownerID),
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionReconcile,
 		},
 		{
-			name: "existing record with foreign TXT owner -> RefuseForeignOwner",
-			existingTXT: ptr(cfclient.RegistryPayload{
-				Owner: "external-dns",
-			}),
-			existing:   &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
-			adoptOptIn: false,
-			wantAction: RegistryActionRefuseForeignOwner,
-			wantErrIs:  ErrForeignTXTOwner,
+			// Case 3: import-allowed TXT — adopt
+			name: "import-allowed TXT owner -> Adopt",
+			cfg: RegistryConfig{
+				TxtOwnerID:      ownerID,
+				TxtImportOwners: []string{"external-dns-home"},
+			},
+			existingTXTContent: ownPayload("external-dns-home"),
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionAdopt,
 		},
 		{
-			name:        "existing record with NO TXT and adopt NOT opted in -> RefuseOrphan",
-			existingTXT: nil,
-			existing:    &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
-			adoptOptIn:  false,
-			wantAction:  RegistryActionRefuseOrphan,
-			wantErrIs:   ErrTXTRegistryGap,
+			// Case 4: foreign TXT — refuse
+			name:               "existing record with foreign TXT owner -> RefuseForeignOwner",
+			cfg:                baseCfg,
+			existingTXTContent: ownPayload("some-other-controller"),
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionRefuseForeignOwner,
 		},
 		{
-			name:        "existing record with foreign TXT and adopt opted in -> still RefuseForeignOwner",
-			existingTXT: ptr(cfclient.RegistryPayload{Owner: "external-dns"}),
-			existing:    &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
-			adoptOptIn:  true,
-			wantAction:  RegistryActionRefuseForeignOwner,
-			wantErrIs:   ErrForeignTXTOwner,
+			// Case 5: no TXT + record exists, no adopt flag — refuse
+			name:               "existing record with NO TXT and adopt NOT opted in -> RefuseNoTXT",
+			cfg:                baseCfg,
+			existingTXTContent: "",
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionRefuseNoTXT,
 		},
 		{
-			name:        "existing record with NO TXT and adopt opted in -> AdoptOrphan",
-			existingTXT: nil,
-			existing:    &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
-			adoptOptIn:  true,
-			wantAction:  RegistryActionAdoptOrphan,
-		},
-		{
-			name:        "existing TXT claimed by us but NO DNS record -> Adopt (recreate)",
-			existingTXT: ptr(ownPayload(ownerID)),
-			existing:    nil,
-			adoptOptIn:  false,
-			wantAction:  RegistryActionAdopt,
+			// Case 6: no TXT + record exists + adopt=true — adopt orphan
+			name:               "existing record with NO TXT and adopt opted in -> AdoptOrphan",
+			cfg:                baseCfg,
+			existingTXTContent: "",
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         true,
+			wantAction:         RegistryActionAdoptOrphan,
 		},
 
-		// --- Additional edge cases (pattern #8) ---
+		// --- Additional edge cases ---
 		{
-			// Empty TXT slice + adoptOptIn=true + no existing record => Create (not AdoptOrphan)
-			name:        "no TXT, adopt opted in, but no existing record -> Create not AdoptOrphan",
-			existingTXT: nil,
-			existing:    nil,
-			adoptOptIn:  true,
-			wantAction:  RegistryActionCreate,
+			// Decrypt-failure routes to RefuseForeignOwner (pattern §11.3)
+			name: "decrypt failure -> RefuseForeignOwner",
+			cfg: RegistryConfig{
+				TxtOwnerID:           ownerID,
+				TxtImportDecryptKeys: [][]byte{make([]byte, 32)}, // a real key
+			},
+			// Valid base64 of 32 bytes but NOT an AES-CBC-encrypted heritage payload.
+			// DecryptPayload will attempt to decrypt (data >= 32 bytes, aligned to 16)
+			// and fail with pkcs7 or sanity-check error → returns error → RefuseForeignOwner.
+			existingTXTContent: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionRefuseForeignOwner,
 		},
 		{
-			// Same-owner record and the resource labels exactly match -> Reconcile
-			name:        "same owner same resource -> Reconcile",
-			existingTXT: ptr(ownPayload(ownerID)),
-			existing:    &cfclient.DNSRecord{ID: "r2", Content: "5.6.7.8"},
-			adoptOptIn:  false,
-			wantAction:  RegistryActionReconcile,
+			// Decode-failure routes to RefuseForeignOwner (pattern §11.3)
+			name:               "decode failure (not heritage format) -> RefuseForeignOwner",
+			cfg:                baseCfg,
+			existingTXTContent: `"random-bytes-no-heritage"`,
+			existing:           &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionRefuseForeignOwner,
 		},
 		{
-			// Owner comparison is case-sensitive: "External-DNS-Home" != "external-dns"
+			// Owner comparison is case-sensitive
 			name: "owner case mismatch does NOT match our owner -> RefuseForeignOwner",
-			existingTXT: ptr(cfclient.RegistryPayload{
+			cfg:  baseCfg,
+			existingTXTContent: cfclient.EncodeRegistryPayload(cfclient.RegistryPayload{
 				Owner: "Cloudflare-Operator", // capitalised != ownerID
 			}),
 			existing:   &cfclient.DNSRecord{ID: "r3", Content: "1.2.3.4"},
 			adoptOptIn: false,
 			wantAction: RegistryActionRefuseForeignOwner,
-			wantErrIs:  ErrForeignTXTOwner,
+		},
+		{
+			// Adopt opts in but no existing record — still Create (not AdoptOrphan)
+			name:               "no TXT, adopt opted in, but no existing record -> Create not AdoptOrphan",
+			cfg:                baseCfg,
+			existingTXTContent: "",
+			existing:           nil,
+			adoptOptIn:         true,
+			wantAction:         RegistryActionCreate,
+		},
+		{
+			// Same-owner, same-resource -> Reconcile
+			name:               "same owner same resource -> Reconcile",
+			cfg:                baseCfg,
+			existingTXTContent: ownPayload(ownerID),
+			existing:           &cfclient.DNSRecord{ID: "r2", Content: "5.6.7.8"},
+			adoptOptIn:         false,
+			wantAction:         RegistryActionReconcile,
+		},
+		{
+			// Foreign TXT with adopt opted in — adopt flag doesn't override foreign TXT
+			name: "existing record with foreign TXT and adopt opted in -> still RefuseForeignOwner",
+			cfg:  baseCfg,
+			existingTXTContent: cfclient.EncodeRegistryPayload(cfclient.RegistryPayload{
+				Owner: "external-dns",
+			}),
+			existing:   &cfclient.DNSRecord{ID: "r1", Content: "1.2.3.4"},
+			adoptOptIn: true,
+			wantAction: RegistryActionRefuseForeignOwner,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			action, err := RegistryDecide(ownerID, tt.existingTXT, tt.existing, tt.adoptOptIn)
+			action := RegistryDecide(tt.cfg, tt.existing, tt.existingTXTContent, tt.adoptOptIn)
 
 			if action != tt.wantAction {
 				t.Errorf("RegistryDecide() action = %v, want %v", action, tt.wantAction)
-			}
-
-			if tt.wantErrIs != nil {
-				if err == nil {
-					t.Fatalf("expected error wrapping %v, got nil", tt.wantErrIs)
-				}
-				if !errors.Is(err, tt.wantErrIs) {
-					t.Errorf("expected errors.Is(%v), got %v", tt.wantErrIs, err)
-				}
-			} else {
-				if err != nil {
-					t.Errorf("expected no error, got %v", err)
-				}
 			}
 		})
 	}
@@ -172,29 +200,5 @@ func TestRegistrySentinels(t *testing.T) {
 	}
 	if errors.Is(ErrForeignTXTOwner, ErrTXTRegistryGap) {
 		t.Error("ErrForeignTXTOwner and ErrTXTRegistryGap must be distinct")
-	}
-}
-
-// TestRegistryAction_String checks that the RegistryAction type has legible
-// String values (avoids numeric surprises in log output).
-func TestRegistryAction_String(t *testing.T) {
-	actions := []RegistryAction{
-		RegistryActionCreate,
-		RegistryActionReconcile,
-		RegistryActionAdopt,
-		RegistryActionAdoptOrphan,
-		RegistryActionRefuseForeignOwner,
-		RegistryActionRefuseOrphan,
-	}
-	seen := map[string]RegistryAction{}
-	for _, a := range actions {
-		s := a.String()
-		if s == "" {
-			t.Errorf("RegistryAction(%d).String() returned empty string", a)
-		}
-		if prev, ok := seen[s]; ok {
-			t.Errorf("duplicate String() %q for actions %v and %v", s, prev, a)
-		}
-		seen[s] = a
 	}
 }

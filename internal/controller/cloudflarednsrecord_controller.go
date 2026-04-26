@@ -248,18 +248,22 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 		}
 	}
 
-	// TXT registry decision (§5.4).
+	// TXT registry decision (§11.3).
 	// Skip for:
 	//   - registry disabled (TxtOwnerID == "")
 	//   - record is a TXT type (no companion TXT for TXT records)
 	//   - record is itself a companion TXT (AnnotationRegistryFor present)
-	if r.Registry.TxtOwnerID != "" &&
+	registryEnabled := r.Registry.TxtOwnerID != "" &&
 		dnsRecord.Spec.Type != "TXT" &&
-		dnsRecord.GetAnnotations()[AnnotationRegistryFor] == "" {
-		refused, refuseResult, refuseErr := r.applyRegistryDecision(ctx, dnsRecord, dnsClient, zoneID, existing)
+		dnsRecord.GetAnnotations()[AnnotationRegistryFor] == ""
+
+	var registryVerdict RegistryAction
+	if registryEnabled {
+		refused, verdict, refuseResult, refuseErr := r.applyRegistryDecision(ctx, dnsRecord, dnsClient, zoneID, existing)
 		if refused {
 			return refuseResult, refuseErr
 		}
+		registryVerdict = verdict
 	}
 
 	// Build desired params
@@ -301,6 +305,17 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 		logger.Info("created DNS record", "recordID", created.ID)
 		r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordCreated",
 			fmt.Sprintf("Created DNS record %s -> %s", dnsRecord.Spec.Name, created.Content))
+
+		// Write companion TXT AFTER main record succeeds (plan §11.5c).
+		// Only on RegistryActionCreate: the TXT does not yet exist.
+		if registryEnabled && registryVerdict == RegistryActionCreate {
+			if writeErr := r.writeRegistryTXT(ctx, dnsRecord, dnsClient, zoneID); writeErr != nil {
+				if !stderrors.Is(writeErr, ErrSourceLabelsMissing) {
+					return ctrl.Result{}, fmt.Errorf("write registry TXT after create: %w", writeErr)
+				}
+				logger.Info("skipped companion TXT write: source labels missing", "record", dnsRecord.Spec.Name)
+			}
+		}
 	} else {
 		// Check if update needed
 		if r.needsUpdate(existing, params) {

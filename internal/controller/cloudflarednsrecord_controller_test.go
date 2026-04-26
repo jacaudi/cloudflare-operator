@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -925,8 +926,6 @@ func TestRegistry_CreateWritesCompanionTXT(t *testing.T) {
 		return nil, nil
 	}
 
-	origCreate := mock
-	_ = origCreate
 	// We want to capture all creates
 	capturer := &capturingMockDNSClient{mockDNSClient: mock}
 
@@ -1216,7 +1215,7 @@ func TestRegistry_PlaintextDefault(t *testing.T) {
 		t.Fatal("expected companion TXT to be written")
 	}
 	// Plaintext must contain the heritage token
-	if !containsHeritage(txtContent) {
+	if !strings.Contains(txtContent, "heritage=external-dns") {
 		t.Errorf("expected plaintext TXT to contain 'heritage=external-dns', got: %q", txtContent)
 	}
 }
@@ -1255,7 +1254,7 @@ func TestRegistry_EncryptionSmoke(t *testing.T) {
 		t.Fatal("expected companion TXT to be written")
 	}
 	// Encrypted content must NOT contain the plaintext heritage token directly
-	if containsHeritage(txtContent) {
+	if strings.Contains(txtContent, "heritage=external-dns") {
 		t.Errorf("expected encrypted TXT to NOT contain literal 'heritage=external-dns', got: %q", txtContent)
 	}
 }
@@ -1277,18 +1276,314 @@ func (c *capturingMockDNSClient) UpdateRecord(ctx context.Context, zoneID, recor
 	return c.mockDNSClient.UpdateRecord(ctx, zoneID, recordID, params)
 }
 
-func containsHeritage(s string) bool {
-	return len(s) > 0 && (s[0] == '"' || (len(s) > 9 && s[:9] == "heritage=")) ||
-		len(s) > 0 && stringContains(s, "heritage=external-dns")
-}
+// TestRegistry_FailedMainCreate_NoOrphanTXT verifies that if the main
+// CreateRecord call fails, no companion TXT is written (orphan-TXT prevention).
+// Plan §11.5c: companion TXT is written AFTER the main record write succeeds.
+func TestRegistry_FailedMainCreate_NoOrphanTXT(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
 
-func stringContains(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+	mock := newMockDNSClient()
+	// CreateRecord fails for all record types — this simulates a Cloudflare error
+	// on the main A-record write. We track calls via capturer to distinguish
+	// main-record creates from TXT creates.
+	mock.createErr = fmt.Errorf("simulated Cloudflare create error")
+
+	capturer := &capturingMockDNSClient{mockDNSClient: mock}
+	r := buildReconcilerWithRegistry(s, capturer, RegistryConfig{TxtOwnerID: "cloudflare-operator"}, dnsRecord, secret)
+
+	// The controller handles the create error gracefully (sets status condition,
+	// requeues with 1-minute backoff) and returns nil from Reconcile.
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (controller should handle create failure gracefully): %v", err)
+	}
+	// Should requeue (not zero) because create failed.
+	if result.RequeueAfter == 0 {
+		t.Error("expected non-zero RequeueAfter when CreateRecord fails")
+	}
+
+	// No companion TXT must have been written when main create fails.
+	for _, p := range capturer.createParams {
+		if p.Type == testRecordTypeTXT {
+			t.Errorf("companion TXT must NOT be written when main CreateRecord fails, got: %+v", p)
 		}
 	}
-	return false
+	for _, p := range capturer.updateParams {
+		if p.Type == testRecordTypeTXT {
+			t.Errorf("companion TXT must NOT be updated when main CreateRecord fails, got: %+v", p)
+		}
+	}
+}
+
+// TestRegistry_DecryptFailure_RefusedAsForeign verifies that when a TXT
+// exists but cannot be decrypted with the configured import keys, the
+// reconcile routes to ReasonRecordOwnershipConflict with 5-min requeue.
+func TestRegistry_DecryptFailure_RefusedAsForeign(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+
+	// A valid-base64 blob that looks encrypted (≥32 bytes, block-aligned) but
+	// was NOT encrypted with our key — decryption will fail or produce garbage
+	// that fails the heritage sanity check.
+	badCiphertext := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+	mock := newMockDNSClient()
+	mock.listOverride = func(zoneID, name, recordType string) ([]cfclient.DNSRecord, error) {
+		if recordType == testRecordTypeTXT {
+			return []cfclient.DNSRecord{{
+				ID:      "txt-garbled",
+				Name:    name,
+				Type:    testRecordTypeTXT,
+				Content: badCiphertext,
+			}}, nil
+		}
+		return []cfclient.DNSRecord{{
+			ID:      "rec-1",
+			Name:    "test.example.com",
+			Type:    "A",
+			Content: testDNSContent,
+		}}, nil
+	}
+
+	// Provide a key so decryption is attempted (not skipped as plaintext).
+	key := make([]byte, 32) // 32 zero-bytes — valid AES-256 key
+	r := buildReconcilerWithRegistry(s, mock, RegistryConfig{
+		TxtOwnerID:           "cloudflare-operator",
+		TxtImportDecryptKeys: [][]byte{key},
+	}, dnsRecord, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 5*time.Minute {
+		t.Errorf("expected RequeueAfter=5m for decrypt failure, got %v", result.RequeueAfter)
+	}
+
+	// Status must reflect RecordOwnershipConflict (decrypt failure → foreign).
+	var updated cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	var foundConflict bool
+	for _, c := range updated.Status.Conditions {
+		if c.Reason == cloudflarev1alpha1.ReasonRecordOwnershipConflict {
+			foundConflict = true
+		}
+	}
+	if !foundConflict {
+		t.Errorf("expected RecordOwnershipConflict condition for decrypt failure, got: %+v", updated.Status.Conditions)
+	}
+}
+
+// TestRegistry_DecodeFailure_Refused verifies that a TXT that passes
+// DecryptPayload (plaintext passthrough) but fails DecodeRegistryPayload
+// routes to RefuseForeignOwner / ReasonRecordOwnershipConflict.
+func TestRegistry_DecodeFailure_Refused(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+
+	// Valid quoted string but NOT a heritage payload — DecodeRegistryPayload fails.
+	invalidPayload := `"random-bytes-no-heritage"`
+
+	mock := newMockDNSClient()
+	mock.listOverride = func(zoneID, name, recordType string) ([]cfclient.DNSRecord, error) {
+		if recordType == testRecordTypeTXT {
+			return []cfclient.DNSRecord{{
+				ID:      "txt-bad",
+				Name:    name,
+				Type:    testRecordTypeTXT,
+				Content: invalidPayload,
+			}}, nil
+		}
+		return []cfclient.DNSRecord{{
+			ID:      "rec-1",
+			Name:    "test.example.com",
+			Type:    "A",
+			Content: testDNSContent,
+		}}, nil
+	}
+
+	r := buildReconcilerWithRegistry(s, mock, RegistryConfig{TxtOwnerID: "cloudflare-operator"}, dnsRecord, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 5*time.Minute {
+		t.Errorf("expected RequeueAfter=5m for decode failure, got %v", result.RequeueAfter)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	var foundConflict bool
+	for _, c := range updated.Status.Conditions {
+		if c.Reason == cloudflarev1alpha1.ReasonRecordOwnershipConflict {
+			foundConflict = true
+		}
+	}
+	if !foundConflict {
+		t.Errorf("expected RecordOwnershipConflict condition for decode failure, got: %+v", updated.Status.Conditions)
+	}
+}
+
+// TestRegistry_AdoptOrphan_AssertMainRecordWrite verifies that adopt-orphan
+// writes the companion TXT AND falls through to create/update the main record.
+func TestRegistry_AdoptOrphan_AssertMainRecordWrite(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	dnsRecord.Annotations = map[string]string{AnnotationAdopt: "true"}
+	dnsRecord.Labels = map[string]string{
+		LabelSourceKind:      "httproute",
+		LabelSourceNamespace: "default",
+		LabelSourceName:      "my-route",
+	}
+	secret := newTestSecret("default")
+
+	// Pre-existing A record with no companion TXT → AdoptOrphan path.
+	existingRecord := &cfclient.DNSRecord{
+		ID:      "rec-orphan",
+		Name:    "test.example.com",
+		Type:    "A",
+		Content: testDNSContent,
+	}
+	mock := newMockDNSClient()
+	mock.records["rec-orphan"] = existingRecord
+	mock.listOverride = func(zoneID, name, recordType string) ([]cfclient.DNSRecord, error) {
+		if recordType == testRecordTypeTXT {
+			return nil, nil // no companion TXT
+		}
+		return []cfclient.DNSRecord{*existingRecord}, nil
+	}
+
+	capturer := &capturingMockDNSClient{mockDNSClient: mock}
+	r := buildReconcilerWithRegistry(s, capturer, RegistryConfig{TxtOwnerID: "cloudflare-operator"}, dnsRecord, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Companion TXT must be written during adopt.
+	var foundTXTWrite bool
+	for _, p := range capturer.createParams {
+		if p.Type == testRecordTypeTXT {
+			foundTXTWrite = true
+		}
+	}
+	for _, p := range capturer.updateParams {
+		if p.Type == testRecordTypeTXT {
+			foundTXTWrite = true
+		}
+	}
+	if !foundTXTWrite {
+		t.Error("expected companion TXT to be written during adopt-orphan")
+	}
+
+	// Main record should also have been processed (not refused).
+	// The existing record already has matching content, so no update needed.
+	// But the status should reflect the record is managed.
+	var updated cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	if updated.Status.RecordID == "" {
+		t.Error("expected RecordID to be set after adopt-orphan reconcile")
+	}
+}
+
+// TestRegistry_WriteRegistryTXT_UpdatesExistingTXT verifies that when a
+// companion TXT already exists at the affixed FQDN, writeRegistryTXT calls
+// UpdateRecord (not CreateRecord) on that TXT.
+func TestRegistry_WriteRegistryTXT_UpdatesExistingTXT(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+
+	const ownerID = "cloudflare-operator"
+	// Stale TXT — same owner but different source labels (old source name).
+	staleTXTContent := `"heritage=external-dns,external-dns/owner=cloudflare-operator,external-dns/resource=httproute/default/old-route"`
+
+	// The affixed name for "test.example.com" type "A" with default config is "a-test.example.com".
+	affixedName := cfclient.AffixName("test.example.com", "A", cfclient.AffixConfig{})
+
+	mock := newMockDNSClient()
+	// Pre-seed existing main A record (so registry decision is Reconcile, not Create).
+	mock.records["rec-existing"] = &cfclient.DNSRecord{
+		ID:      "rec-existing",
+		Name:    "test.example.com",
+		Type:    "A",
+		Content: testDNSContent,
+		TTL:     1,
+	}
+	// Pre-seed existing companion TXT at the affixed name.
+	mock.records["txt-stale"] = &cfclient.DNSRecord{
+		ID:      "txt-stale",
+		Name:    affixedName,
+		Type:    testRecordTypeTXT,
+		Content: staleTXTContent,
+	}
+	mock.listOverride = func(zoneID, name, recordType string) ([]cfclient.DNSRecord, error) {
+		if recordType == testRecordTypeTXT {
+			return []cfclient.DNSRecord{{
+				ID:      "txt-stale",
+				Name:    name,
+				Type:    testRecordTypeTXT,
+				Content: staleTXTContent,
+			}}, nil
+		}
+		return []cfclient.DNSRecord{*mock.records["rec-existing"]}, nil
+	}
+
+	capturer := &capturingMockDNSClient{mockDNSClient: mock}
+	r := buildReconcilerWithRegistry(s, capturer, RegistryConfig{TxtOwnerID: ownerID}, dnsRecord, secret)
+
+	// Call writeRegistryTXT directly — this is the unit under test.
+	err := r.writeRegistryTXT(context.Background(), dnsRecord, capturer, "zone-abc")
+	if err != nil {
+		t.Fatalf("writeRegistryTXT returned error: %v", err)
+	}
+
+	// Must have called UpdateRecord, not CreateRecord, on the TXT.
+	var txtUpdated bool
+	for _, p := range capturer.updateParams {
+		if p.Type == testRecordTypeTXT {
+			txtUpdated = true
+			// The content should now reflect current source labels (my-route).
+			if !strings.Contains(p.Content, "my-route") {
+				t.Errorf("updated TXT content should reflect current source, got: %q", p.Content)
+			}
+		}
+	}
+	if !txtUpdated {
+		t.Error("expected UpdateRecord to be called for stale companion TXT")
+	}
+
+	// Must NOT have created a new TXT.
+	for _, p := range capturer.createParams {
+		if p.Type == testRecordTypeTXT {
+			t.Errorf("expected no TXT CreateRecord when stale TXT exists (should update), got: %+v", p)
+		}
+	}
 }
 
 func TestDNSReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {

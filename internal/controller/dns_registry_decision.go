@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,44 +32,26 @@ import (
 )
 
 // RegistryAction is the verdict returned by RegistryDecide.
-type RegistryAction int
+// Using string constants gives self-documenting log/event output without a
+// separate String() method.
+type RegistryAction string
 
 const (
 	// RegistryActionCreate: no existing DNS record found — proceed to create.
-	RegistryActionCreate RegistryAction = iota
+	RegistryActionCreate RegistryAction = "Create"
 	// RegistryActionReconcile: existing record is owned by us — reconcile content drift.
-	RegistryActionReconcile
-	// RegistryActionAdopt: our TXT exists but the DNS record is gone — re-create and claim.
-	RegistryActionAdopt
+	RegistryActionReconcile RegistryAction = "Reconcile"
+	// RegistryActionAdopt: existing TXT is owned by a listed import-owner — rewrite TXT and claim.
+	RegistryActionAdopt RegistryAction = "Adopt"
 	// RegistryActionAdoptOrphan: existing DNS record has no TXT and cloudflare.io/adopt is set.
-	RegistryActionAdoptOrphan
+	RegistryActionAdoptOrphan RegistryAction = "AdoptOrphan"
 	// RegistryActionRefuseForeignOwner: existing TXT is owned by someone else — do not touch.
-	RegistryActionRefuseForeignOwner
-	// RegistryActionRefuseOrphan: existing record has no TXT and adopt is not opted in.
-	RegistryActionRefuseOrphan
+	RegistryActionRefuseForeignOwner RegistryAction = "RefuseForeignOwner"
+	// RegistryActionRefuseNoTXT: existing record has no TXT and adopt is not opted in.
+	RegistryActionRefuseNoTXT RegistryAction = "RefuseNoTXT"
 )
 
-// String returns a human-readable name for the action (used in log/event messages).
-func (a RegistryAction) String() string {
-	switch a {
-	case RegistryActionCreate:
-		return "Create"
-	case RegistryActionReconcile:
-		return "Reconcile"
-	case RegistryActionAdopt:
-		return "Adopt"
-	case RegistryActionAdoptOrphan:
-		return "AdoptOrphan"
-	case RegistryActionRefuseForeignOwner:
-		return "RefuseForeignOwner"
-	case RegistryActionRefuseOrphan:
-		return "RefuseOrphan"
-	default:
-		return fmt.Sprintf("unknown(%d)", int(a))
-	}
-}
-
-// Sentinel errors returned by RegistryDecide for classifiable failure verdicts.
+// Sentinel errors returned for classifiable failure verdicts.
 // Callers MUST use errors.Is for comparison — never compare error strings.
 var (
 	// ErrForeignTXTOwner indicates a companion TXT record exists whose owner
@@ -94,6 +77,12 @@ type RegistryConfig struct {
 	// are skipped and the controller behaves identically to pre-registry releases.
 	TxtOwnerID string
 
+	// TxtImportOwners enumerates prior controllers (e.g. "external-dns") whose
+	// TXT records this operator may adopt. A TXT whose payload.Owner appears in
+	// this list, and whose payload is otherwise valid, results in
+	// RegistryActionAdopt — this controller rewrites the TXT to claim the record.
+	TxtImportOwners []string // restore — plan §11.3
+
 	// AffixConfig controls companion-TXT name derivation.
 	// The zero value matches external-dns's default affix scheme.
 	AffixConfig cfclient.AffixConfig
@@ -106,116 +95,122 @@ type RegistryConfig struct {
 	// TxtImportDecryptKeys is a list of AES-256 keys tried in order when
 	// decoding an existing companion TXT. Supports key rotation: include the
 	// old key here and the new key in TxtEncryptAESKey.
+	// When empty/nil, only plaintext incoming TXTs can be read. Encrypted TXT
+	// records will fail to decrypt and route to RefuseForeignOwner.
 	TxtImportDecryptKeys [][]byte
 }
 
-// applyRegistryDecision executes the full §5.4 decision table for a single
+// applyRegistryDecision executes the full §11.3 decision table for a single
 // reconcile pass. It looks up the companion TXT, calls RegistryDecide, then
 // either refuses (returns refused=true with the error) or writes the companion
-// TXT and falls through (returns refused=false, zero result, nil error).
+// TXT (for adopt paths) and falls through (returns refused=false, zero result,
+// nil error).
+//
+// For RegistryActionCreate and RegistryActionReconcile, companion TXT is NOT
+// written here — it is written by the caller AFTER the main record succeeds.
+// For RegistryActionAdopt and RegistryActionAdoptOrphan, the TXT rewrite IS
+// performed here (this is the reclaim path).
 //
 // The caller (reconcileRecord) continues with normal DNS-record create/update
-// only when refused=false is returned.
+// only when refused=false is returned. The returned action indicates the
+// registry verdict so the caller can post-write TXT on Create paths.
 func (r *CloudflareDNSRecordReconciler) applyRegistryDecision(
 	ctx context.Context,
 	dnsRecord *cloudflarev1alpha1.CloudflareDNSRecord,
 	dnsClient cfclient.DNSClient,
 	zoneID string,
 	existing *cfclient.DNSRecord,
-) (refused bool, result ctrl.Result, err error) {
+) (refused bool, action RegistryAction, result ctrl.Result, err error) {
 	logger := log.FromContext(ctx)
 	adoptOptIn := dnsRecord.GetAnnotations()[AnnotationAdopt] == "true"
 	affixedName := cfclient.AffixName(dnsRecord.Spec.Name, dnsRecord.Spec.Type, r.Registry.AffixConfig)
 
-	// Look up the companion TXT.
-	var existingTXT *cfclient.RegistryPayload
+	// Look up the raw companion TXT content.
+	var existingTXTContent string
 	txtRecords, listErr := dnsClient.ListRecordsByNameAndType(ctx, zoneID, affixedName, "TXT")
 	if listErr != nil {
-		return true, ctrl.Result{}, fmt.Errorf("list companion TXT: %w", listErr)
+		return true, "", ctrl.Result{}, fmt.Errorf("list companion TXT: %w", listErr)
 	}
 	if len(txtRecords) > 0 {
-		raw := txtRecords[0].Content
-		decoded, decErr := cfclient.DecryptPayload(raw, r.Registry.TxtImportDecryptKeys)
-		if decErr != nil {
-			failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions, //nolint:errcheck
-				cloudflarev1alpha1.ReasonTxtDecryptFailed, decErr, 5*time.Minute)
-			return true, ctrl.Result{RequeueAfter: 5 * time.Minute}, decErr
-		}
-		parsed, parseErr := cfclient.DecodeRegistryPayload(decoded)
-		if parseErr == nil {
-			existingTXT = &parsed
-		}
+		existingTXTContent = txtRecords[0].Content
 	}
 
-	action, decideErr := RegistryDecide(r.Registry.TxtOwnerID, existingTXT, existing, adoptOptIn)
-	logger.Info("registry decision", "action", action.String(), "record", dnsRecord.Spec.Name)
+	verdict := RegistryDecide(r.Registry, existing, existingTXTContent, adoptOptIn)
+	logger.Info("registry decision", "action", verdict, "record", dnsRecord.Spec.Name)
 
-	switch action {
-	case RegistryActionRefuseForeignOwner, RegistryActionRefuseOrphan:
-		return true, ctrl.Result{RequeueAfter: 5 * time.Minute}, decideErr
+	switch verdict {
+	case RegistryActionRefuseForeignOwner:
+		refuseErr := fmt.Errorf("%w: %s", ErrForeignTXTOwner, dnsRecord.Spec.Name)
+		failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions, //nolint:errcheck
+			cloudflarev1alpha1.ReasonRecordOwnershipConflict, refuseErr, 5*time.Minute)
+		return true, verdict, ctrl.Result{RequeueAfter: 5 * time.Minute}, refuseErr
+
+	case RegistryActionRefuseNoTXT:
+		refuseErr := fmt.Errorf("%w: %s", ErrTXTRegistryGap, dnsRecord.Spec.Name)
+		failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions, //nolint:errcheck
+			cloudflarev1alpha1.ReasonTxtRegistryGap, refuseErr, 5*time.Minute)
+		return true, verdict, ctrl.Result{RequeueAfter: 5 * time.Minute}, refuseErr
 
 	case RegistryActionAdopt, RegistryActionAdoptOrphan:
 		r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, cloudflarev1alpha1.ReasonRecordAdopted,
 			fmt.Sprintf("Adopted DNS record %s — writing TXT ownership", dnsRecord.Spec.Name))
 		if writeErr := r.writeRegistryTXT(ctx, dnsRecord, dnsClient, zoneID); writeErr != nil {
 			if !errors.Is(writeErr, ErrSourceLabelsMissing) {
-				return true, ctrl.Result{}, fmt.Errorf("write registry TXT (adopt): %w", writeErr)
+				return true, verdict, ctrl.Result{}, fmt.Errorf("write registry TXT (adopt): %w", writeErr)
 			}
 			logger.Info("skipped companion TXT write: source labels missing", "record", dnsRecord.Spec.Name)
 		}
 
-	case RegistryActionCreate, RegistryActionReconcile:
-		if writeErr := r.writeRegistryTXT(ctx, dnsRecord, dnsClient, zoneID); writeErr != nil {
-			if !errors.Is(writeErr, ErrSourceLabelsMissing) {
-				return true, ctrl.Result{}, fmt.Errorf("write registry TXT: %w", writeErr)
-			}
-			logger.Info("skipped companion TXT write: source labels missing", "record", dnsRecord.Spec.Name)
-		}
+		// RegistryActionCreate and RegistryActionReconcile: companion TXT is written
+		// AFTER the main record succeeds (in reconcileRecord), not here.
 	}
 
-	return false, ctrl.Result{}, nil
+	return false, verdict, ctrl.Result{}, nil
 }
 
-// RegistryDecide applies the §5.4 decision table and returns the action the
+// RegistryDecide applies the §11.3 decision table and returns the action the
 // controller should take for the current reconcile pass.
 //
 // Parameters:
-//   - ownerID: the TxtOwnerID from RegistryConfig (caller guarantees non-empty)
-//   - existingTXT: decoded payload from the companion TXT record, nil if absent
+//   - cfg: full RegistryConfig (used for TxtOwnerID, TxtImportOwners, TxtImportDecryptKeys)
 //   - existing: the current DNS record at name+type, nil if absent
+//   - existingTXTContent: raw wire content from the companion TXT record, "" if absent
 //   - adoptOptIn: true when the CloudflareDNSRecord carries cloudflare.io/adopt="true"
 //
-// The error return is non-nil only for the two refuse verdicts; it always wraps
-// one of ErrForeignTXTOwner or ErrTXTRegistryGap so callers can use errors.Is.
+// DecryptPayload errors and DecodeRegistryPayload errors both route to
+// RegistryActionRefuseForeignOwner. This conservatively conflates
+// "foreign-controller wrote an encrypted blob with a key we don't hold" with
+// "TXT corruption" — both cases require human intervention and should not
+// block adoption candidates.
 func RegistryDecide(
-	ownerID string,
-	existingTXT *cfclient.RegistryPayload,
+	cfg RegistryConfig,
 	existing *cfclient.DNSRecord,
+	existingTXTContent string,
 	adoptOptIn bool,
-) (RegistryAction, error) {
-	switch {
-	case existing == nil && existingTXT == nil:
-		// Nothing at all — clean create.
-		return RegistryActionCreate, nil
-
-	case existing == nil && existingTXT != nil:
-		// Our TXT is present but the DNS record disappeared — re-create and reclaim.
-		return RegistryActionAdopt, nil
-
-	case existing != nil && existingTXT == nil:
-		// DNS record exists but no ownership TXT.
-		if adoptOptIn {
-			return RegistryActionAdoptOrphan, nil
-		}
-		return RegistryActionRefuseOrphan, fmt.Errorf("%w: %s", ErrTXTRegistryGap, existing.ID)
-
-	default:
-		// Both exist — check ownership.
-		// Comparison is intentionally case-sensitive (owner tokens are canonical strings).
-		if existingTXT.Owner == ownerID {
-			return RegistryActionReconcile, nil
-		}
-		return RegistryActionRefuseForeignOwner,
-			fmt.Errorf("%w: record %s is owned by %q", ErrForeignTXTOwner, existing.ID, existingTXT.Owner)
+) RegistryAction {
+	if existing == nil {
+		return RegistryActionCreate
 	}
+	if existingTXTContent == "" {
+		if adoptOptIn {
+			return RegistryActionAdoptOrphan
+		}
+		return RegistryActionRefuseNoTXT
+	}
+	plain, err := cfclient.DecryptPayload(existingTXTContent, cfg.TxtImportDecryptKeys)
+	if err != nil {
+		return RegistryActionRefuseForeignOwner
+	}
+	payload, err := cfclient.DecodeRegistryPayload(plain)
+	if err != nil {
+		return RegistryActionRefuseForeignOwner
+	}
+	// Comparison is intentionally case-sensitive (owner tokens are canonical strings).
+	if payload.Owner == cfg.TxtOwnerID {
+		return RegistryActionReconcile
+	}
+	if slices.Contains(cfg.TxtImportOwners, payload.Owner) {
+		return RegistryActionAdopt
+	}
+	return RegistryActionRefuseForeignOwner
 }
