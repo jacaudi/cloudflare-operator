@@ -32,6 +32,7 @@ type mockZoneClient struct {
 	updateSettingCalls int
 	updateBotCalled    bool
 	lastZoneID         string
+	appliedSettings    []string // ordered list of setting IDs successfully applied
 }
 
 func newMockZoneClient() *mockZoneClient {
@@ -55,6 +56,7 @@ func (m *mockZoneClient) UpdateSetting(_ context.Context, zoneID, settingID stri
 	}
 	m.lastZoneID = zoneID
 	m.settings[settingID] = value
+	m.appliedSettings = append(m.appliedSettings, settingID)
 	m.updateSettingCalls++
 	return nil
 }
