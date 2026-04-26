@@ -39,7 +39,7 @@ The Helm chart is published as an OCI artifact to GHCR. It installs the CRDs, th
 ```sh
 helm install cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 1.0.0 \
+  --version 0.6.0 \
   --namespace cloudflare-operator \
   --create-namespace
 ```
