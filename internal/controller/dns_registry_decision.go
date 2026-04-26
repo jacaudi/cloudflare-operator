@@ -122,7 +122,7 @@ func (r *CloudflareDNSRecordReconciler) applyRegistryDecision(
 	existing *cfclient.DNSRecord,
 ) (refused bool, action RegistryAction, result ctrl.Result, err error) {
 	logger := log.FromContext(ctx)
-	adoptOptIn := dnsRecord.GetAnnotations()[AnnotationAdopt] == "true"
+	adoptOptIn := dnsRecord.GetAnnotations()[AnnotationAdopt] == AnnotationValueTrue
 	affixedName := cfclient.AffixName(dnsRecord.Spec.Name, dnsRecord.Spec.Type, r.Registry.AffixConfig)
 
 	// Look up the raw companion TXT content.

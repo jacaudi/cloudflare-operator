@@ -192,7 +192,7 @@ func TestReconcileAggregation_HappyPath(t *testing.T) {
 	rule := newRuleForTunnel("r1", "network", "home", "network")
 	c := buildAggFakeClient(tun, rule)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -249,7 +249,7 @@ func TestReconcileAggregation_EmptyRuleList(t *testing.T) {
 	tun := newTunnelForAgg("home", "network", true)
 	c := buildAggFakeClient(tun)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -275,7 +275,7 @@ func TestReconcileAggregation_ConnectorDisabled(t *testing.T) {
 	tun.Spec.Connector = &cloudflarev1alpha1.ConnectorSpec{Enabled: false}
 	c := buildAggFakeClient(tun)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -315,7 +315,7 @@ func TestReconcileAggregation_ConnectorNilSpec(t *testing.T) {
 	tun.Spec.Connector = nil // ensure nil path
 	c := buildAggFakeClient(tun)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -349,7 +349,7 @@ func TestReconcileAggregation_DeploymentAdoptionRefusal(t *testing.T) {
 	}
 	c := buildAggFakeClient(tun, preExisting)
 
-	err := ReconcileConnectorAndRules(context.Background(), c, tun)
+	err := ReconcileConnectorAndRules(context.Background(), c, tun, nil)
 	if err == nil {
 		t.Fatal("expected error for unowned Deployment, got nil")
 	}
@@ -382,7 +382,7 @@ func TestReconcileAggregation_DeploymentUpdate(t *testing.T) {
 	}
 	c := buildAggFakeClient(tun, preExisting)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("expected successful update, got: %v", err)
 	}
 
@@ -434,7 +434,7 @@ func TestReconcileAggregation_RuleDecisionBranches(t *testing.T) {
 	}
 
 	c := buildAggFakeClient(tun, r1, r2, r3)
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -474,7 +474,7 @@ func TestReconcileAggregation_ConfigHashPropagation(t *testing.T) {
 	rule := newRuleForTunnel("r1", "network", "home", "network")
 	c := buildAggFakeClient(tun, rule)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -513,7 +513,7 @@ func TestReconcileAggregation_ConnectorReadyReplicas_NotFound(t *testing.T) {
 	tun := newTunnelForAgg("home", "network", true)
 	c := buildAggFakeClient(tun)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -540,7 +540,7 @@ func TestReconcileAggregation_ConnectorReadyReplicas_ZeroReadyReplicas(t *testin
 	c := buildAggFakeClient(tun)
 
 	// First reconcile: creates the Deployment.
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("first ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -561,7 +561,7 @@ func TestReconcileAggregation_ConnectorReadyReplicas_Ready(t *testing.T) {
 	c := buildAggFakeClient(tun)
 
 	// First reconcile to create the Deployment.
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("first ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -577,7 +577,7 @@ func TestReconcileAggregation_ConnectorReadyReplicas_Ready(t *testing.T) {
 	}
 
 	// Re-run reconcile.
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("second ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -603,7 +603,7 @@ func TestReconcileAggregation_ConnectorStatusPopulated(t *testing.T) {
 	tun := newTunnelForAgg("home", "network", true)
 	c := buildAggFakeClient(tun)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -636,7 +636,7 @@ func TestReconcileAggregation_RuleObservedGeneration(t *testing.T) {
 	rule.Generation = 3
 	c := buildAggFakeClient(tun, rule)
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -690,7 +690,7 @@ func TestReconcileAggregation_ResolvedBackendClearedOnNonIncluded(t *testing.T) 
 		t.Fatalf("seed r2 stale status: %v", err)
 	}
 
-	if err := ReconcileConnectorAndRules(context.Background(), c, tun); err != nil {
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
 		t.Fatalf("ReconcileConnectorAndRules: %v", err)
 	}
 
@@ -705,6 +705,70 @@ func TestReconcileAggregation_ResolvedBackendClearedOnNonIncluded(t *testing.T) 
 	// Confirm it is indeed a DuplicateHostname decision (TunnelAccepted=False, Conflict=True).
 	assertCondition(t, ur2.Status.Conditions, cloudflarev1alpha1.ConditionTypeTunnelAccepted, metav1.ConditionFalse)
 	assertCondition(t, ur2.Status.Conditions, cloudflarev1alpha1.ConditionTypeConflict, metav1.ConditionTrue)
+}
+
+// ---- P2.7 AppliedToConfigHash -------------------------------------------
+
+// TestReconcileAggregation_AppliedToConfigHash_Set verifies that when a rule is
+// included in aggregation, its status.appliedToConfigHash is set to the tunnel's
+// config hash.
+func TestReconcileAggregation_AppliedToConfigHash_Set(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false) // connector off; focused on status
+	rule := newRuleForTunnel("r1", "network", "home", "network")
+	c := buildAggFakeClient(tun, rule)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	var updatedRule cloudflarev1alpha1.CloudflareTunnelRule
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: rule.Namespace, Name: rule.Name}, &updatedRule); err != nil {
+		t.Fatalf("get rule: %v", err)
+	}
+
+	if updatedRule.Status.AppliedToConfigHash == "" {
+		t.Error("status.appliedToConfigHash is empty for an included rule; expected it to be populated with the aggregation config hash")
+	}
+}
+
+// TestReconcileAggregation_AppliedToConfigHash_EmptyForNonIncluded verifies
+// that a DuplicateHostname rule does NOT get appliedToConfigHash set.
+func TestReconcileAggregation_AppliedToConfigHash_EmptyForNonIncluded(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false)
+
+	goodURL := strPtr("http://svc:8080")
+	r1 := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r1", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{"a.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  200,
+		},
+	}
+	// r2 loses the duplicate-hostname conflict.
+	r2 := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r2", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{"a.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  100,
+		},
+	}
+
+	c := buildAggFakeClient(tun, r1, r2)
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	var ur2 cloudflarev1alpha1.CloudflareTunnelRule
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "network", Name: "r2"}, &ur2); err != nil {
+		t.Fatalf("get r2: %v", err)
+	}
+	if ur2.Status.AppliedToConfigHash != "" {
+		t.Errorf("status.appliedToConfigHash = %q for non-included (DuplicateHostname) rule; expected empty", ur2.Status.AppliedToConfigHash)
+	}
 }
 
 // ---- assertion helpers ------------------------------------------------------

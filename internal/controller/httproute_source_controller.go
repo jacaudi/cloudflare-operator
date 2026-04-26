@@ -55,8 +55,9 @@ const recordTypeCNAME = "CNAME"
 // CloudflareDNSRecord + CloudflareTunnelRule CRs.
 type HTTPRouteSourceReconciler struct {
 	client.Client
-	Recorder   record.EventRecorder
-	TxtOwnerID string
+	Recorder    record.EventRecorder
+	TxtOwnerID  string
+	AffixConfig cfclient.AffixConfig
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
@@ -145,7 +146,7 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				"zone resolution failed for hostname %q: %v", h, err)
 			return ctrl.Result{}, nil
 		}
-		if err := r.emitDNSPair(ctx, &route, h, dnsContent, recordType, zone, proxied, ttl, sourceLabels, ownerRefs); err != nil {
+		if err := r.emitDNSPair(ctx, &route, h, dnsContent, recordType, zone, proxied, ttl, sourceLabels, ownerRefs, ann); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -247,25 +248,28 @@ func (r *HTTPRouteSourceReconciler) resolveBackendContent(
 	return "", recordTypeCNAME, "", nil
 }
 
-// resolveProxied determines the proxied flag. For tunnel targets, always returns
-// true. For other targets, parses the annotation (emitting a warning on parse
-// failure and keeping the default).
+// resolveProxied determines the proxied flag. Default is true for all target
+// kinds. For non-tunnel targets the annotation may override the default.
+// Tunnel targets always force true regardless of the annotation.
 func (r *HTTPRouteSourceReconciler) resolveProxied(
 	route *gwv1.HTTPRoute,
 	ts TargetSpec,
 	ann map[string]string,
 ) bool {
-	proxied := ts.Kind == TargetKindTunnel
-	if raw, ok := ann[AnnotationProxied]; ok && raw != "" {
-		v, parseErr := strconv.ParseBool(raw)
-		if parseErr != nil {
-			r.Recorder.Eventf(route, corev1.EventTypeWarning, cloudflarev1alpha1.ReasonInvalidAnnotation,
-				"invalid cloudflare.io/proxied value %q; ignoring and using default", raw)
-		} else {
-			proxied = v
+	proxied := true
+	if ts.Kind != TargetKindTunnel {
+		// Non-tunnel: allow the annotation to override the default.
+		if raw, ok := ann[AnnotationProxied]; ok && raw != "" {
+			v, parseErr := strconv.ParseBool(raw)
+			if parseErr != nil {
+				r.Recorder.Eventf(route, corev1.EventTypeWarning, cloudflarev1alpha1.ReasonInvalidAnnotation,
+					"invalid cloudflare.io/proxied value %q; ignoring and using default", raw)
+			} else {
+				proxied = v
+			}
 		}
 	}
-	// Tunnels MUST be proxied regardless of annotation.
+	// Tunnels MUST be proxied — cannot be turned off via annotation.
 	if ts.Kind == TargetKindTunnel {
 		proxied = true
 	}
@@ -386,13 +390,21 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 	ttl int,
 	labels map[string]string,
 	ownerRefs []metav1.OwnerReference,
+	sourceAnnotations map[string]string,
 ) error {
-	crName := fmt.Sprintf("httproute-%s-%s-%s", route.Namespace, route.Name, sanitizeDNSForCRName(hostname))
+	crName := capCRName(fmt.Sprintf("httproute-%s-%s-%s", route.Namespace, route.Name, sanitizeDNSForCRName(hostname)))
+	// Propagate cloudflare.io/adopt from the source object to the emitted CR so
+	// the DNS controller's registry decision can honour it.
+	var dnsRecordAnnotations map[string]string
+	if sourceAnnotations[AnnotationAdopt] == AnnotationValueTrue {
+		dnsRecordAnnotations = map[string]string{AnnotationAdopt: AnnotationValueTrue}
+	}
 	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            crName,
 			Namespace:       route.Namespace,
 			Labels:          labels,
+			Annotations:     dnsRecordAnnotations,
 			OwnerReferences: ownerRefs,
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
@@ -409,14 +421,14 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 		return fmt.Errorf("upsert DNS record for %q: %w", hostname, err)
 	}
 
-	txtFQDN := cfclient.AffixName(hostname, recordType, cfclient.AffixConfig{})
+	txtFQDN := cfclient.AffixName(hostname, recordType, r.AffixConfig)
 	txtContent := cfclient.EncodeRegistryPayload(cfclient.RegistryPayload{
 		Owner:           r.TxtOwnerID,
 		SourceKind:      "HTTPRoute",
 		SourceNamespace: route.Namespace,
 		SourceName:      route.Name,
 	})
-	txtCRName := fmt.Sprintf("httproute-%s-%s-%s-txt", route.Namespace, route.Name, sanitizeDNSForCRName(hostname))
+	txtCRName := capCRName(fmt.Sprintf("httproute-%s-%s-%s-txt", route.Namespace, route.Name, sanitizeDNSForCRName(hostname)))
 	txtRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      txtCRName,

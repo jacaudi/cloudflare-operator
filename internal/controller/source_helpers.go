@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -125,6 +127,29 @@ func isValidDNSName(hostname string) bool {
 		}
 	}
 	return true
+}
+
+// maxK8sName is the Kubernetes maximum length for resource names (DNS-1123 subdomain).
+const maxK8sName = 253
+
+// capCRName ensures a generated CR name does not exceed maxK8sName characters.
+// When the name is already within the limit, it is returned unchanged.
+// When it exceeds the limit, it is truncated and a 9-character hash suffix
+// ("-" + 8 hex chars from sha256 of the original full name) is appended to
+// preserve uniqueness. The result always satisfies DNS-1123 subdomain rules
+// (no trailing dashes — the truncation point trims any trailing dashes before
+// appending the hash).
+func capCRName(name string) string {
+	if len(name) <= maxK8sName {
+		return name
+	}
+	h := sha256.Sum256([]byte(name))
+	suffix := "-" + hex.EncodeToString(h[:4]) // "-" + 8 hex chars = 9 chars
+	maxHead := maxK8sName - len(suffix)
+	head := name[:maxHead]
+	// Trim any trailing dash introduced by truncation.
+	head = strings.TrimRight(head, "-")
+	return head + suffix
 }
 
 // firstNonEmpty returns the first non-empty string among a and b.

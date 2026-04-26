@@ -249,7 +249,6 @@ Events use the following reason strings:
 | `AmbiguousZone` | Multiple zones matched with equal suffix length |
 | `TunnelNotFound` | `tunnel:<name>` points at a non-existent `CloudflareTunnel` |
 | `TunnelNotReady` | The tunnel exists but `status.tunnelCNAME` is not yet set (transient) |
-| `RecordConflict` | Another CR or hand-authored record owns this FQDN |
 | `RecordOwnershipConflict` | TXT registry shows a foreign owner not in `txtImportOwners` |
 | `TxtRegistryGap` | Record exists in Cloudflare with no ownership TXT |
 | `RecordAdopted` | Successful adoption of a record from an import owner |

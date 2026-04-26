@@ -140,7 +140,7 @@ Both external-dns and cloudflare-operator are now running. external-dns continue
 
 **2. Annotate a pilot set of workloads.** Choose a small, low-risk set of `HTTPRoute` or `Service` objects. Add the `cloudflare.io/target` and other required annotations.
 
-**3. Verify adoption.** For each piloted workload, check for `RecordAdopted` events and `DNSAdopted=True` conditions:
+**3. Verify adoption.** For each piloted workload, check for `RecordAdopted` events and `Ready=True` conditions:
 
 ```bash
 kubectl describe httproute myapp-pilot -n apps
@@ -160,7 +160,7 @@ Verify the condition on the emitted DNS CR:
 kubectl get cloudflarednsrecord -l cloudflare.io/source-name=myapp-pilot -A -o yaml | grep -A5 conditions
 ```
 
-Look for `OwnershipVerified=True` and `DNSAdopted=True`.
+Look for `Ready=True` on the emitted CR.
 
 **4. Prevent external-dns from managing the migrated records.** Depending on your external-dns configuration, you can scope it off the migrated workloads via:
 
@@ -220,7 +220,6 @@ kubectl get cloudflarezone -A
 kubectl get cloudflarednsrecord -A
 
 # No source objects should have Warning events
-kubectl get events -A --field-selector reason=RecordConflict
 kubectl get events -A --field-selector reason=RecordOwnershipConflict
 kubectl get events -A --field-selector reason=TxtRegistryGap
 ```

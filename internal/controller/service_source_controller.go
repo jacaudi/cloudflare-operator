@@ -52,8 +52,9 @@ var ErrPortNotFound = errors.New("port not found on Service")
 // annotations and emits CloudflareDNSRecord + CloudflareTunnelRule CRs.
 type ServiceSourceReconciler struct {
 	client.Client
-	Recorder   record.EventRecorder
-	TxtOwnerID string
+	Recorder    record.EventRecorder
+	TxtOwnerID  string
+	AffixConfig cfclient.AffixConfig
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
@@ -160,14 +161,18 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		tunnelNs = firstNonEmpty(ann[AnnotationTunnelRefNamespace], svc.Namespace)
 	}
 
-	// 10. Determine proxied flag.
-	proxied := ts.Kind == TargetKindTunnel
-	if raw, ok := ann[AnnotationProxied]; ok && raw != "" {
-		if v, err := strconv.ParseBool(raw); err == nil {
-			proxied = v
+	// 10. Determine proxied flag. Default is true for all target kinds; tunnel
+	// targets always force true regardless of the annotation.
+	proxied := true
+	if ts.Kind != TargetKindTunnel {
+		// Non-tunnel: allow the annotation to override.
+		if raw, ok := ann[AnnotationProxied]; ok && raw != "" {
+			if v, err := strconv.ParseBool(raw); err == nil {
+				proxied = v
+			}
 		}
 	}
-	// Tunnels MUST be proxied.
+	// Tunnels MUST be proxied — cannot be turned off via annotation.
 	if ts.Kind == TargetKindTunnel {
 		proxied = true
 	}
@@ -200,7 +205,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, nil
 		}
 		content := contentForTarget(ts, tunnelCNAME)
-		if err := r.emitDNSPair(ctx, &svc, h, content, zone, proxied, ttl, sourceLabels, ownerRefs); err != nil {
+		if err := r.emitDNSPair(ctx, &svc, h, content, zone, proxied, ttl, sourceLabels, ownerRefs, ann); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -274,14 +279,22 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 	ttl int,
 	labels map[string]string,
 	ownerRefs []metav1.OwnerReference,
+	sourceAnnotations map[string]string,
 ) error {
 	const recordType = "CNAME"
-	crName := fmt.Sprintf("svc-%s-%s-%s", svc.Namespace, svc.Name, sanitizeDNSForCRName(hostname))
+	crName := capCRName(fmt.Sprintf("svc-%s-%s-%s", svc.Namespace, svc.Name, sanitizeDNSForCRName(hostname)))
+	// Propagate cloudflare.io/adopt from the source object to the emitted CR so
+	// the DNS controller's registry decision can honour it.
+	var dnsRecordAnnotations map[string]string
+	if sourceAnnotations[AnnotationAdopt] == AnnotationValueTrue {
+		dnsRecordAnnotations = map[string]string{AnnotationAdopt: AnnotationValueTrue}
+	}
 	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            crName,
 			Namespace:       svc.Namespace,
 			Labels:          labels,
+			Annotations:     dnsRecordAnnotations,
 			OwnerReferences: ownerRefs,
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
@@ -298,14 +311,14 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 		return fmt.Errorf("upsert DNS record for %q: %w", hostname, err)
 	}
 
-	txtFQDN := cfclient.AffixName(hostname, recordType, cfclient.AffixConfig{})
+	txtFQDN := cfclient.AffixName(hostname, recordType, r.AffixConfig)
 	txtContent := cfclient.EncodeRegistryPayload(cfclient.RegistryPayload{
 		Owner:           r.TxtOwnerID,
 		SourceKind:      "Service",
 		SourceNamespace: svc.Namespace,
 		SourceName:      svc.Name,
 	})
-	txtCRName := fmt.Sprintf("svc-%s-%s-%s-txt", svc.Namespace, svc.Name, sanitizeDNSForCRName(hostname))
+	txtCRName := capCRName(fmt.Sprintf("svc-%s-%s-%s-txt", svc.Namespace, svc.Name, sanitizeDNSForCRName(hostname)))
 	txtRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      txtCRName,

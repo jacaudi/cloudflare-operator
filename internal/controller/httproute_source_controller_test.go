@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 )
 
 // ---- test constants ---------------------------------------------------------
@@ -971,18 +972,19 @@ func TestHTTPRouteSource_ZoneNotFound_Warns(t *testing.T) {
 }
 
 // ---- TestHTTPRouteSource_ProxiedParseError_KeepsDefault --------------------
-// Invalid proxied annotation value → warning emitted, default is kept (not false).
+// Invalid proxied annotation value on a non-tunnel target → warning emitted,
+// default (true) is kept. For tunnel targets the annotation is silently ignored
+// (proxied is forced true; no warning is emitted since the annotation is irrelevant).
 
 func TestHTTPRouteSource_ProxiedParseError_KeepsDefault(t *testing.T) {
 	s := httpRouteScheme(t)
 	zone := newZone("example-com", "apps", "example.com", "cf-secret")
-	tunnel := newReadyTunnel("home", "apps")
+	// Use cname target so the proxied annotation is actually parsed.
 	route := newHTTPRoute("apps", "my-route", map[string]string{
-		AnnotationTarget:         "tunnel:home",
-		AnnotationTunnelUpstream: "http://backend:8080",
-		AnnotationProxied:        "invalid-bool-value",
+		AnnotationTarget:  "cname:external.example.net",
+		AnnotationProxied: "invalid-bool-value",
 	}, hostnames("foo.example.com"), nil)
-	r, rec := buildHTTPRouteReconciler(s, "owner1", route, zone, tunnel)
+	r, rec := buildHTTPRouteReconciler(s, "owner1", route, zone)
 
 	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
 	if err != nil {
@@ -997,9 +999,9 @@ func TestHTTPRouteSource_ProxiedParseError_KeepsDefault(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected warning event for invalid proxied annotation; got %v", evts)
+		t.Errorf("expected warning event for invalid proxied annotation on cname target; got %v", evts)
 	}
-	// For tunnel target, proxied should still default to true.
+	// Default proxied=true should be kept (invalid annotation falls back to default).
 	var records cloudflarev1alpha1.CloudflareDNSRecordList
 	if err := r.List(context.Background(), &records); err != nil {
 		t.Fatalf("list: %v", err)
@@ -1007,7 +1009,7 @@ func TestHTTPRouteSource_ProxiedParseError_KeepsDefault(t *testing.T) {
 	for _, rec := range records.Items {
 		if rec.Spec.Type == testRecordTypeCNAME {
 			if rec.Spec.Proxied == nil || !*rec.Spec.Proxied {
-				t.Errorf("expected Proxied=true (default for tunnel) even with invalid annotation, got %v", rec.Spec.Proxied)
+				t.Errorf("expected Proxied=true (default) even with invalid annotation, got %v", rec.Spec.Proxied)
 			}
 		}
 	}
@@ -1394,5 +1396,187 @@ func TestHTTPRouteSource_ReadParentAnnotations_SkipsNonGatewayKind(t *testing.T)
 	}
 	if rules.Items[0].Spec.TunnelRef.Name != "gw-tunnel" {
 		t.Errorf("expected TunnelRef.Name=gw-tunnel (Gateway parent used), got %q", rules.Items[0].Spec.TunnelRef.Name)
+	}
+}
+
+// ---- TestHTTPRouteSource_ProxiedDefaultTrue_CNAMETarget --------------------
+// P1.1: cname target with no proxied annotation → emitted CNAME CR must have Proxied=true.
+
+func TestHTTPRouteSource_ProxiedDefaultTrue_CNAMETarget(t *testing.T) {
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+	route := newHTTPRoute("apps", "my-route", map[string]string{
+		AnnotationTarget: "cname:external.example.net",
+		// No AnnotationProxied set.
+	}, hostnames("foo.example.com"), nil)
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, rec := range records.Items {
+		if rec.Spec.Type == testRecordTypeCNAME {
+			if rec.Spec.Proxied == nil || !*rec.Spec.Proxied {
+				t.Errorf("expected Proxied=true (default for cname target), got %v", rec.Spec.Proxied)
+			}
+		}
+	}
+}
+
+// ---- TestHTTPRouteSource_AdoptAnnotation_PropagatedToCR --------------------
+// P1.2: cloudflare.io/adopt=true on HTTPRoute → emitted CloudflareDNSRecord
+// must carry that annotation.
+
+func TestHTTPRouteSource_AdoptAnnotation_PropagatedToCR(t *testing.T) {
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+	route := newHTTPRoute("apps", "my-route", map[string]string{
+		AnnotationTarget: "cname:external.example.net",
+		AnnotationAdopt:  AnnotationValueTrue,
+	}, hostnames("foo.example.com"), nil)
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-route"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	found := false
+	for _, rec := range records.Items {
+		if rec.Spec.Type == testRecordTypeCNAME {
+			if rec.Annotations[AnnotationAdopt] == AnnotationValueTrue {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected emitted CNAME CloudflareDNSRecord to carry %s=true annotation", AnnotationAdopt)
+	}
+}
+
+// ---- TestHTTPRouteSource_CRNameCapped_LongInput ----------------------------
+// P2.9: CR name for an HTTPRoute with a very long namespace+name+hostname must
+// be ≤ 253 chars (no trailing dashes).
+
+func TestHTTPRouteSource_CRNameCapped_LongInput(t *testing.T) {
+	longNS := strings.Repeat("a", 63)
+	longName := strings.Repeat("b", 63)
+	longHostname := strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".example.com"
+
+	uncapped := "httproute-" + longNS + "-" + longName + "-" + sanitizeDNSForCRName(longHostname)
+	if len(uncapped) <= 253 {
+		t.Skipf("test setup error: uncapped name is only %d chars (want >253)", len(uncapped))
+	}
+
+	s := httpRouteScheme(t)
+	zone := newZone("z", longNS, "example.com", "cf-secret")
+	route := &gwv1.HTTPRoute{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "gateway.networking.k8s.io/v1",
+			Kind:       "HTTPRoute",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      longName,
+			Namespace: longNS,
+			UID:       types.UID(fmt.Sprintf("%s-%s-uid", longNS, longName)),
+			Annotations: map[string]string{
+				AnnotationTarget: "cname:external.example.net",
+			},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{gwv1.Hostname(longHostname)},
+		},
+	}
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone)
+
+	_, err := r.Reconcile(context.Background(), req(longNS, longName))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(records.Items) == 0 {
+		t.Fatal("expected DNS records to be emitted")
+	}
+	for _, rec := range records.Items {
+		if len(rec.Name) > 253 {
+			t.Errorf("CR name %q is %d chars (> 253 limit)", rec.Name, len(rec.Name))
+		}
+		name := rec.Name
+		if len(name) > 0 && (name[0] == '-' || name[len(name)-1] == '-') {
+			t.Errorf("CR name %q starts or ends with a dash", name)
+		}
+	}
+}
+
+// TestHTTPRouteSource_AffixConfig_UsedForTXTName verifies that when a non-default
+// AffixConfig is set on the HTTPRouteSourceReconciler, the companion TXT CR's
+// spec.Name uses the configured prefix rather than the default type-based prefix.
+func TestHTTPRouteSource_AffixConfig_UsedForTXTName(t *testing.T) {
+	const ownerID = "test-owner"
+	const hostname = "app.example.com"
+	customAffix := cfclient.AffixConfig{Prefix: "txt-"}
+
+	s := httpRouteScheme(t)
+	zone := newZone("example-com", testNsApps, "example.com", "cf-secret")
+	gw := newGateway(testNsApps, testGatewayName, map[string]string{
+		AnnotationTarget:  "cname:external.example.com",
+		AnnotationZoneRef: "example-com",
+	})
+	gw.Status.Addresses = []gwv1.GatewayStatusAddress{
+		{Value: "1.2.3.4"},
+	}
+	route := newHTTPRoute(testNsApps, "affix-route", map[string]string{}, hostnames(hostname), []gwv1.ParentReference{parentRef(testNsApps, testGatewayName)})
+
+	recorder := record.NewFakeRecorder(64)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(route, gw, zone).
+		WithStatusSubresource(
+			&cloudflarev1alpha1.CloudflareDNSRecord{},
+			&cloudflarev1alpha1.CloudflareTunnelRule{},
+		).
+		Build()
+	r := &HTTPRouteSourceReconciler{
+		Client:      c,
+		Recorder:    recorder,
+		TxtOwnerID:  ownerID,
+		AffixConfig: customAffix,
+	}
+
+	if _, err := r.Reconcile(context.Background(), req(testNsApps, "affix-route")); err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list records: %v", err)
+	}
+
+	wantTXTFQDN := cfclient.AffixName(hostname, "CNAME", customAffix) // "txt-app.example.com"
+	var foundTXT bool
+	for _, rec := range records.Items {
+		if rec.Spec.Type == testRecordTypeTXT {
+			foundTXT = true
+			if rec.Spec.Name != wantTXTFQDN {
+				t.Errorf("TXT spec.Name = %q, want %q", rec.Spec.Name, wantTXTFQDN)
+			}
+		}
+	}
+	if !foundTXT {
+		t.Fatal("no TXT CloudflareDNSRecord emitted")
 	}
 }

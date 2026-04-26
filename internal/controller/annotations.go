@@ -42,6 +42,10 @@ const (
 
 	AnnotationPrefix = "cloudflare.io/"
 
+	// AnnotationValueTrue is the canonical "true" value for boolean annotation flags
+	// such as cloudflare.io/adopt.
+	AnnotationValueTrue = "true"
+
 	// AnnotationRegistryFor marks an emitted TXT-registry CloudflareDNSRecord
 	// so the DNS controller does not re-emit a TXT for it.
 	AnnotationRegistryFor = "cloudflare.io/registry-for"

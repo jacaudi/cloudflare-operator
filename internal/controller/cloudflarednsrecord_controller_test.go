@@ -1133,7 +1133,7 @@ func TestRegistry_AdoptOrphan(t *testing.T) {
 	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
 	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
 	dnsRecord.Annotations = map[string]string{
-		AnnotationAdopt: "true",
+		AnnotationAdopt: AnnotationValueTrue,
 	}
 	// Keep labels
 	dnsRecord.Labels = map[string]string{
@@ -1448,7 +1448,7 @@ func TestRegistry_AdoptOrphan_AssertMainRecordWrite(t *testing.T) {
 	s := testScheme(t)
 	dnsRecord := newTestDNSRecordWithLabels("test-rec", "default")
 	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
-	dnsRecord.Annotations = map[string]string{AnnotationAdopt: "true"}
+	dnsRecord.Annotations = map[string]string{AnnotationAdopt: AnnotationValueTrue}
 	dnsRecord.Labels = map[string]string{
 		LabelSourceKind:      "httproute",
 		LabelSourceNamespace: "default",

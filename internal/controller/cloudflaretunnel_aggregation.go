@@ -20,6 +20,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"reflect"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -45,7 +46,9 @@ var ErrUnownedDeployment = stderrors.New("refusing to adopt Deployment not owned
 //
 // Pure controller-runtime operation: no Cloudflare API calls. Called by
 // Reconcile after tunnel provisioning has populated TunnelID/TunnelCNAME.
-func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel) error {
+// preStatus is the status snapshot taken before Reconcile began; it is used
+// by writeTunnelAggStatus to set LastSyncedAt only when status actually changed.
+func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel, preStatus *cloudflarev1alpha1.CloudflareTunnelStatus) error {
 	var ruleList cloudflarev1alpha1.CloudflareTunnelRuleList
 	if err := c.List(ctx, &ruleList); err != nil {
 		return fmt.Errorf("list CloudflareTunnelRule: %w", err)
@@ -67,12 +70,12 @@ func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloud
 		if !ok {
 			continue
 		}
-		if err := writeRuleStatus(ctx, c, r, decision); err != nil {
+		if err := writeRuleStatus(ctx, c, r, decision, agg.ConfigHash); err != nil {
 			return fmt.Errorf("rule %s status: %w", k, err)
 		}
 	}
 
-	return writeTunnelAggStatus(ctx, c, tun, agg)
+	return writeTunnelAggStatus(ctx, c, tun, agg, preStatus)
 }
 
 // filterRulesForTunnel returns only the rules whose TunnelRef resolves to
@@ -174,7 +177,9 @@ func isOwnedBy(ownerRefs []metav1.OwnerReference, uid types.UID) bool {
 // writeRuleStatus writes the per-rule status conditions (Valid, TunnelAccepted,
 // Conflict) based on the aggregation decision. Uses r.Generation for
 // ObservedGeneration — not the tunnel's generation.
-func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1.CloudflareTunnelRule, decision RuleDecision) error {
+// configHash is the aggregation result config hash; it is set on
+// AppliedToConfigHash only for included rules.
+func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1.CloudflareTunnelRule, decision RuleDecision, configHash string) error {
 	conds := r.Status.Conditions
 
 	switch decision.Status {
@@ -210,8 +215,10 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 	r.Status.ObservedGeneration = r.Generation
 	if decision.Status == RuleIncluded {
 		r.Status.ResolvedBackend = decision.ResolvedBackend
+		r.Status.AppliedToConfigHash = configHash
 	} else {
 		r.Status.ResolvedBackend = ""
+		r.Status.AppliedToConfigHash = ""
 	}
 
 	return c.Status().Update(ctx, r)
@@ -219,7 +226,9 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 
 // writeTunnelAggStatus writes IngressConfigured, ConnectorReady (or removes
 // it when connector is disabled), and the ConnectorStatus sub-status.
-func writeTunnelAggStatus(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel, agg AggregationResult) error {
+// preStatus is the snapshot taken at the start of Reconcile; if the status
+// has changed it also sets LastSyncedAt so callers don't need a second write.
+func writeTunnelAggStatus(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel, agg AggregationResult, preStatus *cloudflarev1alpha1.CloudflareTunnelStatus) error {
 	included := countIncluded(agg.Decisions)
 	msg := fmt.Sprintf("%d rules configured in tunnel ingress", included)
 	status.SetCondition(&tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured,
@@ -233,6 +242,12 @@ func writeTunnelAggStatus(ctx context.Context, c client.Client, tun *cloudflarev
 		// Connector disabled: remove ConnectorReady condition and nil the sub-status.
 		meta.RemoveStatusCondition(&tun.Status.Conditions, cloudflarev1alpha1.ConditionTypeConnectorReady)
 		tun.Status.Connector = nil
+	}
+
+	// Set LastSyncedAt when status actually changed (mirrors the check in Reconcile).
+	if preStatus != nil && !reflect.DeepEqual(preStatus, &tun.Status) {
+		now := metav1.Now()
+		tun.Status.LastSyncedAt = &now
 	}
 
 	return c.Status().Update(ctx, tun)

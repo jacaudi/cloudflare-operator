@@ -182,17 +182,19 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ServiceSourceReconciler{
-		Client:     mgr.GetClient(),
-		Recorder:   mgr.GetEventRecorderFor("service-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
-		TxtOwnerID: registryCfg.TxtOwnerID,
+		Client:      mgr.GetClient(),
+		Recorder:    mgr.GetEventRecorderFor("service-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
+		TxtOwnerID:  registryCfg.TxtOwnerID,
+		AffixConfig: registryCfg.AffixConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ServiceSource")
 		os.Exit(1)
 	}
 	if err := (&controller.HTTPRouteSourceReconciler{
-		Client:     mgr.GetClient(),
-		Recorder:   mgr.GetEventRecorderFor("httproute-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
-		TxtOwnerID: registryCfg.TxtOwnerID,
+		Client:      mgr.GetClient(),
+		Recorder:    mgr.GetEventRecorderFor("httproute-source"), //nolint:staticcheck,lll // TODO: migrate to events.EventRecorder
+		TxtOwnerID:  registryCfg.TxtOwnerID,
+		AffixConfig: registryCfg.AffixConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HTTPRouteSource")
 		os.Exit(1)

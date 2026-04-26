@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 )
 
 const testRecordTypeCNAME = "CNAME"
@@ -1094,6 +1095,135 @@ func TestServiceSource_MapTunnelToServices_CrossNamespace(t *testing.T) {
 	}
 }
 
+// ---- TestServiceSource_ProxiedDefaultTrue_CNAMETarget ----------------------
+// P1.1: cname target with no proxied annotation → emitted CR must have Proxied=true.
+
+func TestServiceSource_ProxiedDefaultTrue_CNAMETarget(t *testing.T) {
+	s := svcTestScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+	svc := newSvc("my-svc", "apps", map[string]string{
+		AnnotationTarget:    "cname:external.example.net",
+		AnnotationHostnames: "foo.example.com",
+		// No AnnotationProxied set.
+	})
+	r, _ := buildSvcReconciler(s, "owner1", svc, zone)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-svc"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, rec := range records.Items {
+		if rec.Spec.Type == testRecordTypeCNAME {
+			if rec.Spec.Proxied == nil || !*rec.Spec.Proxied {
+				t.Errorf("expected Proxied=true (default for cname target), got %v", rec.Spec.Proxied)
+			}
+		}
+	}
+}
+
+// ---- TestServiceSource_AdoptAnnotation_PropagatedToCR ----------------------
+// P1.2: cloudflare.io/adopt=true on Service → emitted CloudflareDNSRecord must
+// carry that annotation.
+
+func TestServiceSource_AdoptAnnotation_PropagatedToCR(t *testing.T) {
+	s := svcTestScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+	svc := newSvc("my-svc", "apps", map[string]string{
+		AnnotationTarget:    "cname:external.example.net",
+		AnnotationHostnames: "foo.example.com",
+		AnnotationAdopt:     AnnotationValueTrue,
+	})
+	r, _ := buildSvcReconciler(s, "owner1", svc, zone)
+
+	_, err := r.Reconcile(context.Background(), req("apps", "my-svc"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	found := false
+	for _, rec := range records.Items {
+		if rec.Spec.Type == testRecordTypeCNAME {
+			if rec.Annotations[AnnotationAdopt] == AnnotationValueTrue {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected emitted CNAME CloudflareDNSRecord to carry %s=true annotation", AnnotationAdopt)
+	}
+}
+
+// ---- TestServiceSource_CRNameCapped_LongInput ------------------------------
+// P2.9: CR name for a Service with a very long namespace+name+hostname must be
+// ≤ 253 chars and be a valid DNS-1123 subdomain (no trailing dashes).
+
+func TestServiceSource_CRNameCapped_LongInput(t *testing.T) {
+	// Build a hostname that pushes the svc-<ns>-<name>-<hostname> pattern well past 253.
+	// Build inputs that together produce an uncapped CR name > 253 chars.
+	// svc-<ns>-<name>-<sanitized-hostname> = 4 + 63 + 1 + 63 + 1 + 63+1+63+11 = well over 253.
+	longNS := strings.Repeat("a", 63)
+	longName := strings.Repeat("b", 63)
+	longHostname := strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".example.com"
+
+	// Verify our test input actually produces a name > 253 before capping.
+	uncapped := "svc-" + longNS + "-" + longName + "-" + sanitizeDNSForCRName(longHostname)
+	if len(uncapped) <= 253 {
+		t.Skipf("test setup error: uncapped name is only %d chars (want >253)", len(uncapped))
+	}
+
+	s := svcTestScheme(t)
+	zone := newZone("z", longNS, "example.com", "cf-secret")
+	svc := &corev1.Service{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      longName,
+			Namespace: longNS,
+			UID:       types.UID(longName + "-uid"),
+			Annotations: map[string]string{
+				AnnotationTarget:    "cname:external.example.net",
+				AnnotationHostnames: longHostname,
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{
+				{Name: "http", Port: 8080, Protocol: corev1.ProtocolTCP},
+			},
+		},
+	}
+	r, _ := buildSvcReconciler(s, "owner1", svc, zone)
+
+	_, err := r.Reconcile(context.Background(), req(longNS, longName))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(records.Items) == 0 {
+		t.Fatal("expected DNS records to be emitted")
+	}
+	for _, rec := range records.Items {
+		if len(rec.Name) > 253 {
+			t.Errorf("CR name %q is %d chars (> 253 limit)", rec.Name, len(rec.Name))
+		}
+		name := rec.Name
+		if len(name) > 0 && (name[0] == '-' || name[len(name)-1] == '-') {
+			t.Errorf("CR name %q starts or ends with a dash", name)
+		}
+	}
+}
+
 // ---- TestServiceSource_MapTunnelToServices_SameNamespace -------------------
 // Lock the existing same-namespace behavior: a Service with no tunnel-ref-namespace
 // annotation should match a tunnel in the same namespace.
@@ -1119,5 +1249,60 @@ func TestServiceSource_MapTunnelToServices_SameNamespace(t *testing.T) {
 	}
 	if reqs[0].Namespace != "network" || reqs[0].Name != "my-svc" {
 		t.Errorf("expected {network/my-svc}, got %v", reqs[0])
+	}
+}
+
+// TestServiceSource_AffixConfig_UsedForTXTName verifies that when a non-default
+// AffixConfig is set on the ServiceSourceReconciler, the companion TXT CR's
+// spec.Name uses the configured prefix rather than the default type-based prefix.
+func TestServiceSource_AffixConfig_UsedForTXTName(t *testing.T) {
+	const ownerID = "test-owner"
+	const hostname = "app.example.com"
+	customAffix := cfclient.AffixConfig{Prefix: "txt-"}
+
+	s := svcTestScheme(t)
+	zone := newZone("example-com", "apps", "example.com", "cf-secret")
+	svc := newSvc("myapp", "apps", map[string]string{
+		AnnotationTarget:    "cname:external.example.com",
+		AnnotationHostnames: hostname,
+		AnnotationZoneRef:   "example-com",
+	})
+
+	recorder := record.NewFakeRecorder(32)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(svc, zone).
+		WithStatusSubresource(
+			&cloudflarev1alpha1.CloudflareDNSRecord{},
+		).
+		Build()
+	r := &ServiceSourceReconciler{
+		Client:      c,
+		Recorder:    recorder,
+		TxtOwnerID:  ownerID,
+		AffixConfig: customAffix,
+	}
+
+	if _, err := r.Reconcile(context.Background(), req("apps", "myapp")); err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list records: %v", err)
+	}
+
+	wantTXTFQDN := cfclient.AffixName(hostname, "CNAME", customAffix) // "txt-app.example.com"
+	var foundTXT bool
+	for _, rec := range records.Items {
+		if rec.Spec.Type == "TXT" {
+			foundTXT = true
+			if rec.Spec.Name != wantTXTFQDN {
+				t.Errorf("TXT spec.Name = %q, want %q", rec.Spec.Name, wantTXTFQDN)
+			}
+		}
+	}
+	if !foundTXT {
+		t.Fatal("no TXT CloudflareDNSRecord emitted")
 	}
 }

@@ -100,7 +100,7 @@ kubectl patch cloudflaretunnel prod -n network \
   -p '{"spec":{"connector":{"enabled":false}}}'
 ```
 
-The operator deletes the managed `Deployment`, `ConfigMap`, and `ServiceAccount`. Your existing self-managed cloudflared Deployment is not affected. The operator continues to track `CloudflareTunnelRule` CRs but no longer renders a ConfigMap.
+Setting `spec.connector.enabled: false` stops the operator from reconciling the connector resources (`Deployment`, `ConfigMap`, `ServiceAccount`). Any previously managed resources are not automatically deleted — remove them manually if no longer needed (see [#52](https://github.com/jacaudi/cloudflare-operator/issues/52) for planned garbage-collection support). The operator continues to reconcile `CloudflareTunnelRule` CRs but does not render or update the ConfigMap while the connector is disabled.
 
 ---
 
@@ -250,14 +250,13 @@ If you currently run your own cloudflared Deployment:
 
 1. Keep `connector.enabled: false` (or omit it).
 2. Author `CloudflareTunnelRule` CRs (or annotate sources) to mirror your current cloudflared `config.yaml`.
-3. Apply the `CloudflareTunnel` CR. The tunnel controller renders a ConfigMap and writes `status.connector.configHash`.
-4. Manually compare the rendered ConfigMap against your hand-rolled config:
+3. Apply the `CloudflareTunnel` CR. The operator reconciles the rules and writes `status.connector.configHash`, but does **not** render a ConfigMap while `connector.enabled` is `false`.
+4. Set `connector.enabled: true`. The operator creates the managed `ServiceAccount`, `ConfigMap`, and `Deployment`, then compare the rendered ConfigMap against your hand-rolled config:
 
    ```bash
-   kubectl get configmap prod-cloudflared-config -n network -o yaml
+   kubectl get configmap prod-connector-config -n network -o yaml
    ```
 
-5. Once satisfied, set `connector.enabled: true`. The operator creates a managed Deployment.
-6. Delete your hand-rolled Deployment. Brief overlap is safe — cloudflared supports multiple connectors per tunnel.
+5. Once satisfied, delete your hand-rolled Deployment. Brief overlap is safe — cloudflared supports multiple connectors per tunnel.
 
-There is no in-place takeover of an existing Deployment. If the operator detects a Deployment with the expected name that it does not own (no ownerRef to the `CloudflareTunnel`), it sets `ConnectorReady=False, reason=DeploymentConflict` and refuses to proceed until you delete or rename the conflicting Deployment.
+There is no in-place takeover of an existing Deployment. If the operator finds a Deployment with the expected name that it does not own (no ownerRef pointing at the `CloudflareTunnel`), it logs `AggregationFailed` and requeues — it will not overwrite the Deployment. Delete or rename the conflicting Deployment to let the operator proceed.

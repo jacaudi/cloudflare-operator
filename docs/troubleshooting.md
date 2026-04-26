@@ -176,7 +176,7 @@ If two rules claim the same hostname, one wins and the other gets `TunnelAccepte
 kubectl get deploy -n <namespace> -l cloudflare.io/tunnel=<name>
 
 # Describe it for events
-kubectl describe deploy <tunnel-name>-cloudflared -n <namespace>
+kubectl describe deploy <tunnel-name>-connector -n <namespace>
 ```
 
 Common causes:
@@ -189,10 +189,10 @@ Common causes:
   kubectl logs -n <namespace> -l cloudflare.io/tunnel=<name> --previous
   ```
 
-- **`DeploymentConflict`** — a Deployment with the expected name exists but was not created by the operator. Check:
+- **Unowned Deployment** — a Deployment with the expected name exists but was not created by the operator (no ownerRef to the `CloudflareTunnel`). The operator logs `AggregationFailed` and requeues without modifying the Deployment. Check:
 
   ```bash
-  kubectl get deploy <tunnel-name>-cloudflared -n <namespace> \
+  kubectl get deploy <tunnel-name>-connector -n <namespace> \
     -o jsonpath='{.metadata.ownerReferences}'
   ```
 
@@ -299,29 +299,23 @@ kubectl get cloudflarednsrecord -A \
 
 ---
 
-## 7. Hand-Authored CR Conflicts with Annotation Source
+## 7. Hand-Authored CR and Annotation Source Both Claim the Same Hostname
 
-**Symptom:** You have a hand-authored `CloudflareDNSRecord` for a hostname, and you also added `cloudflare.io/target` to an `HTTPRoute` or `Service` for the same hostname. The annotation source gets `RecordConflict`.
-
-Hand-authored `CloudflareDNSRecord` CRs always win over annotation sources.
+**Symptom:** You have a hand-authored `CloudflareDNSRecord` for a hostname, and you also have `cloudflare.io/target` on an `HTTPRoute` or `Service` pointing at the same hostname. Both the hand-authored CR and the emitted CR share the same TXT owner ID, so each one sees the record as its own and overwrites the DNS content on every reconcile cycle — the result is last-write-wins churn, not a hard error.
 
 ```bash
-# Find the winning hand-authored CR
-kubectl get cloudflarednsrecord -A | grep <hostname>
+# Find all CloudflareDNSRecord CRs for the hostname to identify both sources
+kubectl get cloudflarednsrecord -A \
+  -o custom-columns=NAME:.metadata.name,NS:.metadata.namespace,HOSTNAME:.spec.name,SOURCE:.metadata.labels."cloudflare\.io/source-name"
 
-# Check the event on the annotation source
+# Check recent events on the annotation source
 kubectl describe httproute <name> -n <namespace>
-```
-
-Expected event on the source:
-```
-Warning  RecordConflict  cloudflare-operator: FQDN "app.example.com" already owned by CloudflareDNSRecord apps/myapp-manual
+# or
+kubectl describe service <name> -n <namespace>
 ```
 
 **Resolution options:**
 
-1. **Delete the hand-authored CR.** The annotation source becomes the owner on the next reconcile.
-2. **Remove the annotation from the source.** Keep the hand-authored CR in place.
-3. **Hand-author a `CloudflareTunnelRule` instead.** If the conflict is on the tunnel side (not DNS), you can hand-author just the tunnel rule without managing DNS from the annotation.
-
-Hand-authored CRs are authoritative by design. This is intentional — it prevents annotation sources from accidentally overwriting explicit operator-managed records.
+1. **Delete the hand-authored CR.** The annotation source becomes the sole owner on the next reconcile. Use this when you want the operator to fully manage the record going forward.
+2. **Remove the annotation from the source.** Keep the hand-authored CR in place. Use this when explicit control is preferred.
+3. **Hand-author a `CloudflareTunnelRule` instead.** If the conflict is on the tunnel routing side (not DNS), hand-author just the tunnel rule without managing DNS from the annotation — the annotation source handles DNS; you control the tunnel rule manually.

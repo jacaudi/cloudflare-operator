@@ -122,25 +122,33 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
 	}
 
-	// 7. Persist status only if anything materially changed.
+	// 7. Set Ready and ObservedGeneration in-memory. If aggregation is not
+	// applicable (no CNAME yet), persist now. Otherwise let writeTunnelAggStatus
+	// (called inside ReconcileConnectorAndRules) perform the single terminal write
+	// so there is only one Status().Update per successful reconcile.
 	tunnel.Status.ObservedGeneration = tunnel.Generation
 	status.SetReady(&tunnel.Status.Conditions, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Tunnel synced", tunnel.Generation)
+
+	// 8. Aggregate rules and reconcile connector — only once the tunnel has a
+	// CNAME (i.e. provisioning succeeded at least once).
+	if tunnel.Status.TunnelCNAME != "" {
+		if err := ReconcileConnectorAndRules(ctx, r.Client, &tunnel, preStatus); err != nil {
+			logger.Error(err, "aggregator/connector failed")
+			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "AggregationFailed", err.Error())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		// writeTunnelAggStatus (called by ReconcileConnectorAndRules) has already
+		// persisted the full status including the Ready condition set above.
+		return result, nil
+	}
+
+	// No CNAME yet — persist the status update here (first-reconcile path).
 	if !reflect.DeepEqual(preStatus, &tunnel.Status) {
 		now := metav1.Now()
 		tunnel.Status.LastSyncedAt = &now
 		if err := r.Status().Update(ctx, &tunnel); err != nil {
 			return ctrl.Result{}, err
-		}
-	}
-
-	// 8. Aggregate rules and reconcile connector — only once the tunnel has a
-	// CNAME (i.e. provisioning succeeded at least once).
-	if tunnel.Status.TunnelCNAME != "" {
-		if err := ReconcileConnectorAndRules(ctx, r.Client, &tunnel); err != nil {
-			logger.Error(err, "aggregator/connector failed")
-			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "AggregationFailed", err.Error())
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 	}
 
