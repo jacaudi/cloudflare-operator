@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"os"
@@ -35,6 +36,7 @@ import (
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
+	"github.com/jacaudi/cloudflare-operator/internal/config"
 	"github.com/jacaudi/cloudflare-operator/internal/controller"
 	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -94,6 +96,39 @@ func main() {
 	clientFactory := cfclient.NewClientFactory(mgr.GetClient())
 	ipResolver := ipresolver.NewResolver()
 
+	// setupCtx is a background context used for startup-time API calls
+	// (e.g. reading the registry Secret) that happen before the manager
+	// starts and therefore before a signal-handler context is available.
+	setupCtx := context.Background()
+
+	// Load registry configuration from environment variables and optional
+	// Secret. Uses the API reader so the Secret is fetched directly from
+	// the API server — the cache is not yet populated at startup.
+	txtOwnerID := os.Getenv("TXT_OWNER_ID")
+	var registryCfg controller.RegistryConfig
+	if txtOwnerID == "" {
+		setupLog.Info("TXT_OWNER_ID not set; annotation-driven sources will no-op until configured")
+	} else {
+		var cfgErr error
+		registryCfg, cfgErr = config.LoadRegistryConfig(
+			setupCtx,
+			mgr.GetAPIReader(),
+			config.LoadOptions{
+				TxtOwnerID:             txtOwnerID,
+				TxtImportOwners:        os.Getenv("TXT_IMPORT_OWNERS"),
+				TxtPrefix:              os.Getenv("TXT_PREFIX"),
+				TxtSuffix:              os.Getenv("TXT_SUFFIX"),
+				TxtWildcardReplacement: os.Getenv("TXT_WILDCARD_REPLACEMENT"),
+				SecretName:             os.Getenv("REGISTRY_SECRET_NAME"),
+				SecretNamespace:        os.Getenv("REGISTRY_SECRET_NAMESPACE"),
+			},
+		)
+		if cfgErr != nil {
+			setupLog.Error(cfgErr, "Failed to load registry config")
+			os.Exit(1)
+		}
+	}
+
 	if err := (&controller.CloudflareDNSRecordReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -101,6 +136,7 @@ func main() {
 			"cloudflarednsrecord-controller"),
 		ClientFactory: clientFactory,
 		IPResolver:    ipResolver,
+		Registry:      registryCfg,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "CloudflareDNSRecord")
 		os.Exit(1)
@@ -148,7 +184,7 @@ func main() {
 	if err := (&controller.ServiceSourceReconciler{
 		Client:     mgr.GetClient(),
 		Recorder:   mgr.GetEventRecorderFor("service-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
-		TxtOwnerID: os.Getenv("TXT_OWNER_ID"),
+		TxtOwnerID: registryCfg.TxtOwnerID,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ServiceSource")
 		os.Exit(1)
@@ -156,7 +192,7 @@ func main() {
 	if err := (&controller.HTTPRouteSourceReconciler{
 		Client:     mgr.GetClient(),
 		Recorder:   mgr.GetEventRecorderFor("httproute-source"), //nolint:staticcheck // TODO: migrate to events.EventRecorder
-		TxtOwnerID: os.Getenv("TXT_OWNER_ID"),
+		TxtOwnerID: registryCfg.TxtOwnerID,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HTTPRouteSource")
 		os.Exit(1)
