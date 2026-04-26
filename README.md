@@ -14,6 +14,16 @@ A Kubernetes operator that manages Cloudflare resources declaratively via Custom
 
 See [`docs/README.md`](docs/README.md) for the full CRD reference, field-by-field specs, and examples.
 
+## Quickstart
+
+New to cloudflare-operator? Start here: **[docs/domain-onboarding.md](docs/domain-onboarding.md)** — an end-to-end walkthrough from creating an API token to a first workload served via tunnel.
+
+Already familiar with the CRDs? See:
+- [Gateway API + Service annotations](docs/gateway-api-source.md) — the primary user interface in v1.
+- [Tunnels](docs/tunnels.md) — tunnel CRDs and the operator-managed cloudflared runtime.
+- [Migrating from external-dns](docs/external-dns-migration.md).
+- [Troubleshooting](docs/troubleshooting.md).
+
 ## Quick Start
 
 ### Prerequisites
@@ -153,7 +163,7 @@ Clone the repo and run the controller against your current kube context:
 ```sh
 make install        # apply CRDs
 make run            # run controller locally
-make test           # unit tests (envtest)
+make test           # unit tests (fake-client based)
 make lint           # golangci-lint
 ```
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.0.0
+
+### Added
+- New CRD `CloudflareTunnelRule` — primitive for cloudflared ingress rules, emitted by source controllers or hand-authored.
+- `CloudflareTunnel.spec.connector` — operator-managed cloudflared Deployment + ConfigMap + ServiceAccount.
+- `CloudflareTunnel.spec.routing.defaultBackend` — tunnel-wide default backend routing.
+- New source controllers:
+  - `httproute_source` — watches Gateway API `HTTPRoute` + `Gateway`, emits DNS from `cloudflare.io/*` annotations.
+  - `service_source` — watches `Service`, emits DNS + TunnelRule from `cloudflare.io/*` annotations.
+- External-dns-compatible plaintext TXT ownership registry in `internal/cloudflare/txt_registry.go` for record adoption and conflict detection during migration.
+- New operator config: `TXT_OWNER_ID` (required to activate sources), `TXT_IMPORT_OWNERS`.
+
+### Changed
+- RBAC cluster role now includes cluster-wide write on `deployments`/`configmaps`/`serviceaccounts` (needed because tunnel CRs can live in any namespace). Scoped in practice by ownerRef to `CloudflareTunnel`.
+- Operator image requires `sigs.k8s.io/gateway-api` CRDs installed in the cluster.
+
+### Migration
+- v0.5.x → v1.0.0 is a pure add. Without `TXT_OWNER_ID` set, annotation-driven sources are inert and existing behavior is unchanged.
+- To activate: install Gateway API CRDs → set `TXT_OWNER_ID` → annotate workloads. See [docs/external-dns-migration.md](docs/external-dns-migration.md) for drop-in paths from external-dns.
+
 ## [0.5.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.4.0...v0.5.0) (2026-04-21)
 
 * feat!: account ID to secret + pipeline alignment with nextdns-operator ([#38](https://github.com/jacaudi/cloudflare-operator/issues/38)) ([32989f9](https://github.com/jacaudi/cloudflare-operator/commit/32989f98be742ecd928c633c2e39e105682104e6))
