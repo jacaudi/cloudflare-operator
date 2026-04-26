@@ -39,6 +39,70 @@ import (
 	"github.com/jacaudi/cloudflare-operator/internal/status"
 )
 
+// writeRegistryTXT writes the companion TXT ownership record for a managed
+// CloudflareDNSRecord. It reads the cloudflare.io/source-* labels off the CR
+// to build a RegistryPayload, optionally encrypts with r.Registry.TxtEncryptAESKey
+// (nil → plaintext), then creates or updates the TXT record at the affixed FQDN.
+func (r *CloudflareDNSRecordReconciler) writeRegistryTXT(
+	ctx context.Context,
+	dnsRecord *cloudflarev1alpha1.CloudflareDNSRecord,
+	dnsClient cfclient.DNSClient,
+	zoneID string,
+) error {
+	labels := dnsRecord.GetLabels()
+	kind := labels[LabelSourceKind]
+	ns := labels[LabelSourceNamespace]
+	name := labels[LabelSourceName]
+	if kind == "" || ns == "" || name == "" {
+		return ErrSourceLabelsMissing
+	}
+
+	payload := cfclient.RegistryPayload{
+		Owner:           r.Registry.TxtOwnerID,
+		SourceKind:      kind,
+		SourceNamespace: ns,
+		SourceName:      name,
+	}
+
+	encoded := cfclient.EncodeRegistryPayload(payload)
+
+	var content string
+	if r.Registry.TxtEncryptAESKey != nil {
+		encrypted, err := cfclient.EncryptPayload(encoded, r.Registry.TxtEncryptAESKey)
+		if err != nil {
+			return fmt.Errorf("encrypt registry payload: %w", err)
+		}
+		content = encrypted
+	} else {
+		content = encoded
+	}
+
+	affixedName := cfclient.AffixName(dnsRecord.Spec.Name, dnsRecord.Spec.Type, r.Registry.AffixConfig)
+
+	existing, err := dnsClient.ListRecordsByNameAndType(ctx, zoneID, affixedName, "TXT")
+	if err != nil {
+		return fmt.Errorf("list companion TXT records: %w", err)
+	}
+
+	params := cfclient.DNSRecordParams{
+		Name:    affixedName,
+		Type:    "TXT",
+		Content: content,
+		TTL:     1,
+	}
+
+	if len(existing) > 0 {
+		if _, err := dnsClient.UpdateRecord(ctx, zoneID, existing[0].ID, params); err != nil {
+			return fmt.Errorf("update companion TXT: %w", err)
+		}
+	} else {
+		if _, err := dnsClient.CreateRecord(ctx, zoneID, params); err != nil {
+			return fmt.Errorf("create companion TXT: %w", err)
+		}
+	}
+	return nil
+}
+
 // CloudflareDNSRecordReconciler reconciles a CloudflareDNSRecord object
 type CloudflareDNSRecordReconciler struct {
 	client.Client
@@ -47,6 +111,9 @@ type CloudflareDNSRecordReconciler struct {
 	ClientFactory *cfclient.ClientFactory
 	IPResolver    *ipresolver.Resolver
 	DNSClientFn   func(apiToken string) cfclient.DNSClient
+	// Registry holds optional TXT-registry configuration. The zero value
+	// (TxtOwnerID == "") disables all registry behaviour.
+	Registry RegistryConfig
 }
 
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflarednsrecords,verbs=get;list;watch;create;update;patch;delete
@@ -113,9 +180,20 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	result, err := r.reconcileRecord(ctx, &dnsRecord, r.dnsClient(apiToken), resolvedZoneID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
-		r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, "SyncFailed", err.Error())
-		return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
-			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+		switch {
+		case stderrors.Is(err, ErrForeignTXTOwner):
+			r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, cloudflarev1alpha1.ReasonRecordOwnershipConflict, err.Error())
+			return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
+				cloudflarev1alpha1.ReasonRecordOwnershipConflict, err, result.RequeueAfter)
+		case stderrors.Is(err, ErrTXTRegistryGap):
+			r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, cloudflarev1alpha1.ReasonTxtRegistryGap, err.Error())
+			return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
+				cloudflarev1alpha1.ReasonTxtRegistryGap, err, result.RequeueAfter)
+		default:
+			r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, "SyncFailed", err.Error())
+			return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
+				cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+		}
 	}
 
 	// 7. Persist status only if anything materially changed. LastSyncedAt is
@@ -167,6 +245,20 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 			logger.Info("adopted existing DNS record", "recordID", existing.ID)
 			r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordAdopted",
 				fmt.Sprintf("Adopted existing DNS record %s", existing.ID))
+		}
+	}
+
+	// TXT registry decision (§5.4).
+	// Skip for:
+	//   - registry disabled (TxtOwnerID == "")
+	//   - record is a TXT type (no companion TXT for TXT records)
+	//   - record is itself a companion TXT (AnnotationRegistryFor present)
+	if r.Registry.TxtOwnerID != "" &&
+		dnsRecord.Spec.Type != "TXT" &&
+		dnsRecord.GetAnnotations()[AnnotationRegistryFor] == "" {
+		refused, refuseResult, refuseErr := r.applyRegistryDecision(ctx, dnsRecord, dnsClient, zoneID, existing)
+		if refused {
+			return refuseResult, refuseErr
 		}
 	}
 
