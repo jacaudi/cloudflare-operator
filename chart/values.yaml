@@ -46,6 +46,34 @@ rbac:
   # -- Enable RBAC resources
   enabled: true
 
+# -- TXT ownership registry configuration.
+# txtOwnerID must be set to activate annotation-driven sources
+# (httproute_source, service_source).
+registry:
+  # TxtOwnerID identifies this operator instance in the external-dns-compatible
+  # TXT ownership registry. REQUIRED to activate annotation-driven sources
+  # (httproute_source, service_source). Two operator deployments against the
+  # same zone MUST use different IDs.
+  txtOwnerID: ""
+
+  # TxtImportOwners is a list of external-dns owner IDs to read and adopt
+  # records from during migration. The TXT is rewritten to our owner on
+  # adoption; the underlying A/AAAA/CNAME stays in place.
+  txtImportOwners: []
+
+  # TxtPrefix prepends a label to TXT registry record names (e.g. "_owner-").
+  # Must match any prior external-dns config when migrating.
+  txtPrefix: ""
+
+  # TxtSuffix appends a label to TXT registry record names. Must match any
+  # prior external-dns config when migrating.
+  txtSuffix: ""
+
+  # TxtWildcardReplacement replaces the literal "*" in wildcard hostnames when
+  # building TXT registry record names. Must match any prior external-dns
+  # config when migrating.
+  txtWildcardReplacement: ""
+
 # -- Metrics and monitoring configuration
 metrics:
   serviceMonitor:
