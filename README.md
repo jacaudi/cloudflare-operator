@@ -24,7 +24,7 @@ Already familiar with the CRDs? See:
 - [Migrating from external-dns](docs/external-dns-migration.md).
 - [Troubleshooting](docs/troubleshooting.md).
 
-## Quick Start
+## Installation
 
 ### Prerequisites
 
@@ -39,7 +39,7 @@ The Helm chart is published as an OCI artifact to GHCR. It installs the CRDs, th
 ```sh
 helm install cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.3.0 \
+  --version 1.0.0 \
   --namespace cloudflare-operator \
   --create-namespace
 ```

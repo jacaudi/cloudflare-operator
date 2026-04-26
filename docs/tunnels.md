@@ -84,10 +84,10 @@ Look for:
 
 ```bash
 # Check the connector Deployment directly
-kubectl get deploy -n network -l cloudflare.io/tunnel-name=prod
+kubectl get deploy -n network -l cloudflare.io/tunnel=prod
 
 # Check connector pod logs
-kubectl logs -n network -l cloudflare.io/tunnel-name=prod
+kubectl logs -n network -l cloudflare.io/tunnel=prod
 ```
 
 ### Disabling the connector (reverting to self-managed cloudflared)

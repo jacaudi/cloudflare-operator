@@ -10,7 +10,7 @@
   - `httproute_source` — watches Gateway API `HTTPRoute` + `Gateway`, emits DNS from `cloudflare.io/*` annotations.
   - `service_source` — watches `Service`, emits DNS + TunnelRule from `cloudflare.io/*` annotations.
 - External-dns-compatible plaintext TXT ownership registry in `internal/cloudflare/txt_registry.go` for record adoption and conflict detection during migration.
-- New operator config: `TXT_OWNER_ID` (required to activate sources), `TXT_IMPORT_OWNERS`.
+- New operator config: `TXT_OWNER_ID` (required to activate sources), `TXT_IMPORT_OWNERS`, `TXT_PREFIX`, `TXT_SUFFIX`, `TXT_WILDCARD_REPLACEMENT`.
 
 ### Changed
 - RBAC cluster role now includes cluster-wide write on `deployments`/`configmaps`/`serviceaccounts` (needed because tunnel CRs can live in any namespace). Scoped in practice by ownerRef to `CloudflareTunnel`.

@@ -37,7 +37,7 @@ All annotations use the `cloudflare.io/` prefix. Apply them to `HTTPRoute`, `Gat
 
 - **`tunnel:<name>`** — DNS becomes a CNAME to the tunnel's `<tunnel-id>.cfargotunnel.com` CNAME (read from `status.tunnelCNAME`). `proxied` is forced `true`. Use `cloudflare.io/tunnel-ref-namespace` when the tunnel CR is in a different namespace.
 - **`cname:<fqdn>`** — DNS becomes a CNAME to the literal FQDN. No tunnel involvement. Useful for stable external endpoints.
-- **`address`** — (HTTPRoute and Gateway only) — DNS is derived from the parent `Gateway`'s `status.addresses`: `A` for IPv4, `AAAA` for IPv6, `CNAME` for hostname-typed addresses. Rejected with a clear condition on a `Service`.
+- **`address`** — (HTTPRoute and Gateway only) — DNS is derived from the parent `Gateway`'s `status.addresses`: `A` for IPv4, `AAAA` for IPv6, `CNAME` for hostname-typed addresses. Rejected with a `Warning InvalidAnnotation` event on a `Service` (visible in `kubectl describe service <name>`).
 
 ---
 
@@ -196,15 +196,15 @@ The operator never silently overwrites a record it did not create. When a confli
 
 ### Hand-authored `CloudflareDNSRecord` wins
 
-If you have a hand-authored `CloudflareDNSRecord` CR for the same FQDN, it takes precedence. The source controller sets `DNSReady=False, reason=RecordConflict` and names the conflicting CR in the event message.
+If you have a hand-authored `CloudflareDNSRecord` CR for the same FQDN, the TXT registry mediates ownership. Hand-authored CRs are not emitted by a source controller and therefore use a different name pattern, so both CRs coexist. If the hand-authored CR's companion TXT uses a different `txtOwnerID`, the source controller's emitted CR gets `Ready=False, reason=RecordOwnershipConflict` (foreign TXT owner). If no companion TXT exists and `cloudflare.io/adopt` is not set, the emitted CR gets `Ready=False, reason=TxtRegistryGap`.
 
-Resolution: delete or rename the hand-authored CR, or remove the annotation from the source.
+Resolution: delete the hand-authored CR and its companion TXT and let the source controller take ownership, or remove the annotation from the source.
 
 ### Two annotation sources conflict on the same hostname
 
-If two `HTTPRoute` or `Service` objects both claim the same FQDN, the first writer (by `creationTimestamp`, then UID ascending) wins. The later source gets `RecordConflict`.
+If two `HTTPRoute` or `Service` objects both claim the same FQDN, each source controller emits a separately named `CloudflareDNSRecord` CR. Both CRs share the same `txtOwnerID` and both treat the companion TXT as their own, so no hard error is raised — instead both reconcile and the last writer wins, causing DNS content churn. There is no `RecordConflict` event emitted in this case.
 
-Resolution: remove the annotation from one source or change one of the hostnames.
+Resolution: remove the `cloudflare.io/target` annotation from one of the conflicting sources or change one of the hostnames so they no longer overlap.
 
 ### External record with no ownership TXT
 

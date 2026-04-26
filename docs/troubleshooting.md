@@ -138,7 +138,7 @@ If no `CloudflareTunnelRule` exists for the hostname, either:
 
 ```bash
 kubectl get configmap -n <tunnel-namespace> \
-  -l cloudflare.io/tunnel-name=<tunnel-name> \
+  -l cloudflare.io/tunnel=<tunnel-name> \
   -o yaml
 ```
 
@@ -146,12 +146,22 @@ Inspect the `config.yaml` key to confirm the hostname appears in the rendered in
 
 ### Check for hostname conflicts
 
+The operator does not emit an event for hostname conflicts; check the rule's conditions instead.
+
 ```bash
-kubectl get events -n <tunnel-namespace> \
-  --field-selector reason=RuleConflict
+# Inspect a specific rule for conflict status
+kubectl describe cloudflaretunnelrule -n <namespace> <name>
+# Look for: Conditions: type=Conflict, status=True
+#           Conditions: type=TunnelAccepted, status=False, reason=DuplicateHostname
 ```
 
-If two rules claim the same hostname, one wins and the other gets `TunnelAccepted=False`. Resolve by adjusting rule priorities or removing the duplicate.
+```bash
+# Find all tunnel rules whose hostname lost a conflict across the cluster
+kubectl get cloudflaretunnelrule -A -o json | \
+  jq -r '.items[] | select(.status.conditions[]? | select(.type=="Conflict" and .status=="True")) | "\(.metadata.namespace)/\(.metadata.name): \(.status.conditions[] | select(.type=="TunnelAccepted") | .message)"'
+```
+
+If two rules claim the same hostname, one wins and the other gets `TunnelAccepted=False, reason=DuplicateHostname` with `Conflict=True`. Resolve by adjusting rule priorities or removing the duplicate.
 
 ---
 
@@ -163,7 +173,7 @@ If two rules claim the same hostname, one wins and the other gets `TunnelAccepte
 
 ```bash
 # Find the connector Deployment
-kubectl get deploy -n <namespace> -l cloudflare.io/tunnel-name=<name>
+kubectl get deploy -n <namespace> -l cloudflare.io/tunnel=<name>
 
 # Describe it for events
 kubectl describe deploy <tunnel-name>-cloudflared -n <namespace>
@@ -176,7 +186,7 @@ Common causes:
 - **CrashLoopBackOff** — cloudflared failing to start. Check logs:
 
   ```bash
-  kubectl logs -n <namespace> -l cloudflare.io/tunnel-name=<name> --previous
+  kubectl logs -n <namespace> -l cloudflare.io/tunnel=<name> --previous
   ```
 
 - **`DeploymentConflict`** — a Deployment with the expected name exists but was not created by the operator. Check:
@@ -196,13 +206,13 @@ cloudflared needs the tunnel credentials Secret to connect:
 kubectl get secret <generated-secret-name> -n <namespace>
 ```
 
-The Secret name is `spec.generatedSecretName`. If it does not exist, the tunnel controller has not yet provisioned the tunnel in Cloudflare. Check `TunnelReady` condition on the `CloudflareTunnel`:
+The Secret name is `spec.generatedSecretName`. If it does not exist, the tunnel controller has not yet provisioned the tunnel in Cloudflare. Check the `Ready` condition on the `CloudflareTunnel`:
 
 ```bash
 kubectl describe cloudflaretunnel <name> -n <namespace>
 ```
 
-`TunnelReady=False` means the Cloudflare API call failed. Look for `CloudflareAPIError` events.
+`Ready=False` means the Cloudflare API call failed. Look for `CloudflareAPIError` events.
 
 ---
 
@@ -273,27 +283,19 @@ The operator retries on the next reconcile and adopts the record, rewriting the 
 
 ## 6. Two Routes or Services Conflict on the Same FQDN
 
-**Symptom:** Two `HTTPRoute` or `Service` objects both claim the same hostname. One reconciles; the other gets a `RecordConflict` event.
+**Symptom:** Two `HTTPRoute` or `Service` objects both claim the same hostname. Because each source controller names its emitted `CloudflareDNSRecord` after itself (e.g. `httproute-<ns>-<name>-<fqdn>` vs. `svc-<ns>-<name>-<fqdn>`), two CRs for the same FQDN can coexist and both attempt to reconcile the Cloudflare record. The TXT registry mediates ownership: the first CR to write the companion TXT claims ownership (`owner = txtOwnerID`). The second CR finds a TXT whose owner matches `txtOwnerID` and treats the record as already-owned, so it overwrites the DNS content on every reconcile cycle. The result is last-write-wins churn, not a hard error.
 
 ```bash
-# Find the conflict
-kubectl get events -A --field-selector reason=RecordConflict
-
-# Identify which CR the operator wrote
-kubectl get cloudflarednsrecord \
-  -l cloudflare.io/source-kind=HTTPRoute \
-  -A -o custom-columns=NAME:.metadata.name,SOURCE:.metadata.labels."cloudflare\.io/source-name",HOSTNAME:.spec.name
+# Find all CloudflareDNSRecord CRs for a hostname to identify competing sources
+kubectl get cloudflarednsrecord -A \
+  -o custom-columns=NAME:.metadata.name,NS:.metadata.namespace,HOSTNAME:.spec.name,SOURCE:.metadata.labels."cloudflare\.io/source-name"
 ```
-
-The first writer (by `creationTimestamp` ascending, then UID ascending) wins. The loser gets `DNSReady=False, reason=RecordConflict` and a `Warning RecordConflict` event naming the winning CR.
 
 **Resolution options:**
 
-1. Change one of the hostnames so they no longer conflict.
-2. Remove the annotation from the losing source if it should not manage DNS for that hostname.
-3. Delete the winning CR's source annotation and let the other source win on the next reconcile.
-
-There is no manual override to force a takeover. The winning-source's emitted CR must be deleted for the other source to become the owner.
+1. Remove the `cloudflare.io/target` annotation from one of the conflicting sources so only one emits a record for that FQDN.
+2. Change one of the hostnames so they no longer overlap.
+3. Delete the emitted `CloudflareDNSRecord` CR from the source you are retiring; the remaining source's CR takes sole ownership on the next reconcile.
 
 ---
 
