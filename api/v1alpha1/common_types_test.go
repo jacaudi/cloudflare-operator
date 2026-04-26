@@ -21,10 +21,29 @@ func TestReasonConstants(t *testing.T) {
 		ReasonInvalidSpec,
 		ReasonDeletingResource,
 		ReasonIPResolutionError,
+		ReasonApplied,
+		ReasonNotConfigured,
+		ReasonPermissionDenied,
+		ReasonPartialApply,
 	}
 	for _, r := range reasons {
 		if r == "" {
 			t.Error("reason constant should not be empty")
+		}
+	}
+}
+
+func TestConditionTypeConstants(t *testing.T) {
+	conditionTypes := []string{
+		ConditionTypeSSLApplied,
+		ConditionTypeSecurityApplied,
+		ConditionTypePerformanceApplied,
+		ConditionTypeNetworkApplied,
+		ConditionTypeBotManagementApplied,
+	}
+	for _, c := range conditionTypes {
+		if c == "" {
+			t.Errorf("condition type constant should not be empty")
 		}
 	}
 }

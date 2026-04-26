@@ -32,12 +32,17 @@ type TunnelReference struct {
 
 // Condition type constants used across all CRDs.
 const (
-	ConditionTypeReady             = "Ready"
-	ConditionTypeValid             = "Valid"
-	ConditionTypeTunnelAccepted    = "TunnelAccepted"
-	ConditionTypeConflict          = "Conflict"
-	ConditionTypeConnectorReady    = "ConnectorReady"
-	ConditionTypeIngressConfigured = "IngressConfigured"
+	ConditionTypeReady                = "Ready"
+	ConditionTypeValid                = "Valid"
+	ConditionTypeTunnelAccepted       = "TunnelAccepted"
+	ConditionTypeConflict             = "Conflict"
+	ConditionTypeConnectorReady       = "ConnectorReady"
+	ConditionTypeIngressConfigured    = "IngressConfigured"
+	ConditionTypeSSLApplied           = "SSLApplied"
+	ConditionTypeSecurityApplied      = "SecurityApplied"
+	ConditionTypePerformanceApplied   = "PerformanceApplied"
+	ConditionTypeNetworkApplied       = "NetworkApplied"
+	ConditionTypeBotManagementApplied = "BotManagementApplied"
 )
 
 // Condition reason constants.
@@ -69,6 +74,10 @@ const (
 	ReasonRecordAdopted     = "RecordAdopted"
 	ReasonDNSReconciled     = "DNSReconciled"
 	ReasonDuplicateHostname = "DuplicateHostname"
+	ReasonApplied           = "Applied"
+	ReasonNotConfigured     = "NotConfigured"
+	ReasonPermissionDenied  = "PermissionDenied"
+	ReasonPartialApply      = "PartialApply"
 )
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.
