@@ -14,10 +14,32 @@ rbac:
         - apiGroups:
             - ""
           resources:
+            - configmaps
+            - serviceaccounts
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
+        - apiGroups:
+            - ""
+          resources:
             - events
           verbs:
             - create
             - patch
+        - apiGroups:
+            - ""
+          resources:
+            - pods
+            - services
+          verbs:
+            - get
+            - list
+            - watch
         - apiGroups:
             - ""
           resources:
@@ -30,10 +52,31 @@ rbac:
             - update
             - watch
         - apiGroups:
+            - apps
+          resources:
+            - deployments
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
+        - apiGroups:
+            - apps
+          resources:
+            - replicasets
+          verbs:
+            - get
+            - list
+            - watch
+        - apiGroups:
             - cloudflare.io
           resources:
             - cloudflarednsrecords
             - cloudflarerulesets
+            - cloudflaretunnelrules
             - cloudflaretunnels
             - cloudflarezoneconfigs
             - cloudflarezones
@@ -60,6 +103,7 @@ rbac:
           resources:
             - cloudflarednsrecords/status
             - cloudflarerulesets/status
+            - cloudflaretunnelrules/status
             - cloudflaretunnels/status
             - cloudflarezoneconfigs/status
             - cloudflarezones/status
@@ -67,6 +111,15 @@ rbac:
             - get
             - patch
             - update
+        - apiGroups:
+            - gateway.networking.k8s.io
+          resources:
+            - gateways
+            - httproutes
+          verbs:
+            - get
+            - list
+            - watch
 {{- if .Values.leaderElection.enabled }}
     leader-election:
       enabled: true

@@ -1,0 +1,260 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: cloudflaretunnelrules.cloudflare.io
+spec:
+  group: cloudflare.io
+  names:
+    kind: CloudflareTunnelRule
+    listKind: CloudflareTunnelRuleList
+    plural: cloudflaretunnelrules
+    singular: cloudflaretunnelrule
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.tunnelRef.name
+      name: Tunnel
+      type: string
+    - jsonPath: .spec.hostnames
+      name: Hostnames
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="TunnelAccepted")].status
+      name: Accepted
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CloudflareTunnelRule is the Schema for the cloudflaretunnelrules
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              CloudflareTunnelRuleSpec defines one cloudflared ingress rule (or group of
+              rules sharing a backend) that attaches to a CloudflareTunnel.
+            properties:
+              backend:
+                description: Backend describes where traffic for these hostnames flows.
+                properties:
+                  httpStatus:
+                    description: |-
+                      HTTPStatus produces a cloudflared http_status:<code> entry. Use for
+                      explicit "reject at this hostname" rules.
+                    type: integer
+                  serviceRef:
+                    description: |-
+                      ServiceRef routes to a Kubernetes Service by reference. The operator
+                      resolves the URL from cluster DNS at render time.
+                    properties:
+                      name:
+                        description: Name of the Service.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Service. Defaults to the rule's
+                          namespace when empty.
+                        type: string
+                      port:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: Port may be an integer or a named port.
+                        x-kubernetes-int-or-string: true
+                      scheme:
+                        description: |-
+                          Scheme is http, https, h2c, or tcp. When empty, inferred at reconcile
+                          time from the Service's port name.
+                        enum:
+                        - http
+                        - https
+                        - h2c
+                        - tcp
+                        type: string
+                    required:
+                    - name
+                    - port
+                    type: object
+                  url:
+                    description: |-
+                      URL is a raw backend URL. Use for sources (Gateway-upstream overrides)
+                      where the backend is not expressible as a Service reference.
+                    type: string
+                type: object
+              hostnames:
+                description: |-
+                  Hostnames that cloudflared should route to the Backend. At least one
+                  is required; order is preserved within the aggregated ingress list.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              originRequest:
+                description: OriginRequest pass-through options.
+                properties:
+                  connectTimeout:
+                    type: string
+                  httpHostHeader:
+                    type: string
+                  noTLSVerify:
+                    type: boolean
+                  originServerName:
+                    type: string
+                type: object
+              priority:
+                default: 100
+                description: |-
+                  Priority determines evaluation order within the aggregated ingress list.
+                  Higher values are evaluated first. Default 100; ties broken by
+                  metadata.name ascending.
+                type: integer
+              sourceRef:
+                description: |-
+                  SourceRef identifies the source that produced this rule. Present on
+                  operator-emitted rules; absent on hand-authored rules.
+                properties:
+                  apiVersion:
+                    type: string
+                  kind:
+                    type: string
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                  uid:
+                    type: string
+                type: object
+              tunnelRef:
+                description: TunnelRef points at the CloudflareTunnel this rule attaches
+                  to.
+                properties:
+                  name:
+                    description: Name of the CloudflareTunnel resource.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the CloudflareTunnel. Defaults to the rule's own namespace
+                      when empty.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - backend
+            - hostnames
+            - tunnelRef
+            type: object
+          status:
+            description: CloudflareTunnelRuleStatus is the observed state.
+            properties:
+              appliedToConfigHash:
+                description: |-
+                  AppliedToConfigHash records the tunnel's config-hash at the last time
+                  this rule was included. Useful for debugging drift.
+                type: string
+              conditions:
+                description: |-
+                  Conditions: Valid, TunnelAccepted, Conflict. Written by the
+                  CloudflareTunnel controller during aggregation.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the most recently observed generation.
+                format: int64
+                type: integer
+              resolvedBackend:
+                description: |-
+                  ResolvedBackend is the URL cloudflared was configured with for this
+                  rule. Populated after the tunnel controller renders a config.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: exactly one of backend.serviceRef, backend.url, backend.httpStatus
+            must be set
+          rule: '(has(self.spec.backend.serviceRef) ? 1 : 0) + (has(self.spec.backend.url)
+            ? 1 : 0) + (has(self.spec.backend.httpStatus) ? 1 : 0) == 1'
+    served: true
+    storage: true
+    subresources:
+      status: {}

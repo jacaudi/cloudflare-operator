@@ -1,0 +1,254 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cloudflare
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+)
+
+// RegistryPayload is the decoded external-dns-compatible TXT registry entry.
+//
+// Wire format:
+//
+//	"heritage=external-dns,external-dns/owner=<owner>,external-dns/resource=<kind>/<ns>/<name>"
+//
+// SourceKind / SourceNamespace / SourceName may be empty for legacy external-dns
+// registry entries that only carry owner information. Callers should treat
+// missing resource information as "adoptable but unlinked".
+type RegistryPayload struct {
+	Owner           string
+	SourceKind      string
+	SourceNamespace string
+	SourceName      string
+}
+
+// AffixConfig controls how the companion TXT's record name is derived from the
+// managed record's FQDN. Defaults (all empty strings) yield external-dns's
+// default affix scheme.
+type AffixConfig struct {
+	Prefix              string
+	Suffix              string
+	WildcardReplacement string
+}
+
+// ErrRegistryMalformed is returned when a TXT payload cannot be parsed as an
+// external-dns registry entry.
+//
+// This error deliberately covers BOTH cases:
+//  1. The TXT is not an external-dns registry record at all (e.g. an SPF
+//     record, a user-managed TXT, or any other non-registry payload whose
+//     heritage key is missing or not "external-dns").
+//  2. The TXT looks like a registry record but is structurally invalid
+//     (e.g. missing owner, malformed resource tuple, missing '=' separator).
+//
+// Callers MUST NOT try to distinguish these two cases: both mean "do not
+// treat this TXT as ownership metadata." Wrapping them under a single
+// sentinel keeps adoption logic simple — any error from DecodeRegistryPayload
+// means "ignore this record for registry purposes."
+var ErrRegistryMalformed = errors.New("txt registry: malformed payload")
+
+// EncodeRegistryPayload produces the canonical quoted wire form of a
+// RegistryPayload.
+func EncodeRegistryPayload(p RegistryPayload) string {
+	var b strings.Builder
+	b.WriteString(`"heritage=external-dns,external-dns/owner=`)
+	b.WriteString(p.Owner)
+	if p.SourceKind != "" {
+		b.WriteString(",external-dns/resource=")
+		b.WriteString(p.SourceKind)
+		b.WriteString("/")
+		b.WriteString(p.SourceNamespace)
+		b.WriteString("/")
+		b.WriteString(p.SourceName)
+	}
+	b.WriteString(`"`)
+	return b.String()
+}
+
+// DecodeRegistryPayload parses the wire form produced by EncodeRegistryPayload.
+// Accepts both quoted and unquoted forms (Cloudflare's DNS API sometimes strips
+// surrounding quotes on read).
+func DecodeRegistryPayload(raw string) (RegistryPayload, error) {
+	s := strings.Trim(raw, `"`)
+	kv := map[string]string{}
+	for part := range strings.SplitSeq(s, ",") {
+		key, val, ok := strings.Cut(part, "=")
+		if !ok {
+			return RegistryPayload{}, fmt.Errorf("%w: missing '=' in %q", ErrRegistryMalformed, part)
+		}
+		kv[strings.TrimSpace(key)] = strings.TrimSpace(val)
+	}
+	if kv["heritage"] != "external-dns" {
+		return RegistryPayload{}, fmt.Errorf("%w: heritage != external-dns", ErrRegistryMalformed)
+	}
+	owner, ok := kv["external-dns/owner"]
+	if !ok || owner == "" {
+		return RegistryPayload{}, fmt.Errorf("%w: missing external-dns/owner", ErrRegistryMalformed)
+	}
+	p := RegistryPayload{Owner: owner}
+	if res := kv["external-dns/resource"]; res != "" {
+		parts := strings.SplitN(res, "/", 3)
+		if len(parts) != 3 {
+			return RegistryPayload{}, fmt.Errorf("%w: resource must be kind/ns/name, got %q", ErrRegistryMalformed, res)
+		}
+		p.SourceKind = parts[0]
+		p.SourceNamespace = parts[1]
+		p.SourceName = parts[2]
+	}
+	return p, nil
+}
+
+// AffixName returns the companion-TXT record name for a managed record at fqdn
+// with the given record type. Matches external-dns's default affix scheme.
+func AffixName(fqdn, recordType string, cfg AffixConfig) string {
+	// Replace wildcard leaf.
+	if cfg.WildcardReplacement != "" && strings.HasPrefix(fqdn, "*.") {
+		fqdn = cfg.WildcardReplacement + fqdn[1:] // "*.example.com" -> "any.example.com"
+	}
+	// Default type prefix if user hasn't configured a custom prefix/suffix.
+	typePrefix := ""
+	if cfg.Prefix == "" && cfg.Suffix == "" {
+		switch recordType {
+		case "A", "AAAA":
+			typePrefix = "a-"
+		case "CNAME":
+			typePrefix = "cname-"
+		default:
+			typePrefix = strings.ToLower(recordType) + "-"
+		}
+	}
+	switch {
+	case cfg.Prefix != "":
+		return cfg.Prefix + fqdn
+	case cfg.Suffix != "":
+		// Inject suffix before the first dot (the leaf label).
+		dot := strings.IndexByte(fqdn, '.')
+		if dot < 0 {
+			return fqdn + cfg.Suffix
+		}
+		return fqdn[:dot] + cfg.Suffix + fqdn[dot:]
+	default:
+		return typePrefix + fqdn
+	}
+}
+
+// EncryptPayload produces a base64-encoded AES-256-CBC ciphertext of plaintext
+// using key. The output format is external-dns-compatible:
+//
+//	base64( IV[16] || PKCS#7-padded-ciphertext )
+//
+// key MUST be 32 bytes (AES-256).
+func EncryptPayload(plaintext string, key []byte) (string, error) {
+	if len(key) != 32 {
+		return "", fmt.Errorf("encrypt: key must be 32 bytes (AES-256), got %d", len(key))
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("encrypt: %w", err)
+	}
+	iv := make([]byte, aes.BlockSize)
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return "", fmt.Errorf("encrypt: iv: %w", err)
+	}
+	padded := pkcs7Pad([]byte(plaintext), aes.BlockSize)
+	ciphertext := make([]byte, len(padded))
+	cbc := cipher.NewCBCEncrypter(block, iv)
+	cbc.CryptBlocks(ciphertext, padded)
+	return base64.StdEncoding.EncodeToString(append(iv, ciphertext...)), nil
+}
+
+// DecryptPayload attempts to decrypt a base64-encoded AES-256-CBC ciphertext
+// using any key in keys (tried in order). If the input does not parse as
+// base64 or does not look encrypted at all, it is returned verbatim
+// (plaintext passthrough). If the input is encrypted but no key decrypts it
+// cleanly, returns an error.
+//
+// "Looks encrypted" is determined by base64 decoding successfully to at
+// least two AES blocks (IV + one block of ciphertext).
+func DecryptPayload(input string, keys [][]byte) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(input)
+	if err != nil || len(data) < aes.BlockSize*2 || len(data)%aes.BlockSize != 0 {
+		return input, nil // plaintext passthrough
+	}
+	if len(keys) == 0 {
+		return input, nil
+	}
+	iv, ct := data[:aes.BlockSize], data[aes.BlockSize:]
+	var lastErr error
+	for _, key := range keys {
+		if len(key) != 32 {
+			lastErr = fmt.Errorf("decrypt: key must be 32 bytes, got %d", len(key))
+			continue
+		}
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		plain := make([]byte, len(ct))
+		cbc := cipher.NewCBCDecrypter(block, iv)
+		cbc.CryptBlocks(plain, ct)
+		unpadded, ok := pkcs7Unpad(plain, aes.BlockSize)
+		if !ok {
+			lastErr = errors.New("decrypt: pkcs7 unpad failed")
+			continue
+		}
+		// Sanity: valid external-dns payloads always contain
+		// "heritage=external-dns".
+		if !strings.Contains(string(unpadded), "heritage=external-dns") {
+			lastErr = errors.New("decrypt: decoded bytes do not look like a registry payload")
+			continue
+		}
+		return string(unpadded), nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("decrypt: no keys provided")
+	}
+	return "", lastErr
+}
+
+func pkcs7Pad(data []byte, blockSize int) []byte {
+	padLen := blockSize - (len(data) % blockSize)
+	pad := make([]byte, padLen)
+	for i := range pad {
+		pad[i] = byte(padLen)
+	}
+	return append(data, pad...)
+}
+
+func pkcs7Unpad(data []byte, blockSize int) ([]byte, bool) {
+	if len(data) == 0 || len(data)%blockSize != 0 {
+		return nil, false
+	}
+	padLen := int(data[len(data)-1])
+	if padLen == 0 || padLen > blockSize {
+		return nil, false
+	}
+	for i := len(data) - padLen; i < len(data); i++ {
+		if data[i] != byte(padLen) {
+			return nil, false
+		}
+	}
+	return data[:len(data)-padLen], true
+}

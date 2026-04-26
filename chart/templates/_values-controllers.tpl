@@ -25,6 +25,21 @@ controllers:
           - --metrics-bind-address=:8080
         env:
           TZ: {{ .Values.timezone }}
+          {{- if .Values.registry.txtOwnerID }}
+          TXT_OWNER_ID: {{ .Values.registry.txtOwnerID | quote }}
+          {{- end }}
+          {{- if .Values.registry.txtImportOwners }}
+          TXT_IMPORT_OWNERS: {{ .Values.registry.txtImportOwners | join "," | quote }}
+          {{- end }}
+          {{- if .Values.registry.txtPrefix }}
+          TXT_PREFIX: {{ .Values.registry.txtPrefix | quote }}
+          {{- end }}
+          {{- if .Values.registry.txtSuffix }}
+          TXT_SUFFIX: {{ .Values.registry.txtSuffix | quote }}
+          {{- end }}
+          {{- if .Values.registry.txtWildcardReplacement }}
+          TXT_WILDCARD_REPLACEMENT: {{ .Values.registry.txtWildcardReplacement | quote }}
+          {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
         securityContext:

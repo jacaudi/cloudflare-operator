@@ -25,14 +25,17 @@ import (
 	"reflect"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
@@ -52,8 +55,14 @@ type CloudflareTunnelReconciler struct {
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnels,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnels/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnels/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnelrules,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cloudflare.io,resources=cloudflaretunnelrules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=configmaps;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile moves the current state of the cluster closer to the desired state
 // for a CloudflareTunnel resource. It handles the full lifecycle of tunnels
@@ -113,10 +122,28 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
 	}
 
-	// 7. Persist status only if anything materially changed.
+	// 7. Set Ready and ObservedGeneration in-memory. If aggregation is not
+	// applicable (no CNAME yet), persist now. Otherwise let writeTunnelAggStatus
+	// (called inside ReconcileConnectorAndRules) perform the single terminal write
+	// so there is only one Status().Update per successful reconcile.
 	tunnel.Status.ObservedGeneration = tunnel.Generation
 	status.SetReady(&tunnel.Status.Conditions, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Tunnel synced", tunnel.Generation)
+
+	// 8. Aggregate rules and reconcile connector — only once the tunnel has a
+	// CNAME (i.e. provisioning succeeded at least once).
+	if tunnel.Status.TunnelCNAME != "" {
+		if err := ReconcileConnectorAndRules(ctx, r.Client, &tunnel, preStatus); err != nil {
+			logger.Error(err, "aggregator/connector failed")
+			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "AggregationFailed", err.Error())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		// writeTunnelAggStatus (called by ReconcileConnectorAndRules) has already
+		// persisted the full status including the Ready condition set above.
+		return result, nil
+	}
+
+	// No CNAME yet — persist the status update here (first-reconcile path).
 	if !reflect.DeepEqual(preStatus, &tunnel.Status) {
 		now := metav1.Now()
 		tunnel.Status.LastSyncedAt = &now
@@ -326,5 +353,24 @@ func (r *CloudflareTunnelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cloudflarev1alpha1.CloudflareTunnel{}).
 		Named("cloudflaretunnel").
+		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Secret{}).
+		Watches(&cloudflarev1alpha1.CloudflareTunnelRule{}, handler.EnqueueRequestsFromMapFunc(r.mapRuleToTunnel)).
 		Complete(r)
+}
+
+// mapRuleToTunnel maps a CloudflareTunnelRule watch event to the reconcile
+// request for the CloudflareTunnel it references.
+func (r *CloudflareTunnelReconciler) mapRuleToTunnel(ctx context.Context, obj client.Object) []ctrl.Request {
+	rule, ok := obj.(*cloudflarev1alpha1.CloudflareTunnelRule)
+	if !ok {
+		return nil
+	}
+	ns := rule.Spec.TunnelRef.Namespace
+	if ns == "" {
+		ns = rule.Namespace
+	}
+	return []ctrl.Request{{NamespacedName: types.NamespacedName{Namespace: ns, Name: rule.Spec.TunnelRef.Name}}}
 }
