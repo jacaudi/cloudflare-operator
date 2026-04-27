@@ -24,6 +24,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -110,13 +111,15 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
-	// 5. Reconcile the zone config
+	// 5. Reconcile the zone config.
+	// Per-group conditions set inside reconcileZoneConfig (via status.SetCondition)
+	// survive failReconcile because failReconcile only mutates the Ready slot via
+	// status.SetReady. Both go through the same Status().Update call.
 	result, err := r.reconcileZoneConfig(ctx, &zoneConfig, r.zoneClient(apiToken), resolvedZoneID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
-		r.Recorder.Event(&zoneConfig, corev1.EventTypeWarning, "SyncFailed", err.Error())
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
-			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+			cloudflarev1alpha1.ReasonPartialApply, err, time.Minute)
 	}
 
 	// 7. Persist status only if anything materially changed.
@@ -146,16 +149,6 @@ func appendIfSet[T any](updates []settingUpdate, id string, value *T) []settingU
 		return updates
 	}
 	return append(updates, settingUpdate{id, *value})
-}
-
-// collectSettings maps non-nil spec fields to Cloudflare setting IDs and values.
-func collectSettings(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) []settingUpdate {
-	var updates []settingUpdate
-	updates = appendSSL(updates, spec.SSL)
-	updates = appendSecurity(updates, spec.Security)
-	updates = appendPerformance(updates, spec.Performance)
-	updates = appendNetwork(updates, spec.Network)
-	return updates
 }
 
 func appendSSL(updates []settingUpdate, ssl *cloudflarev1alpha1.SSLSettings) []settingUpdate {
@@ -223,6 +216,51 @@ func appendNetwork(updates []settingUpdate, net *cloudflarev1alpha1.NetworkSetti
 	return updates
 }
 
+// groupResult captures the outcome of applying a single settings group.
+type groupResult struct {
+	conditionType string // e.g., ConditionTypeSSLApplied
+	groupLabel    string // human-readable, e.g., "SSL"
+	configured    bool   // true if the user set this section
+	err           error  // nil on success or NotConfigured
+	settingsCount int    // count of settings touched on success
+}
+
+// status returns the metav1.ConditionStatus for this group.
+func (g groupResult) status() metav1.ConditionStatus {
+	if !g.configured {
+		return metav1.ConditionFalse
+	}
+	if g.err != nil {
+		return metav1.ConditionFalse
+	}
+	return metav1.ConditionTrue
+}
+
+// reason returns the condition reason for this group.
+func (g groupResult) reason() string {
+	if !g.configured {
+		return cloudflarev1alpha1.ReasonNotConfigured
+	}
+	if g.err == nil {
+		return cloudflarev1alpha1.ReasonApplied
+	}
+	if cfclient.IsPermissionDenied(g.err) {
+		return cloudflarev1alpha1.ReasonPermissionDenied
+	}
+	return cloudflarev1alpha1.ReasonCloudflareError
+}
+
+// message returns the condition message for this group.
+func (g groupResult) message() string {
+	if !g.configured {
+		return fmt.Sprintf("%s settings not configured", g.groupLabel)
+	}
+	if g.err == nil {
+		return fmt.Sprintf("applied %d %s settings", g.settingsCount, g.groupLabel)
+	}
+	return g.err.Error()
+}
+
 func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context, zoneConfig *cloudflarev1alpha1.CloudflareZoneConfig, zoneClient cfclient.ZoneClient, zoneID string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -240,33 +278,186 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
-	// Apply regular zone settings
-	settings := collectSettings(&zoneConfig.Spec)
-	for _, s := range settings {
-		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update setting %s: %w", s.id, err)
-		}
-	}
-	appliedCount := len(settings)
+	// Snapshot prior per-group condition status so we can emit transition events.
+	priorStatuses := snapshotGroupStatuses(zoneConfig.Status.Conditions)
 
-	// Handle bot management separately (different API)
-	if zoneConfig.Spec.BotManagement != nil {
-		config := cfclient.BotManagementConfig{
-			EnableJS:  zoneConfig.Spec.BotManagement.EnableJS,
-			FightMode: zoneConfig.Spec.BotManagement.FightMode,
-		}
-		if err := zoneClient.UpdateBotManagement(ctx, zoneID, config); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update bot management: %w", err)
-		}
-		appliedCount++
+	results := []groupResult{
+		applySSLGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.SSL),
+		applySecurityGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Security),
+		applyPerformanceGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Performance),
+		applyNetworkGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Network),
+		applyBotManagementGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.BotManagement),
 	}
 
+	// Persist per-group conditions.
+	for _, g := range results {
+		status.SetCondition(&zoneConfig.Status.Conditions, g.conditionType, g.status(), g.reason(), g.message(), zoneConfig.Generation)
+	}
+
+	// Emit transition events.
+	r.emitGroupTransitionEvents(zoneConfig, priorStatuses, results)
+
+	// Aggregate failures.
+	var failed []groupResult
+	for _, g := range results {
+		if g.configured && g.err != nil {
+			failed = append(failed, g)
+		}
+	}
+	if len(failed) > 0 {
+		// Don't update appliedSpecHash — failed groups must retry next reconcile.
+		return ctrl.Result{}, aggregateErr(failed)
+	}
+
+	// All configured groups succeeded.
 	zoneConfig.Status.AppliedSpecHash = desiredHash
 
-	r.Recorder.Event(zoneConfig, corev1.EventTypeNormal, "SettingsApplied",
-		fmt.Sprintf("Applied %d settings to zone %s", appliedCount, zoneID))
-
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// applySSLGroup applies the SSL settings group, if configured.
+func applySSLGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, ssl *cloudflarev1alpha1.SSLSettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeSSLApplied, groupLabel: "SSL"}
+	if ssl == nil {
+		return g
+	}
+	g.configured = true
+	updates := appendSSL(nil, ssl)
+	for _, s := range updates {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
+			g.err = fmt.Errorf("update setting %s: %w", s.id, err)
+			return g
+		}
+	}
+	g.settingsCount = len(updates)
+	return g
+}
+
+// applySecurityGroup applies the Security settings group, if configured.
+func applySecurityGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, sec *cloudflarev1alpha1.SecuritySettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeSecurityApplied, groupLabel: "Security"}
+	if sec == nil {
+		return g
+	}
+	g.configured = true
+	updates := appendSecurity(nil, sec)
+	for _, s := range updates {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
+			g.err = fmt.Errorf("update setting %s: %w", s.id, err)
+			return g
+		}
+	}
+	g.settingsCount = len(updates)
+	return g
+}
+
+// applyPerformanceGroup applies the Performance settings group, if configured.
+func applyPerformanceGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, perf *cloudflarev1alpha1.PerformanceSettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypePerformanceApplied, groupLabel: "Performance"}
+	if perf == nil {
+		return g
+	}
+	g.configured = true
+	updates := appendPerformance(nil, perf)
+	for _, s := range updates {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
+			g.err = fmt.Errorf("update setting %s: %w", s.id, err)
+			return g
+		}
+	}
+	g.settingsCount = len(updates)
+	return g
+}
+
+// applyNetworkGroup applies the Network settings group, if configured.
+func applyNetworkGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, net *cloudflarev1alpha1.NetworkSettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeNetworkApplied, groupLabel: "Network"}
+	if net == nil {
+		return g
+	}
+	g.configured = true
+	updates := appendNetwork(nil, net)
+	for _, s := range updates {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
+			g.err = fmt.Errorf("update setting %s: %w", s.id, err)
+			return g
+		}
+	}
+	g.settingsCount = len(updates)
+	return g
+}
+
+// applyBotManagementGroup applies the BotManagement settings group, if configured.
+func applyBotManagementGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, bm *cloudflarev1alpha1.BotManagementSettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeBotManagementApplied, groupLabel: "BotManagement"}
+	if bm == nil {
+		return g
+	}
+	g.configured = true
+	config := cfclient.BotManagementConfig{
+		EnableJS:  bm.EnableJS,
+		FightMode: bm.FightMode,
+	}
+	if err := zoneClient.UpdateBotManagement(ctx, zoneID, config); err != nil {
+		g.err = fmt.Errorf("update bot management: %w", err)
+		return g
+	}
+	g.settingsCount = 1 // bot_management is one logical group/api call
+	return g
+}
+
+// snapshotGroupStatuses returns a map of condition type -> status from the
+// pre-reconcile condition list, used to detect transitions.
+func snapshotGroupStatuses(conds []metav1.Condition) map[string]metav1.ConditionStatus {
+	out := map[string]metav1.ConditionStatus{}
+	for _, c := range conds {
+		out[c.Type] = c.Status
+	}
+	return out
+}
+
+// emitGroupTransitionEvents emits SettingsApplied / SettingsApplyFailed events
+// for groups whose status changed since the prior reconcile. Steady-state
+// reconciles produce no events for these groups.
+func (r *CloudflareZoneConfigReconciler) emitGroupTransitionEvents(
+	obj client.Object,
+	prior map[string]metav1.ConditionStatus,
+	results []groupResult,
+) {
+	for _, g := range results {
+		newStatus := g.status()
+		oldStatus, hadPrior := prior[g.conditionType]
+		// Skip NotConfigured groups — they don't change state in a way users care about.
+		if !g.configured && (!hadPrior || oldStatus == newStatus) {
+			continue
+		}
+		if hadPrior && oldStatus == newStatus {
+			continue
+		}
+		if g.configured && g.err == nil {
+			r.Recorder.Eventf(obj, corev1.EventTypeNormal, "SettingsApplied",
+				"%s applied (%d settings)", g.groupLabel, g.settingsCount)
+		} else if g.configured && g.err != nil {
+			r.Recorder.Eventf(obj, corev1.EventTypeWarning, "SettingsApplyFailed",
+				"%s failed: %s: %s", g.groupLabel, g.reason(), g.err.Error())
+		}
+	}
+}
+
+// aggregateErr produces a single error summarizing all failed groups,
+// suitable for failReconcile to log/surface in the Ready condition.
+// The summary uses each group's classified reason rather than the raw
+// error string, so the wrapped underlying error (via %w) does not appear
+// duplicated in the human-readable message.
+func aggregateErr(failed []groupResult) error {
+	parts := make([]string, 0, len(failed))
+	for _, g := range failed {
+		parts = append(parts, fmt.Sprintf("%s: %s", g.groupLabel, g.reason()))
+	}
+	// Wrap the first failed group's underlying error so errors.Is/As can still
+	// classify it (e.g., IsPermissionDenied for a single 403).
+	return fmt.Errorf("partial apply failed for %d group(s) [%s]: %w",
+		len(failed), strings.Join(parts, ", "), failed[0].err)
 }
 
 // hashZoneConfigSpec returns a sha256 hex digest over the settings-relevant

@@ -165,6 +165,13 @@ type NetworkSettings struct {
 }
 
 // BotManagementSettings defines bot management settings for a Cloudflare zone.
+//
+// Configuring this section requires the Zone:Bot Management:Edit scope on the
+// API token and a Cloudflare plan that supports bot management. On Free plans
+// this section's API call returns 403; the controller will surface that on
+// the BotManagementApplied condition with reason=PermissionDenied without
+// preventing other groups (ssl / security / performance / network) from
+// being applied.
 type BotManagementSettings struct {
 	// EnableJS enables JavaScript detections.
 	// +optional

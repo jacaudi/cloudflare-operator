@@ -377,6 +377,20 @@ spec:
     fightMode: true
 ```
 
+#### Required token scopes per group
+
+`CloudflareZoneConfig` calls Cloudflare APIs only for the groups you configure. Your API token must include the matching scopes:
+
+| Group           | Required token scope                          |
+| --------------- | --------------------------------------------- |
+| `ssl`           | Zone:Zone Settings:Edit                       |
+| `security`      | Zone:Zone Settings:Edit                       |
+| `performance`   | Zone:Zone Settings:Edit                       |
+| `network`       | Zone:Zone Settings:Edit                       |
+| `botManagement` | Zone:Bot Management:Edit (and a paid plan that supports bot management) |
+
+If a group fails to apply (e.g., a 403 on `botManagement` because the token lacks scope or the zone is on Free), other groups are still applied and a per-group condition (`BotManagementApplied=False, Reason=PermissionDenied`) surfaces the failure. The resource's `Ready` condition is `False` with `Reason=PartialApply` until every configured group succeeds.
+
 ### Print Columns
 
 ```

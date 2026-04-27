@@ -1,3 +1,10 @@
+# Required token scopes per group:
+#   ssl / security / performance / network: Zone:Zone Settings:Edit
+#   botManagement:                           Zone:Bot Management:Edit (paid plan)
+#
+# Groups you don't configure won't be touched. A failure on one group
+# (e.g., a 403 on botManagement) won't block the others — see
+# .status.conditions for per-group state.
 apiVersion: cloudflare.io/v1alpha1
 kind: CloudflareZoneConfig
 metadata:

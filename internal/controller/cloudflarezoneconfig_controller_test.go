@@ -2,12 +2,15 @@ package controller
 
 import (
 	"context"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
+	cfgov6 "github.com/cloudflare/cloudflare-go/v6"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -32,6 +35,7 @@ type mockZoneClient struct {
 	updateSettingCalls int
 	updateBotCalled    bool
 	lastZoneID         string
+	appliedSettings    []string // ordered list of setting IDs successfully applied
 }
 
 func newMockZoneClient() *mockZoneClient {
@@ -55,6 +59,7 @@ func (m *mockZoneClient) UpdateSetting(_ context.Context, zoneID, settingID stri
 	}
 	m.lastZoneID = zoneID
 	m.settings[settingID] = value
+	m.appliedSettings = append(m.appliedSettings, settingID)
 	m.updateSettingCalls++
 	return nil
 }
@@ -574,5 +579,411 @@ func TestZoneConfigReconcile_ZoneRefNotReady(t *testing.T) {
 	}
 	if !foundCondition {
 		t.Error("expected Ready condition to be set")
+	}
+}
+
+func TestZoneConfigReconcile_PartialApply_BotManagement403(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+
+	secLevel := "medium"
+	zoneConfig.Spec.Security = &cloudflarev1alpha1.SecuritySettings{SecurityLevel: &secLevel}
+
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	mock.botUpdateErr = &cfgov6.Error{StatusCode: http.StatusForbidden}
+
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	})
+	// failReconcile returns nil err and a requeue, so the outer Reconcile returns nil.
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// SSL and Security applied; BotManagement attempted and failed.
+	if !contains(mock.appliedSettings, "ssl") {
+		t.Errorf("expected ssl to be applied, got %v", mock.appliedSettings)
+	}
+	if !contains(mock.appliedSettings, "security_level") {
+		t.Errorf("expected security_level to be applied, got %v", mock.appliedSettings)
+	}
+	if !mock.updateBotCalled {
+		t.Error("expected UpdateBotManagement to be attempted")
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+
+	wantConditions := map[string]struct {
+		status metav1.ConditionStatus
+		reason string
+	}{
+		cloudflarev1alpha1.ConditionTypeSSLApplied:           {metav1.ConditionTrue, cloudflarev1alpha1.ReasonApplied},
+		cloudflarev1alpha1.ConditionTypeSecurityApplied:      {metav1.ConditionTrue, cloudflarev1alpha1.ReasonApplied},
+		cloudflarev1alpha1.ConditionTypePerformanceApplied:   {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
+		cloudflarev1alpha1.ConditionTypeNetworkApplied:       {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
+		cloudflarev1alpha1.ConditionTypeBotManagementApplied: {metav1.ConditionFalse, cloudflarev1alpha1.ReasonPermissionDenied},
+		cloudflarev1alpha1.ConditionTypeReady:                {metav1.ConditionFalse, cloudflarev1alpha1.ReasonPartialApply},
+	}
+	for ct, want := range wantConditions {
+		got := findCondition(updated.Status.Conditions, ct)
+		if got == nil {
+			t.Errorf("condition %s not set", ct)
+			continue
+		}
+		if got.Status != want.status {
+			t.Errorf("%s status = %s, want %s", ct, got.Status, want.status)
+		}
+		if got.Reason != want.reason {
+			t.Errorf("%s reason = %s, want %s", ct, got.Reason, want.reason)
+		}
+	}
+
+	if updated.Status.AppliedSpecHash != "" {
+		t.Errorf("expected appliedSpecHash to be empty on partial failure, got %q", updated.Status.AppliedSpecHash)
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
+	for i := range conds {
+		if conds[i].Type == t {
+			return &conds[i]
+		}
+	}
+	return nil
+}
+
+func TestZoneConfigReconcile_PartialApply_Generic5xx(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+
+	secLevel := "medium"
+	zoneConfig.Spec.Security = &cloudflarev1alpha1.SecuritySettings{SecurityLevel: &secLevel}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	mock.updateErrors["ssl"] = &cfgov6.Error{StatusCode: http.StatusBadGateway}
+
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contains(mock.appliedSettings, "ssl") {
+		t.Error("ssl should not have been recorded as applied")
+	}
+	if !contains(mock.appliedSettings, "security_level") {
+		t.Errorf("security_level expected; appliedSettings=%v", mock.appliedSettings)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	ssl := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeSSLApplied)
+	if ssl == nil || ssl.Status != metav1.ConditionFalse || ssl.Reason != cloudflarev1alpha1.ReasonCloudflareError {
+		t.Errorf("ssl condition = %+v, want False/CloudflareAPIError", ssl)
+	}
+	sec := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeSecurityApplied)
+	if sec == nil || sec.Status != metav1.ConditionTrue || sec.Reason != cloudflarev1alpha1.ReasonApplied {
+		t.Errorf("security condition = %+v, want True/Applied", sec)
+	}
+}
+
+func TestZoneConfigReconcile_FullSuccess_SetsHashAndReady(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	if updated.Status.AppliedSpecHash == "" {
+		t.Error("expected appliedSpecHash to be set on full success")
+	}
+	ready := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue || ready.Reason != cloudflarev1alpha1.ReasonReconcileSuccess {
+		t.Errorf("ready = %+v, want True/ReconcileSuccess", ready)
+	}
+}
+
+func TestZoneConfigReconcile_HashSkip(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+
+	// Pre-set the hash to match the current spec to simulate "already converged".
+	zoneConfig.Status.AppliedSpecHash = hashZoneConfigSpec(&zoneConfig.Spec)
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mock.updateSettingCalls != 0 {
+		t.Errorf("expected 0 UpdateSetting calls when hash matches, got %d", mock.updateSettingCalls)
+	}
+	if mock.updateBotCalled {
+		t.Error("expected UpdateBotManagement NOT to be called when hash matches")
+	}
+}
+
+func TestZoneConfigReconcile_RecoverFromPartial(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	mock.botUpdateErr = &cfgov6.Error{StatusCode: http.StatusForbidden}
+
+	recorder := record.NewFakeRecorder(20)
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+	r.Recorder = recorder
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first reconcile error: %v", err)
+	}
+
+	// Now clear the bot 403 and re-reconcile.
+	mock.botUpdateErr = nil
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second reconcile error: %v", err)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), req.NamespacedName, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	if updated.Status.AppliedSpecHash == "" {
+		t.Error("expected appliedSpecHash to be set after recovery")
+	}
+	bm := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeBotManagementApplied)
+	if bm == nil || bm.Status != metav1.ConditionTrue {
+		t.Errorf("BotManagementApplied = %+v, want True", bm)
+	}
+
+	// Drain the recorder and assert at least one Normal SettingsApplied event for BotManagement.
+	got := drainEvents(recorder)
+	wantPrefix := "Normal SettingsApplied BotManagement applied"
+	found := false
+	for _, e := range got {
+		if strings.HasPrefix(e, wantPrefix) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected event with prefix %q; got %v", wantPrefix, got)
+	}
+}
+
+func TestZoneConfigReconcile_NotConfiguredCondition(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	// No Security / Performance / Network / BotManagement.
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	for _, ct := range []string{
+		cloudflarev1alpha1.ConditionTypeSecurityApplied,
+		cloudflarev1alpha1.ConditionTypePerformanceApplied,
+		cloudflarev1alpha1.ConditionTypeNetworkApplied,
+		cloudflarev1alpha1.ConditionTypeBotManagementApplied,
+	} {
+		c := findCondition(updated.Status.Conditions, ct)
+		if c == nil {
+			t.Errorf("%s not set", ct)
+			continue
+		}
+		if c.Status != metav1.ConditionFalse || c.Reason != cloudflarev1alpha1.ReasonNotConfigured {
+			t.Errorf("%s = %+v, want False/NotConfigured", ct, c)
+		}
+	}
+	ssl := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeSSLApplied)
+	if ssl == nil || ssl.Status != metav1.ConditionTrue || ssl.Reason != cloudflarev1alpha1.ReasonApplied {
+		t.Errorf("SSLApplied = %+v, want True/Applied", ssl)
+	}
+}
+
+func TestZoneConfigReconcile_GroupRemovedFromSpec(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"}}
+
+	// First reconcile: both groups apply.
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	// Mutate the spec — remove BotManagement.
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), req.NamespacedName, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	updated.Spec.BotManagement = nil
+	updated.Generation = 2
+	if err := r.Update(context.Background(), &updated); err != nil {
+		t.Fatalf("update spec: %v", err)
+	}
+
+	// Second reconcile.
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	if err := r.Get(context.Background(), req.NamespacedName, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	bm := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeBotManagementApplied)
+	if bm == nil || bm.Status != metav1.ConditionFalse || bm.Reason != cloudflarev1alpha1.ReasonNotConfigured {
+		t.Errorf("BotManagementApplied = %+v, want False/NotConfigured", bm)
+	}
+	ready := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %+v, want True", ready)
+	}
+}
+
+// TestZoneConfigReconcile_NoEventSpamInSteadyDegradedState verifies that a
+// CloudflareZoneConfig stuck in a degraded state (e.g. persistent BotManagement
+// 403) does not produce a fresh Warning event on every reconcile. Per design
+// §4.5, per-group events fire only on transitions, and the top-level
+// SyncFailed event has been removed in favor of the Ready=False condition's
+// aggregated message.
+func TestZoneConfigReconcile_NoEventSpamInSteadyDegradedState(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	mock.botUpdateErr = &cfgov6.Error{StatusCode: http.StatusForbidden}
+
+	recorder := record.NewFakeRecorder(20)
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+	r.Recorder = recorder
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"}}
+
+	// Two consecutive failing reconciles with the bot 403 still injected.
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first reconcile error: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second reconcile error: %v", err)
+	}
+
+	// Confirm steady-state degraded conditions persist on the object.
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), req.NamespacedName, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	bm := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeBotManagementApplied)
+	if bm == nil || bm.Status != metav1.ConditionFalse || bm.Reason != cloudflarev1alpha1.ReasonPermissionDenied {
+		t.Errorf("BotManagementApplied = %+v, want False/PermissionDenied", bm)
+	}
+	ready := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != cloudflarev1alpha1.ReasonPartialApply {
+		t.Errorf("Ready = %+v, want False/PartialApply", ready)
+	}
+
+	// Drain events accumulated across both reconciles.
+	got := drainEvents(recorder)
+
+	// Count by reason.
+	syncFailedCount := 0
+	bmApplyFailedCount := 0
+	for _, e := range got {
+		if strings.Contains(e, " SyncFailed ") {
+			syncFailedCount++
+		}
+		if strings.HasPrefix(e, "Warning SettingsApplyFailed BotManagement") {
+			bmApplyFailedCount++
+		}
+	}
+
+	if syncFailedCount != 0 {
+		t.Errorf("expected 0 SyncFailed events (top-level event was removed); got %d. events=%v", syncFailedCount, got)
+	}
+	if bmApplyFailedCount != 1 {
+		t.Errorf("expected exactly 1 SettingsApplyFailed BotManagement event (transition-only); got %d. events=%v", bmApplyFailedCount, got)
 	}
 }
