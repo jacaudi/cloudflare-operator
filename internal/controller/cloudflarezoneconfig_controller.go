@@ -111,11 +111,13 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
-	// 5. Reconcile the zone config
+	// 5. Reconcile the zone config.
+	// Per-group conditions set inside reconcileZoneConfig (via status.SetCondition)
+	// survive failReconcile because failReconcile only mutates the Ready slot via
+	// status.SetReady. Both go through the same Status().Update call.
 	result, err := r.reconcileZoneConfig(ctx, &zoneConfig, r.zoneClient(apiToken), resolvedZoneID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
-		r.Recorder.Event(&zoneConfig, corev1.EventTypeWarning, "SyncFailed", err.Error())
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
 			cloudflarev1alpha1.ReasonPartialApply, err, time.Minute)
 	}
@@ -310,13 +312,6 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 	// All configured groups succeeded.
 	zoneConfig.Status.AppliedSpecHash = desiredHash
 
-	totalApplied := 0
-	for _, g := range results {
-		totalApplied += g.settingsCount
-	}
-	r.Recorder.Event(zoneConfig, corev1.EventTypeNormal, "SettingsApplied",
-		fmt.Sprintf("Applied %d settings to zone %s", totalApplied, zoneID))
-
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
@@ -451,14 +446,18 @@ func (r *CloudflareZoneConfigReconciler) emitGroupTransitionEvents(
 
 // aggregateErr produces a single error summarizing all failed groups,
 // suitable for failReconcile to log/surface in the Ready condition.
+// The summary uses each group's classified reason rather than the raw
+// error string, so the wrapped underlying error (via %w) does not appear
+// duplicated in the human-readable message.
 func aggregateErr(failed []groupResult) error {
 	parts := make([]string, 0, len(failed))
 	for _, g := range failed {
-		parts = append(parts, fmt.Sprintf("%s: %s", g.groupLabel, g.err.Error()))
+		parts = append(parts, fmt.Sprintf("%s: %s", g.groupLabel, g.reason()))
 	}
 	// Wrap the first failed group's underlying error so errors.Is/As can still
 	// classify it (e.g., IsPermissionDenied for a single 403).
-	return fmt.Errorf("partial apply failed for %d group(s): %s: %w", len(failed), strings.Join(parts, "; "), failed[0].err)
+	return fmt.Errorf("partial apply failed for %d group(s) [%s]: %w",
+		len(failed), strings.Join(parts, ", "), failed[0].err)
 }
 
 // hashZoneConfigSpec returns a sha256 hex digest over the settings-relevant

@@ -918,3 +918,72 @@ func TestZoneConfigReconcile_GroupRemovedFromSpec(t *testing.T) {
 		t.Errorf("Ready = %+v, want True", ready)
 	}
 }
+
+// TestZoneConfigReconcile_NoEventSpamInSteadyDegradedState verifies that a
+// CloudflareZoneConfig stuck in a degraded state (e.g. persistent BotManagement
+// 403) does not produce a fresh Warning event on every reconcile. Per design
+// §4.5, per-group events fire only on transitions, and the top-level
+// SyncFailed event has been removed in favor of the Ready=False condition's
+// aggregated message.
+func TestZoneConfigReconcile_NoEventSpamInSteadyDegradedState(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	mock.botUpdateErr = &cfgov6.Error{StatusCode: http.StatusForbidden}
+
+	recorder := record.NewFakeRecorder(20)
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+	r.Recorder = recorder
+
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"}}
+
+	// Two consecutive failing reconciles with the bot 403 still injected.
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first reconcile error: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second reconcile error: %v", err)
+	}
+
+	// Confirm steady-state degraded conditions persist on the object.
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), req.NamespacedName, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	bm := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeBotManagementApplied)
+	if bm == nil || bm.Status != metav1.ConditionFalse || bm.Reason != cloudflarev1alpha1.ReasonPermissionDenied {
+		t.Errorf("BotManagementApplied = %+v, want False/PermissionDenied", bm)
+	}
+	ready := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != cloudflarev1alpha1.ReasonPartialApply {
+		t.Errorf("Ready = %+v, want False/PartialApply", ready)
+	}
+
+	// Drain events accumulated across both reconciles.
+	got := drainEvents(recorder)
+
+	// Count by reason.
+	syncFailedCount := 0
+	bmApplyFailedCount := 0
+	for _, e := range got {
+		if strings.Contains(e, " SyncFailed ") {
+			syncFailedCount++
+		}
+		if strings.HasPrefix(e, "Warning SettingsApplyFailed BotManagement") {
+			bmApplyFailedCount++
+		}
+	}
+
+	if syncFailedCount != 0 {
+		t.Errorf("expected 0 SyncFailed events (top-level event was removed); got %d. events=%v", syncFailedCount, got)
+	}
+	if bmApplyFailedCount != 1 {
+		t.Errorf("expected exactly 1 SettingsApplyFailed BotManagement event (transition-only); got %d. events=%v", bmApplyFailedCount, got)
+	}
+}
