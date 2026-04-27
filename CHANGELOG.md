@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.6.0...v0.6.1) (2026-04-27)
+
+### Bug Fixes
+
+* **zoneconfig:** apply settings groups independently (closes [#51](https://github.com/jacaudi/cloudflare-operator/issues/51)) ([#56](https://github.com/jacaudi/cloudflare-operator/issues/56)) ([f846ae3](https://github.com/jacaudi/cloudflare-operator/commit/f846ae3a618ec2218461d9a7dd4b5ed7d7ed1c7e))
+
 ## Unreleased
 
 ### Fixed
