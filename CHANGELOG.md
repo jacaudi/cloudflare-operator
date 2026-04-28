@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.6.1...v0.6.2) (2026-04-28)
+
+### Bug Fixes
+
+* **zoneconfig:** populate status.zoneID and use it for printcolumn ([d4c4c9a](https://github.com/jacaudi/cloudflare-operator/commit/d4c4c9ab9799990f6c581864a56af06a4cc8d60d))
+
 ## [0.6.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.6.0...v0.6.1) (2026-04-27)
 
 ### Bug Fixes
