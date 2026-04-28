@@ -234,6 +234,11 @@ type CloudflareZoneConfigStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// ZoneID is the resolved Cloudflare Zone ID, populated regardless of
+	// whether the spec used zoneID or zoneRef.
+	// +optional
+	ZoneID string `json:"zoneID,omitempty"`
+
 	// AppliedSpecHash is a hash of the settings-relevant spec fields the last
 	// time reconciliation successfully applied them. When the current hash
 	// matches, the controller skips the per-setting API calls.
@@ -251,8 +256,9 @@ type CloudflareZoneConfigStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Zone ID",type=string,JSONPath=`.spec.zoneID`
+// +kubebuilder:printcolumn:name="Zone ID",type=string,JSONPath=`.status.zoneID`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Last Synced",type=date,JSONPath=`.status.lastSyncedAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.zoneID) && has(self.spec.zoneRef))",message="zoneID and zoneRef are mutually exclusive"

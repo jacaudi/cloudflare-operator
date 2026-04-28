@@ -15,12 +15,15 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.zoneID
+    - jsonPath: .status.zoneID
       name: Zone ID
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
+    - jsonPath: .status.lastSyncedAt
+      name: Last Synced
+      type: date
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -368,6 +371,11 @@ spec:
                   of the CR.
                 format: int64
                 type: integer
+              zoneID:
+                description: |-
+                  ZoneID is the resolved Cloudflare Zone ID, populated regardless of
+                  whether the spec used zoneID or zoneRef.
+                type: string
             type: object
         required:
         - spec

@@ -102,6 +102,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
 			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
+	zoneConfig.Status.ZoneID = resolvedZoneID
 
 	// 4. Get API token
 	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zoneConfig.Spec.SecretRef.Name, zoneConfig.Namespace)
