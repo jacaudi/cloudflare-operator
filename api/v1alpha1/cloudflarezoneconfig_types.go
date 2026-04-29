@@ -53,6 +53,34 @@ type SSLSettings struct {
 	OpportunisticEncryption *string `json:"opportunisticEncryption,omitempty"`
 }
 
+// SecurityHeaderSettings models the zone-level HSTS / Strict-Transport-Security
+// setting (the strict_transport_security payload of the Cloudflare
+// security_header API). All fields are optional; nil fields are omitted from
+// the API call so individual flags can be toggled without re-asserting the rest.
+type SecurityHeaderSettings struct {
+	// Enabled toggles HSTS for the zone.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MaxAge is the HSTS max-age in seconds.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=31536000
+	// +optional
+	MaxAge *int `json:"maxAge,omitempty"`
+
+	// IncludeSubdomains extends HSTS to subdomains.
+	// +optional
+	IncludeSubdomains *bool `json:"includeSubdomains,omitempty"`
+
+	// Preload requests inclusion in browser HSTS preload lists.
+	// +optional
+	Preload *bool `json:"preload,omitempty"`
+
+	// Nosniff enables the X-Content-Type-Options: nosniff response header.
+	// +optional
+	Nosniff *bool `json:"nosniff,omitempty"`
+}
+
 // SecuritySettings defines security settings for a Cloudflare zone.
 type SecuritySettings struct {
 	// SecurityLevel controls the security level.
@@ -74,6 +102,20 @@ type SecuritySettings struct {
 	// +kubebuilder:validation:Enum=on;off
 	// +optional
 	EmailObfuscation *string `json:"emailObfuscation,omitempty"`
+
+	// SecurityHeader configures the zone's HSTS / Strict-Transport-Security header.
+	// +optional
+	SecurityHeader *SecurityHeaderSettings `json:"securityHeader,omitempty"`
+
+	// ServerSideExclude hides sensitive content from suspicious visitors.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	ServerSideExclude *string `json:"serverSideExclude,omitempty"`
+
+	// HotlinkProtection blocks hotlinking of images.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	HotlinkProtection *string `json:"hotlinkProtection,omitempty"`
 }
 
 // MinifySettings defines minification settings for CSS, HTML, and JavaScript.
@@ -134,6 +176,18 @@ type PerformanceSettings struct {
 	// +kubebuilder:validation:Enum=on;off
 	// +optional
 	HTTP3 *string `json:"http3,omitempty"`
+
+	// AlwaysOnline serves cached pages when the origin is unreachable.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	AlwaysOnline *string `json:"alwaysOnline,omitempty"`
+
+	// RocketLoader defers JavaScript loading to improve perceived performance.
+	// Cloudflare is sunsetting Rocket Loader; the field will be removed when
+	// the API is retired.
+	// +kubebuilder:validation:Enum=on;off
+	// +optional
+	RocketLoader *string `json:"rocketLoader,omitempty"`
 }
 
 // NetworkSettings defines network settings for a Cloudflare zone.
@@ -162,6 +216,17 @@ type NetworkSettings struct {
 	// +kubebuilder:validation:Enum=on;off
 	// +optional
 	OpportunisticOnion *string `json:"opportunisticOnion,omitempty"`
+}
+
+// DNSSettings defines DNS-related zone settings.
+type DNSSettings struct {
+	// CNAMEFlattening controls how the zone resolves CNAME records.
+	// flatten_at_root: only flatten the apex (default Cloudflare behavior).
+	// flatten_all: flatten every CNAME.
+	// flatten_none: never flatten.
+	// +kubebuilder:validation:Enum=flatten_at_root;flatten_all;flatten_none
+	// +optional
+	CNAMEFlattening *string `json:"cnameFlattening,omitempty"`
 }
 
 // BotManagementSettings defines bot management settings for a Cloudflare zone.
@@ -220,6 +285,10 @@ type CloudflareZoneConfigSpec struct {
 	// Network defines network settings for the zone.
 	// +optional
 	Network *NetworkSettings `json:"network,omitempty"`
+
+	// DNS defines DNS-related settings for the zone.
+	// +optional
+	DNS *DNSSettings `json:"dns,omitempty"`
 
 	// BotManagement defines bot management settings for the zone.
 	// +optional

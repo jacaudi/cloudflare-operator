@@ -21,6 +21,21 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// RuleLogging configures per-rule logging. Sibling of ActionParameters in
+// the Cloudflare API. Today exposes only the API's `enabled` flag; future
+// fields (sampling, destinations) extend this struct without rename.
+//
+// Reconciliation note: omitting the logging block leaves Cloudflare's per-action
+// default in place. Set logging.enabled only when you want to override the
+// default for that action (e.g. enabled=true on `skip`, where logging is off
+// by default).
+type RuleLogging struct {
+	// Enabled opts the rule into per-action logging. Useful for actions
+	// (e.g. skip) where logging is off by default.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
 // RulesetRuleSpec defines a single rule within a Cloudflare Ruleset.
 type RulesetRuleSpec struct {
 	// Action is the action to perform when the rule matches.
@@ -47,6 +62,11 @@ type RulesetRuleSpec struct {
 	// +kubebuilder:validation:Type=object
 	// +optional
 	ActionParameters *apiextensionsv1.JSON `json:"actionParameters,omitempty"`
+
+	// Logging configures per-rule logging behavior. Sibling of ActionParameters
+	// in the Cloudflare API; do not encode logging via ActionParameters.
+	// +optional
+	Logging *RuleLogging `json:"logging,omitempty"`
 }
 
 // CloudflareRulesetSpec defines the desired state of CloudflareRuleset.
