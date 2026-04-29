@@ -245,6 +245,14 @@ func appendNetwork(updates []settingUpdate, net *cloudflarev1alpha1.NetworkSetti
 	return updates
 }
 
+func appendDNS(updates []settingUpdate, dns *cloudflarev1alpha1.DNSSettings) []settingUpdate {
+	if dns == nil {
+		return updates
+	}
+	updates = appendIfSet(updates, "cname_flattening", dns.CNAMEFlattening)
+	return updates
+}
+
 // groupResult captures the outcome of applying a single settings group.
 type groupResult struct {
 	conditionType string // e.g., ConditionTypeSSLApplied
@@ -315,6 +323,7 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 		applySecurityGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Security),
 		applyPerformanceGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Performance),
 		applyNetworkGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Network),
+		applyDNSGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.DNS),
 		applyBotManagementGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.BotManagement),
 	}
 
@@ -416,6 +425,24 @@ func applyNetworkGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zone
 	return g
 }
 
+// applyDNSGroup applies the DNS settings group, if configured.
+func applyDNSGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, dns *cloudflarev1alpha1.DNSSettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeDNSApplied, groupLabel: "DNS"}
+	if dns == nil {
+		return g
+	}
+	g.configured = true
+	updates := appendDNS(nil, dns)
+	for _, s := range updates {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
+			g.err = fmt.Errorf("update setting %s: %w", s.id, err)
+			return g
+		}
+	}
+	g.settingsCount = len(updates)
+	return g
+}
+
 // applyBotManagementGroup applies the BotManagement settings group, if configured.
 func applyBotManagementGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, bm *cloudflarev1alpha1.BotManagementSettings) groupResult {
 	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeBotManagementApplied, groupLabel: "BotManagement"}
@@ -498,8 +525,9 @@ func hashZoneConfigSpec(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) strin
 		Security      *cloudflarev1alpha1.SecuritySettings      `json:"security,omitempty"`
 		Performance   *cloudflarev1alpha1.PerformanceSettings   `json:"performance,omitempty"`
 		Network       *cloudflarev1alpha1.NetworkSettings       `json:"network,omitempty"`
+		DNS           *cloudflarev1alpha1.DNSSettings           `json:"dns,omitempty"`
 		BotManagement *cloudflarev1alpha1.BotManagementSettings `json:"botManagement,omitempty"`
-	}{spec.SSL, spec.Security, spec.Performance, spec.Network, spec.BotManagement}
+	}{spec.SSL, spec.Security, spec.Performance, spec.Network, spec.DNS, spec.BotManagement}
 
 	// json.Marshal is deterministic for structs (field order is source order)
 	// and omits nil pointers via omitempty, so semantically equal specs hash equal.

@@ -1120,6 +1120,133 @@ func TestAppendPerformance_NewFields(t *testing.T) {
 	})
 }
 
+func TestAppendDNS(t *testing.T) {
+	t.Run("nil section emits nothing", func(t *testing.T) {
+		got := appendDNS(nil, nil)
+		if len(got) != 0 {
+			t.Fatalf("got %d updates, want 0", len(got))
+		}
+	})
+
+	t.Run("cname_flattening only", func(t *testing.T) {
+		v := "flatten_at_root"
+		got := appendDNS(nil, &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v})
+		want := []settingUpdate{{id: "cname_flattening", value: "flatten_at_root"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestApplyDNSGroup(t *testing.T) {
+	ctx := context.Background()
+	zoneID := "zone-123"
+
+	t.Run("nil section returns not-configured and makes no API calls", func(t *testing.T) {
+		mock := newMockZoneClient()
+		g := applyDNSGroup(ctx, mock, zoneID, nil)
+		if g.configured {
+			t.Errorf("configured=true, want false")
+		}
+		if g.err != nil {
+			t.Errorf("err=%v, want nil", g.err)
+		}
+		if g.conditionType != cloudflarev1alpha1.ConditionTypeDNSApplied {
+			t.Errorf("conditionType=%q, want %q", g.conditionType, cloudflarev1alpha1.ConditionTypeDNSApplied)
+		}
+		if mock.updateSettingCalls != 0 {
+			t.Errorf("expected 0 UpdateSetting calls, got %d", mock.updateSettingCalls)
+		}
+		if g.status() != metav1.ConditionFalse {
+			t.Errorf("status=%v, want False", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonNotConfigured {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonNotConfigured)
+		}
+	})
+
+	t.Run("success applies settings and reports True/Applied", func(t *testing.T) {
+		mock := newMockZoneClient()
+		v := "flatten_at_root"
+		dns := &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v}
+
+		g := applyDNSGroup(ctx, mock, zoneID, dns)
+		if !g.configured {
+			t.Errorf("configured=false, want true")
+		}
+		if g.err != nil {
+			t.Errorf("err=%v, want nil", g.err)
+		}
+		if g.settingsCount != 1 {
+			t.Errorf("settingsCount=%d, want 1", g.settingsCount)
+		}
+		if mock.updateSettingCalls != 1 {
+			t.Errorf("expected 1 UpdateSetting call, got %d", mock.updateSettingCalls)
+		}
+		if mock.settings["cname_flattening"] != "flatten_at_root" {
+			t.Errorf("expected cname_flattening=flatten_at_root, got %v", mock.settings["cname_flattening"])
+		}
+		if g.status() != metav1.ConditionTrue {
+			t.Errorf("status=%v, want True", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonApplied {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonApplied)
+		}
+	})
+
+	t.Run("permission denied classifies as PermissionDenied", func(t *testing.T) {
+		mock := newMockZoneClient()
+		mock.updateErrors["cname_flattening"] = &cfgov6.Error{StatusCode: http.StatusForbidden}
+		v := "flatten_at_root"
+		dns := &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v}
+
+		g := applyDNSGroup(ctx, mock, zoneID, dns)
+		if !g.configured {
+			t.Errorf("configured=false, want true")
+		}
+		if g.err == nil {
+			t.Fatal("err=nil, want non-nil")
+		}
+		if g.status() != metav1.ConditionFalse {
+			t.Errorf("status=%v, want False", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonPermissionDenied {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonPermissionDenied)
+		}
+	})
+
+	t.Run("generic API error classifies as CloudflareError", func(t *testing.T) {
+		mock := newMockZoneClient()
+		mock.updateErrors["cname_flattening"] = &cfgov6.Error{StatusCode: http.StatusBadGateway}
+		v := "flatten_at_root"
+		dns := &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v}
+
+		g := applyDNSGroup(ctx, mock, zoneID, dns)
+		if !g.configured {
+			t.Errorf("configured=false, want true")
+		}
+		if g.err == nil {
+			t.Fatal("err=nil, want non-nil")
+		}
+		if g.status() != metav1.ConditionFalse {
+			t.Errorf("status=%v, want False", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonCloudflareError {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonCloudflareError)
+		}
+	})
+}
+
+func TestHashZoneConfigSpec_IncludesDNS(t *testing.T) {
+	a := "flatten_at_root"
+	b := "flatten_all"
+	specA := cloudflarev1alpha1.CloudflareZoneConfigSpec{DNS: &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &a}}
+	specB := cloudflarev1alpha1.CloudflareZoneConfigSpec{DNS: &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &b}}
+	if hashZoneConfigSpec(&specA) == hashZoneConfigSpec(&specB) {
+		t.Errorf("hash should differ when DNS.CNAMEFlattening changes")
+	}
+}
+
 func TestHashZoneConfigSpec_ChangesOnNewFields(t *testing.T) {
 	on := "on"
 	off := "off"

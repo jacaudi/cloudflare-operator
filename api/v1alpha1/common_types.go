@@ -42,6 +42,7 @@ const (
 	ConditionTypeSecurityApplied      = "SecurityApplied"
 	ConditionTypePerformanceApplied   = "PerformanceApplied"
 	ConditionTypeNetworkApplied       = "NetworkApplied"
+	ConditionTypeDNSApplied           = "DNSApplied"
 	ConditionTypeBotManagementApplied = "BotManagementApplied"
 )
 
