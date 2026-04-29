@@ -226,6 +226,9 @@ func (r *CloudflareRulesetReconciler) buildRules(specRules []cloudflarev1alpha1.
 			}
 			rule.ActionParameters = m
 		}
+		if sr.Logging != nil {
+			rule.Logging = &cfclient.RuleLogging{Enabled: sr.Logging.Enabled}
+		}
 		rules = append(rules, rule)
 	}
 	return rules, nil
@@ -273,6 +276,27 @@ func rulesetMatches(existing *cfclient.Ruleset, desired cfclient.RulesetParams) 
 		if !reflect.DeepEqual(got.ActionParameters, want.ActionParameters) {
 			return false
 		}
+		if !ruleLoggingEqual(got.Logging, want.Logging) {
+			return false
+		}
+	}
+	return true
+}
+
+// ruleLoggingEqual compares two *RuleLogging values structurally.
+// nil == nil; nil != non-nil; otherwise compare Enabled pointer dereferences.
+func ruleLoggingEqual(a, b *cfclient.RuleLogging) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if (a.Enabled == nil) != (b.Enabled == nil) {
+		return false
+	}
+	if a.Enabled != nil && *a.Enabled != *b.Enabled {
+		return false
 	}
 	return true
 }

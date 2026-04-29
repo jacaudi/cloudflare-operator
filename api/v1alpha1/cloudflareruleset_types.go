@@ -28,7 +28,9 @@ import (
 // Reconciliation note: omitting the logging block leaves Cloudflare's per-action
 // default in place. Set logging.enabled only when you want to override the
 // default for that action (e.g. enabled=true on `skip`, where logging is off
-// by default).
+// by default). Setting enabled=false explicitly will diff against the API on
+// every reconcile because Cloudflare's response shape can't distinguish that
+// case from "no logging configured".
 type RuleLogging struct {
 	// Enabled opts the rule into per-action logging. Useful for actions
 	// (e.g. skip) where logging is off by default.

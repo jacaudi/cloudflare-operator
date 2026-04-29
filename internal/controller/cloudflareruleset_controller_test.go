@@ -569,3 +569,98 @@ func TestRulesetReconcile_ZoneRefNotReady(t *testing.T) {
 // delete path doesn't call Cloudflare at all (phase entrypoints are retained).
 // The TestRulesetReconcile_DeleteRetainsEntrypoint test above covers the
 // full scenario.
+
+func TestBuildRules_Logging(t *testing.T) {
+	r := &CloudflareRulesetReconciler{}
+	en := true
+	specs := []cloudflarev1alpha1.RulesetRuleSpec{{
+		Action:     "skip",
+		Expression: "true",
+		Logging:    &cloudflarev1alpha1.RuleLogging{Enabled: &en},
+	}}
+	got, err := r.buildRules(specs)
+	if err != nil {
+		t.Fatalf("buildRules: %v", err)
+	}
+	if len(got) != 1 || got[0].Logging == nil || got[0].Logging.Enabled == nil || !*got[0].Logging.Enabled {
+		t.Errorf("logging not propagated: %+v", got)
+	}
+}
+
+func TestBuildRules_NoLogging(t *testing.T) {
+	r := &CloudflareRulesetReconciler{}
+	specs := []cloudflarev1alpha1.RulesetRuleSpec{{Action: "block", Expression: "true"}}
+	got, err := r.buildRules(specs)
+	if err != nil {
+		t.Fatalf("buildRules: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rules, want 1", len(got))
+	}
+	if got[0].Logging != nil {
+		t.Errorf("logging should be nil; got %+v", got[0].Logging)
+	}
+}
+
+func TestRulesetMatches_LoggingDiffer(t *testing.T) {
+	en := true
+	desired := cfclient.RulesetParams{
+		Name: "rs", Description: "", Rules: []cfclient.RulesetRule{{
+			Action: "skip", Expression: "true", Enabled: true,
+			Logging: &cfclient.RuleLogging{Enabled: &en},
+		}},
+	}
+	existing := &cfclient.Ruleset{
+		Name: "rs", Description: "", Rules: []cfclient.RulesetRule{{
+			Action: "skip", Expression: "true", Enabled: true,
+		}},
+	}
+	if rulesetMatches(existing, desired) {
+		t.Errorf("should mismatch when desired has logging but existing does not")
+	}
+}
+
+func TestRulesetMatches_LoggingEqual(t *testing.T) {
+	en := true
+	desired := cfclient.RulesetParams{
+		Name: "rs", Rules: []cfclient.RulesetRule{{
+			Action: "skip", Expression: "true", Enabled: true,
+			Logging: &cfclient.RuleLogging{Enabled: &en},
+		}},
+	}
+	existing := &cfclient.Ruleset{
+		Name: "rs", Rules: []cfclient.RulesetRule{{
+			Action: "skip", Expression: "true", Enabled: true,
+			Logging: &cfclient.RuleLogging{Enabled: &en},
+		}},
+	}
+	if !rulesetMatches(existing, desired) {
+		t.Errorf("should match when both have logging enabled=true")
+	}
+}
+
+func TestRuleLoggingEqual(t *testing.T) {
+	en := true
+	en2 := true
+	dis := false
+	cases := []struct {
+		name string
+		a, b *cfclient.RuleLogging
+		want bool
+	}{
+		{"both nil", nil, nil, true},
+		{"a nil only", nil, &cfclient.RuleLogging{Enabled: &en}, false},
+		{"b nil only", &cfclient.RuleLogging{Enabled: &en}, nil, false},
+		{"both set true equal", &cfclient.RuleLogging{Enabled: &en}, &cfclient.RuleLogging{Enabled: &en2}, true},
+		{"both set, differ", &cfclient.RuleLogging{Enabled: &en}, &cfclient.RuleLogging{Enabled: &dis}, false},
+		{"a Enabled nil", &cfclient.RuleLogging{}, &cfclient.RuleLogging{Enabled: &en}, false},
+		{"both Enabled nil", &cfclient.RuleLogging{}, &cfclient.RuleLogging{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ruleLoggingEqual(tc.a, tc.b); got != tc.want {
+				t.Errorf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
