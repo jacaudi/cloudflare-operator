@@ -23,8 +23,8 @@ import (
 
 // ptrInt is defined in cloudflaretunnelrule_types_test.go; ptrBool/ptrStr
 // are package-test helpers added here for the new pointer-typed fields.
-func ptrBool(b bool) *bool       { return &b }
-func ptrStr(s string) *string    { return &s }
+func ptrBool(b bool) *bool    { return &b }
+func ptrStr(s string) *string { return &s }
 
 func TestSecurityHeaderSettings_RoundTrip(t *testing.T) {
 	cases := []struct {
