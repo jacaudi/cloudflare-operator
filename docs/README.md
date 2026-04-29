@@ -284,6 +284,7 @@ Declaratively manages zone-level settings: SSL/TLS, security, performance, netwo
 | `security` | object | No | | Security settings |
 | `performance` | object | No | | Performance settings |
 | `network` | object | No | | Network settings |
+| `dns` | object | No | | DNS settings |
 | `botManagement` | object | No | | Bot management settings |
 
 ### SSL Settings
@@ -305,6 +306,14 @@ Declaratively manages zone-level settings: SSL/TLS, security, performance, netwo
 | `challengeTTL` | `300`-`86400` | Challenge TTL in seconds |
 | `browserCheck` | `on`, `off` | Browser integrity check |
 | `emailObfuscation` | `on`, `off` | Email address obfuscation |
+| `serverSideExclude` | `on`, `off` | Hide sensitive content from suspicious visitors (Server-Side Excludes) |
+| `hotlinkProtection` | `on`, `off` | Block other sites from hotlinking your images |
+| `securityHeader` | object | HSTS (Strict-Transport-Security) — see sub-fields below |
+| `securityHeader.enabled` | bool | Whether HSTS is enabled |
+| `securityHeader.maxAge` | int (seconds) | HSTS `max-age`. Cloudflare commonly uses `31536000` (1 year) |
+| `securityHeader.includeSubdomains` | bool | Add `includeSubDomains` directive |
+| `securityHeader.preload` | bool | Add `preload` directive |
+| `securityHeader.nosniff` | bool | Also send `X-Content-Type-Options: nosniff` |
 
 ### Performance Settings
 
@@ -317,6 +326,8 @@ Declaratively manages zone-level settings: SSL/TLS, security, performance, netwo
 | `http2` | `on`, `off` | HTTP/2 |
 | `http3` | `on`, `off` | HTTP/3 |
 | `polish` | `off`, `lossless`, `lossy` | Image optimization |
+| `alwaysOnline` | `on`, `off` | Serve cached static pages from Cloudflare when origin is unreachable |
+| `rocketLoader` | `on`, `off` | Defer-load JavaScript for faster initial render. Note: Cloudflare is sunsetting Rocket Loader; this field will be removed when the API retires |
 | `minify.css` | `on`, `off` | CSS minification |
 | `minify.html` | `on`, `off` | HTML minification |
 | `minify.js` | `on`, `off` | JavaScript minification |
@@ -330,6 +341,12 @@ Declaratively manages zone-level settings: SSL/TLS, security, performance, netwo
 | `pseudoIPv4` | `off`, `add_header`, `overwrite_header` | Pseudo IPv4 |
 | `ipGeolocation` | `on`, `off` | IP geolocation headers |
 | `opportunisticOnion` | `on`, `off` | Onion routing |
+
+### DNS Settings
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| `cnameFlattening` | `flatten_at_root`, `flatten_all`, `flatten_none` | CNAME flattening behavior. `flatten_at_root` (Cloudflare default) flattens only the apex; `flatten_all` flattens every CNAME; `flatten_none` disables flattening |
 
 ### Bot Management Settings
 
@@ -387,6 +404,7 @@ spec:
 | `security`      | Zone:Zone Settings:Edit                       |
 | `performance`   | Zone:Zone Settings:Edit                       |
 | `network`       | Zone:Zone Settings:Edit                       |
+| `dns`           | Zone:Zone Settings:Edit                       |
 | `botManagement` | Zone:Bot Management:Edit (and a paid plan that supports bot management) |
 
 If a group fails to apply (e.g., a 403 on `botManagement` because the token lacks scope or the zone is on Free), other groups are still applied and a per-group condition (`BotManagementApplied=False, Reason=PermissionDenied`) surfaces the failure. The resource's `Ready` condition is `False` with `Reason=PartialApply` until every configured group succeeds.
@@ -455,6 +473,7 @@ This means:
 | `description` | string | No | | Rule description |
 | `enabled` | bool | No | `true` | Whether rule is active |
 | `actionParameters` | object | No | | Free-form action parameters (JSON) |
+| `logging.enabled` | bool | No | | Force-enable logging for this rule. Most useful for actions where Cloudflare's default is off (e.g. `skip`). Note: setting `enabled: false` will diff against the API on every reconcile — omit the `logging` block entirely if you want default behavior |
 
 ### Status
 

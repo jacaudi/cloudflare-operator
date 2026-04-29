@@ -18,6 +18,10 @@ spec:
       expression: '(cf.client.bot) or (cf.threat_score gt 14)'
       description: "Block bots and high threat scores"
       enabled: true
+      # logging.enabled is most useful for actions where Cloudflare's default
+      # is off (e.g. `skip`); set to true here to demonstrate the field.
+      logging:
+        enabled: true
     - action: block
       expression: '(not ip.geoip.country in {"CA" "US" "GB"})'
       description: "Block non-allowed countries"

@@ -127,6 +127,17 @@ spec:
                       description: Expression is the filter expression for the rule.
                       minLength: 1
                       type: string
+                    logging:
+                      description: |-
+                        Logging configures per-rule logging behavior. Sibling of ActionParameters
+                        in the Cloudflare API; do not encode logging via ActionParameters.
+                      properties:
+                        enabled:
+                          description: |-
+                            Enabled opts the rule into per-action logging. Useful for actions
+                            (e.g. skip) where logging is off by default.
+                          type: boolean
+                      type: object
                   required:
                   - action
                   - expression

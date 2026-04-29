@@ -64,6 +64,21 @@ spec:
                     description: FightMode enables bot fight mode.
                     type: boolean
                 type: object
+              dns:
+                description: DNS defines DNS-related settings for the zone.
+                properties:
+                  cnameFlattening:
+                    description: |-
+                      CNAMEFlattening controls how the zone resolves CNAME records.
+                      flatten_at_root: only flatten the apex (default Cloudflare behavior).
+                      flatten_all: flatten every CNAME.
+                      flatten_none: never flatten.
+                    enum:
+                    - flatten_at_root
+                    - flatten_all
+                    - flatten_none
+                    type: string
+                type: object
               interval:
                 default: 30m
                 description: Interval is the reconciliation interval.
@@ -106,6 +121,13 @@ spec:
               performance:
                 description: Performance defines performance settings for the zone.
                 properties:
+                  alwaysOnline:
+                    description: AlwaysOnline serves cached pages when the origin
+                      is unreachable.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
                   brotli:
                     description: Brotli enables brotli compression.
                     enum:
@@ -171,6 +193,15 @@ spec:
                     - lossless
                     - lossy
                     type: string
+                  rocketLoader:
+                    description: |-
+                      RocketLoader defers JavaScript loading to improve perceived performance.
+                      Cloudflare is sunsetting Rocket Loader; the field will be removed when
+                      the API is retired.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
                 type: object
               secretRef:
                 description: SecretRef references a Secret containing Cloudflare API
@@ -213,6 +244,36 @@ spec:
                     - "on"
                     - "off"
                     type: string
+                  hotlinkProtection:
+                    description: HotlinkProtection blocks hotlinking of images.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  securityHeader:
+                    description: SecurityHeader configures the zone's HSTS / Strict-Transport-Security
+                      header.
+                    properties:
+                      enabled:
+                        description: Enabled toggles HSTS for the zone.
+                        type: boolean
+                      includeSubdomains:
+                        description: IncludeSubdomains extends HSTS to subdomains.
+                        type: boolean
+                      maxAge:
+                        description: MaxAge is the HSTS max-age in seconds.
+                        maximum: 31536000
+                        minimum: 0
+                        type: integer
+                      nosniff:
+                        description: 'Nosniff enables the X-Content-Type-Options:
+                          nosniff response header.'
+                        type: boolean
+                      preload:
+                        description: Preload requests inclusion in browser HSTS preload
+                          lists.
+                        type: boolean
+                    type: object
                   securityLevel:
                     description: SecurityLevel controls the security level.
                     enum:
@@ -221,6 +282,13 @@ spec:
                     - medium
                     - high
                     - under_attack
+                    type: string
+                  serverSideExclude:
+                    description: ServerSideExclude hides sensitive content from suspicious
+                      visitors.
+                    enum:
+                    - "on"
+                    - "off"
                     type: string
                 type: object
               ssl:
