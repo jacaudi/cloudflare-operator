@@ -173,6 +173,32 @@ func appendSecurity(updates []settingUpdate, sec *cloudflarev1alpha1.SecuritySet
 	updates = appendIfSet(updates, "challenge_ttl", sec.ChallengeTTL)
 	updates = appendIfSet(updates, "browser_check", sec.BrowserCheck)
 	updates = appendIfSet(updates, "email_obfuscation", sec.EmailObfuscation)
+	updates = appendIfSet(updates, "server_side_exclude", sec.ServerSideExclude)
+	updates = appendIfSet(updates, "hotlink_protection", sec.HotlinkProtection)
+	if sec.SecurityHeader != nil {
+		sts := map[string]any{}
+		if sec.SecurityHeader.Enabled != nil {
+			sts["enabled"] = *sec.SecurityHeader.Enabled
+		}
+		if sec.SecurityHeader.MaxAge != nil {
+			sts["max_age"] = *sec.SecurityHeader.MaxAge
+		}
+		if sec.SecurityHeader.IncludeSubdomains != nil {
+			sts["include_subdomains"] = *sec.SecurityHeader.IncludeSubdomains
+		}
+		if sec.SecurityHeader.Preload != nil {
+			sts["preload"] = *sec.SecurityHeader.Preload
+		}
+		if sec.SecurityHeader.Nosniff != nil {
+			sts["nosniff"] = *sec.SecurityHeader.Nosniff
+		}
+		if len(sts) > 0 {
+			updates = append(updates, settingUpdate{
+				id:    "security_header",
+				value: map[string]any{"strict_transport_security": sts},
+			})
+		}
+	}
 	return updates
 }
 
@@ -202,6 +228,8 @@ func appendPerformance(updates []settingUpdate, perf *cloudflarev1alpha1.Perform
 	updates = appendIfSet(updates, "early_hints", perf.EarlyHints)
 	updates = appendIfSet(updates, "http2", perf.HTTP2)
 	updates = appendIfSet(updates, "http3", perf.HTTP3)
+	updates = appendIfSet(updates, "always_online", perf.AlwaysOnline)
+	updates = appendIfSet(updates, "rocket_loader", perf.RocketLoader)
 	return updates
 }
 

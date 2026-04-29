@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -985,5 +986,160 @@ func TestZoneConfigReconcile_NoEventSpamInSteadyDegradedState(t *testing.T) {
 	}
 	if bmApplyFailedCount != 1 {
 		t.Errorf("expected exactly 1 SettingsApplyFailed BotManagement event (transition-only); got %d. events=%v", bmApplyFailedCount, got)
+	}
+}
+
+// equalSettingUpdates compares two []settingUpdate slices using reflect.DeepEqual.
+// settingUpdate.value is `any`, so DeepEqual handles both flat string values and
+// nested map[string]any payloads.
+func equalSettingUpdates(a, b []settingUpdate) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+func TestAppendSecurity_NewFields(t *testing.T) {
+	t.Run("nil section emits nothing", func(t *testing.T) {
+		got := appendSecurity(nil, nil)
+		if len(got) != 0 {
+			t.Fatalf("got %d updates, want 0", len(got))
+		}
+	})
+
+	t.Run("server_side_exclude only", func(t *testing.T) {
+		on := "on"
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{ServerSideExclude: &on})
+		want := []settingUpdate{{id: "server_side_exclude", value: "on"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("hotlink_protection only", func(t *testing.T) {
+		off := "off"
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{HotlinkProtection: &off})
+		want := []settingUpdate{{id: "hotlink_protection", value: "off"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("security_header full", func(t *testing.T) {
+		en, sub, pre, ns := true, true, false, true
+		ma := 31536000
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{
+				Enabled:           &en,
+				MaxAge:            &ma,
+				IncludeSubdomains: &sub,
+				Preload:           &pre,
+				Nosniff:           &ns,
+			},
+		})
+		if len(got) != 1 || got[0].id != "security_header" {
+			t.Fatalf("got %+v", got)
+		}
+		val, ok := got[0].value.(map[string]any)
+		if !ok {
+			t.Fatalf("value type %T, want map[string]any", got[0].value)
+		}
+		sts, ok := val["strict_transport_security"].(map[string]any)
+		if !ok {
+			t.Fatalf("strict_transport_security missing or wrong type: %+v", val)
+		}
+		if len(sts) != 5 {
+			t.Errorf("inner len=%d, want 5; got %+v", len(sts), sts)
+		}
+		if sts["enabled"] != true || sts["max_age"] != 31536000 ||
+			sts["include_subdomains"] != true || sts["preload"] != false ||
+			sts["nosniff"] != true {
+			t.Errorf("inner payload: %+v", sts)
+		}
+	})
+
+	t.Run("security_header partial — only Enabled", func(t *testing.T) {
+		en := true
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{Enabled: &en},
+		})
+		if len(got) != 1 {
+			t.Fatalf("got %d updates, want 1", len(got))
+		}
+		val := got[0].value.(map[string]any)
+		sts := val["strict_transport_security"].(map[string]any)
+		if len(sts) != 1 {
+			t.Errorf("inner payload should have only 'enabled'; got %+v", sts)
+		}
+		if sts["enabled"] != true {
+			t.Errorf("enabled=%v want true", sts["enabled"])
+		}
+	})
+
+	t.Run("security_header partial — only MaxAge", func(t *testing.T) {
+		ma := 86400
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{MaxAge: &ma},
+		})
+		if len(got) != 1 {
+			t.Fatalf("got %d updates, want 1", len(got))
+		}
+		val := got[0].value.(map[string]any)
+		sts := val["strict_transport_security"].(map[string]any)
+		if len(sts) != 1 || sts["max_age"] != 86400 {
+			t.Errorf("inner payload: %+v", sts)
+		}
+	})
+
+	t.Run("security_header all-nil — skip", func(t *testing.T) {
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{},
+		})
+		for _, u := range got {
+			if u.id == "security_header" {
+				t.Errorf("security_header should not be emitted when all inner fields nil; got %+v", u)
+			}
+		}
+	})
+}
+
+func TestAppendPerformance_NewFields(t *testing.T) {
+	t.Run("always_online only", func(t *testing.T) {
+		on := "on"
+		got := appendPerformance(nil, &cloudflarev1alpha1.PerformanceSettings{AlwaysOnline: &on})
+		want := []settingUpdate{{id: "always_online", value: "on"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("rocket_loader only", func(t *testing.T) {
+		on := "on"
+		got := appendPerformance(nil, &cloudflarev1alpha1.PerformanceSettings{RocketLoader: &on})
+		want := []settingUpdate{{id: "rocket_loader", value: "on"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestHashZoneConfigSpec_ChangesOnNewFields(t *testing.T) {
+	on := "on"
+	off := "off"
+	a := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Security: &cloudflarev1alpha1.SecuritySettings{ServerSideExclude: &on},
+	}
+	b := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Security: &cloudflarev1alpha1.SecuritySettings{ServerSideExclude: &off},
+	}
+	if hashZoneConfigSpec(&a) == hashZoneConfigSpec(&b) {
+		t.Errorf("hash should differ when ServerSideExclude flips")
+	}
+
+	c := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Performance: &cloudflarev1alpha1.PerformanceSettings{RocketLoader: &on},
+	}
+	d := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Performance: &cloudflarev1alpha1.PerformanceSettings{RocketLoader: &off},
+	}
+	if hashZoneConfigSpec(&c) == hashZoneConfigSpec(&d) {
+		t.Errorf("hash should differ when RocketLoader flips")
 	}
 }
