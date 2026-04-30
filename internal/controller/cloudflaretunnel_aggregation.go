@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
@@ -101,6 +102,13 @@ func filterRulesForTunnel(all []cloudflarev1alpha1.CloudflareTunnelRule, tunnelN
 
 // reconcileConnectorResources reconciles the ServiceAccount, ConfigMap, and
 // Deployment for the operator-managed cloudflared workload.
+//
+// The Deployment update path uses retry.RetryOnConflict to absorb transient
+// optimistic-concurrency conflicts (kube-side metadata bumps between our
+// Get and Update). Without this, sustained conflicts propagate as reconcile
+// errors, the controller workqueue rate-limiter applies exponential backoff
+// up to ~16 minutes, and downstream events (e.g. CR deletion) sit behind
+// that backoff until the operator pod is restarted (#59).
 func reconcileConnectorResources(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel, agg AggregationResult) error {
 	sa := BuildConnectorServiceAccount(tun)
 	if err := applyOwned(ctx, c, sa, &corev1.ServiceAccount{}); err != nil {
@@ -113,27 +121,30 @@ func reconcileConnectorResources(ctx context.Context, c client.Client, tun *clou
 	}
 
 	desired := BuildConnectorDeployment(tun, agg.ConfigHash)
-	var existing appsv1.Deployment
-	err := c.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
-	switch {
-	case errors.IsNotFound(err):
-		return c.Create(ctx, desired)
-	case err != nil:
-		return fmt.Errorf("get deployment: %w", err)
-	default:
-		if !isOwnedBy(existing.OwnerReferences, tun.UID) {
-			return fmt.Errorf("%w: %s/%s", ErrUnownedDeployment, existing.Namespace, existing.Name)
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var existing appsv1.Deployment
+		err := c.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
+		switch {
+		case errors.IsNotFound(err):
+			return c.Create(ctx, desired)
+		case err != nil:
+			return fmt.Errorf("get deployment: %w", err)
+		default:
+			if !isOwnedBy(existing.OwnerReferences, tun.UID) {
+				return fmt.Errorf("%w: %s/%s", ErrUnownedDeployment, existing.Namespace, existing.Name)
+			}
+			// applyOwned semantics: wholesale overwrite labels, annotations, and
+			// ownerRefs. Build* functions produce a complete, known label set so
+			// overwriting is correct — there are no operator-external labels to
+			// preserve on these operator-owned resources.
+			existing.Spec = desired.Spec
+			existing.Labels = desired.Labels
+			existing.Annotations = desired.Annotations
+			existing.OwnerReferences = desired.OwnerReferences
+			return c.Update(ctx, &existing)
 		}
-		// applyOwned semantics: wholesale overwrite labels, annotations, and
-		// ownerRefs. Build* functions produce a complete, known label set so
-		// overwriting is correct — there are no operator-external labels to
-		// preserve on these operator-owned resources.
-		existing.Spec = desired.Spec
-		existing.Labels = desired.Labels
-		existing.Annotations = desired.Annotations
-		existing.OwnerReferences = desired.OwnerReferences
-		return c.Update(ctx, &existing)
-	}
+	})
 }
 
 // applyOwned creates or updates a fully operator-owned resource (SA or
