@@ -68,10 +68,10 @@ type AggregationResult struct {
 // Aggregate produces the rendered config.yaml content and per-rule verdicts
 // for a set of CloudflareTunnelRule CRs targeting the same tunnel, plus the
 // tunnel's spec.routing defaults. tunnelID is the parent tunnel's
-// Status.TunnelID; it is included in the rendered config.yaml header (see
-// Task 2) and therefore contributes to ConfigHash.
+// Status.TunnelID; it is included in the rendered config.yaml header and
+// therefore contributes to ConfigHash.
 //
-// Ordering rules (spec §4.3): unchanged.
+// Ordering rules (spec §4.3):
 //  1. Rules sorted by spec.priority desc, then metadata.name asc.
 //  2. Duplicate hostnames resolved by first writer (creationTimestamp asc,
 //     then UID asc); losers get RuleDuplicateHostname.
@@ -200,8 +200,14 @@ func Aggregate(tunnelID string, rules []cloudflarev1alpha1.CloudflareTunnelRule,
 	}
 	sort.SliceStable(entries, renderEntryLess(entries))
 
-	// Render in flat order and record resolved backends.
+	// Render in flat order and record resolved backends. Identity header
+	// (tunnel + credentials-file) is written first so cloudflared can resolve
+	// the tunnel from the config alone — fixes #58, where the operator-managed
+	// Deployment crash-looped because neither Args nor config carried the
+	// tunnel identity.
 	var b strings.Builder
+	fmt.Fprintf(&b, "tunnel: %s\n", tunnelID)
+	b.WriteString("credentials-file: /etc/cloudflared/credentials/credentials.json\n")
 	b.WriteString("ingress:\n")
 	for _, e := range entries {
 		r := e.rule

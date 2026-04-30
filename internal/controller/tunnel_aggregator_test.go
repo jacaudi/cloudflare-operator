@@ -466,6 +466,49 @@ func TestHostnameSpecificity(t *testing.T) {
 	}
 }
 
+// TestAggregate_RendersTunnelIdentityHeader verifies that the rendered
+// config.yaml contains top-level `tunnel:` and `credentials-file:` keys
+// ahead of the `ingress:` block. cloudflared resolves the tunnel from one
+// of these (#58).
+func TestAggregate_RendersTunnelIdentityHeader(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rule := ruleAt("r", "apps", t0, 100, "home", []string{"h.example.com"}, "http://b:8080")
+	result := Aggregate("a-tunnel-id-1234", []cloudflarev1alpha1.CloudflareTunnelRule{rule}, nil)
+	got := string(result.Rendered)
+
+	tunnelIdx := strings.Index(got, "tunnel: a-tunnel-id-1234\n")
+	credsIdx := strings.Index(got, "credentials-file: /etc/cloudflared/credentials/credentials.json\n")
+	ingressIdx := strings.Index(got, "ingress:\n")
+
+	if tunnelIdx < 0 {
+		t.Errorf("rendered config missing `tunnel:` header:\n%s", got)
+	}
+	if credsIdx < 0 {
+		t.Errorf("rendered config missing `credentials-file:` header:\n%s", got)
+	}
+	if ingressIdx < 0 {
+		t.Fatalf("rendered config missing `ingress:` block:\n%s", got)
+	}
+	if !(tunnelIdx < ingressIdx && credsIdx < ingressIdx) {
+		t.Errorf("identity header must precede ingress: block:\n%s", got)
+	}
+}
+
+// TestAggregate_TunnelIDChangesHash verifies that two Aggregate calls with
+// the same rules but different tunnel IDs produce different ConfigHash
+// values. This drives connector pod rolls when a tunnel is re-adopted.
+func TestAggregate_TunnelIDChangesHash(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rules := []cloudflarev1alpha1.CloudflareTunnelRule{
+		ruleAt("r", "apps", t0, 100, "home", []string{"h.example.com"}, "http://b:8080"),
+	}
+	hashA := Aggregate("tunnel-id-A", rules, nil).ConfigHash
+	hashB := Aggregate("tunnel-id-B", rules, nil).ConfigHash
+	if hashA == hashB {
+		t.Errorf("ConfigHash should differ across tunnel IDs: A=%q B=%q", hashA, hashB)
+	}
+}
+
 // TestMergedOriginRequest exercises the originRequest merge semantics
 // indirectly through Aggregate's rendered output. mergedOriginRequest is not
 // exposed for direct testing.
