@@ -969,3 +969,80 @@ func TestReconcileConnectorResources_PersistentConflictPropagates(t *testing.T) 
 		t.Errorf("expected IsConflict error, got %v", err)
 	}
 }
+
+// TestApplyOwned_RetriesOnConfigMapConflict verifies that applyOwned recovers
+// from transient IsConflict errors on the ConfigMap Update path (#59).
+func TestApplyOwned_RetriesOnConfigMapConflict(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	ndep := ConnectorNames(tun)
+	existing := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ndep.ConfigMap,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	calls := 0
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				calls++
+				if calls <= 2 {
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: "", Resource: "configmaps"},
+						obj.GetName(), fmt.Errorf("simulated conflict %d", calls),
+					)
+				}
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+	c := buildInterceptedAggClient(funcs, tun, existing)
+
+	agg := Aggregate(tun.Status.TunnelID, nil, nil)
+	cm := BuildConnectorConfigMap(tun, agg.Rendered, agg.ConfigHash)
+	if err := applyOwned(context.Background(), c, cm, &corev1.ConfigMap{}); err != nil {
+		t.Fatalf("expected nil after 2 conflicts, got: %v", err)
+	}
+	if calls < 3 {
+		t.Errorf("expected >=3 update attempts, got %d", calls)
+	}
+}
+
+// TestApplyOwned_RetriesOnServiceAccountConflict verifies the same recovery
+// for the ServiceAccount Update path.
+func TestApplyOwned_RetriesOnServiceAccountConflict(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	ndep := ConnectorNames(tun)
+	existing := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ndep.ServiceAccount,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	calls := 0
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*corev1.ServiceAccount); ok {
+				calls++
+				if calls <= 2 {
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: "", Resource: "serviceaccounts"},
+						obj.GetName(), fmt.Errorf("simulated conflict %d", calls),
+					)
+				}
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+	c := buildInterceptedAggClient(funcs, tun, existing)
+
+	sa := BuildConnectorServiceAccount(tun)
+	if err := applyOwned(context.Background(), c, sa, &corev1.ServiceAccount{}); err != nil {
+		t.Fatalf("expected nil after 2 conflicts, got: %v", err)
+	}
+	if calls < 3 {
+		t.Errorf("expected >=3 update attempts, got %d", calls)
+	}
+}

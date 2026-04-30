@@ -149,33 +149,34 @@ func reconcileConnectorResources(ctx context.Context, c client.Client, tun *clou
 
 // applyOwned creates or updates a fully operator-owned resource (SA or
 // ConfigMap). On create: submit as-is. On update: wholesale-overwrite
-// labels, annotations, ownerRefs, and the data/spec fields that Build*
-// functions set. This is correct because Build* produce a complete, known
-// label/annotation set for these operator-owned resources — no external
-// labels need to be preserved.
+// labels, annotations, ownerRefs, and the data fields that Build*
+// functions set, with retry.RetryOnConflict to absorb transient
+// optimistic-concurrency conflicts (#59).
 func applyOwned(ctx context.Context, c client.Client, desired client.Object, existing client.Object) error {
 	key := types.NamespacedName{Namespace: desired.GetNamespace(), Name: desired.GetName()}
-	err := c.Get(ctx, key, existing)
-	switch {
-	case errors.IsNotFound(err):
-		return c.Create(ctx, desired)
-	case err != nil:
-		return fmt.Errorf("get %T: %w", existing, err)
-	}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		err := c.Get(ctx, key, existing)
+		switch {
+		case errors.IsNotFound(err):
+			return c.Create(ctx, desired)
+		case err != nil:
+			return fmt.Errorf("get %T: %w", existing, err)
+		}
 
-	// Wholesale overwrite metadata that Build* controls, then type-specific fields.
-	existing.SetLabels(desired.GetLabels())
-	existing.SetAnnotations(desired.GetAnnotations())
-	existing.SetOwnerReferences(desired.GetOwnerReferences())
+		// Wholesale overwrite metadata that Build* controls, then type-specific fields.
+		existing.SetLabels(desired.GetLabels())
+		existing.SetAnnotations(desired.GetAnnotations())
+		existing.SetOwnerReferences(desired.GetOwnerReferences())
 
-	switch dst := existing.(type) {
-	case *corev1.ConfigMap:
-		src := desired.(*corev1.ConfigMap)
-		dst.Data = src.Data
-	case *corev1.ServiceAccount:
-		// ServiceAccount has no operator-controlled data fields beyond metadata.
-	}
-	return c.Update(ctx, existing)
+		switch dst := existing.(type) {
+		case *corev1.ConfigMap:
+			src := desired.(*corev1.ConfigMap)
+			dst.Data = src.Data
+		case *corev1.ServiceAccount:
+			// ServiceAccount has no operator-controlled data fields beyond metadata.
+		}
+		return c.Update(ctx, existing)
+	})
 }
 
 // isOwnedBy reports whether ownerRefs contains a reference with the given UID.
