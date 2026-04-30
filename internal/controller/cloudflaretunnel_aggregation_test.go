@@ -19,17 +19,21 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 // aggTestScheme builds a scheme with v1alpha1, corev1, and appsv1 registered.
@@ -823,4 +827,145 @@ func assertConditionWithReason(t *testing.T, conds []metav1.Condition, condType 
 		}
 	}
 	t.Errorf("condition %q not found in %+v", condType, conds)
+}
+
+// buildInterceptedAggClient builds the same fake client as
+// buildAggFakeClient, then wraps it with the given interceptor.Funcs.
+func buildInterceptedAggClient(funcs interceptor.Funcs, objs ...client.Object) client.Client {
+	s := aggTestScheme()
+	var statusObjs []client.Object
+	for _, o := range objs {
+		switch o.(type) {
+		case *cloudflarev1alpha1.CloudflareTunnel, *cloudflarev1alpha1.CloudflareTunnelRule:
+			statusObjs = append(statusObjs, o)
+		}
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithStatusSubresource(statusObjs...).
+		Build()
+	return interceptor.NewClient(base, funcs)
+}
+
+// TestReconcileConnectorResources_RetriesOnDeploymentConflict verifies that
+// reconcileConnectorResources recovers from transient IsConflict errors on
+// the Deployment Update path (#59 root cause).
+func TestReconcileConnectorResources_RetriesOnDeploymentConflict(t *testing.T) {
+	for _, n := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("conflicts=%d", n), func(t *testing.T) {
+			tun := newTunnelForAgg("home", "network", true)
+			// Pre-create the Deployment so reconcileConnectorResources takes the
+			// update branch (where conflicts manifest), not the create branch.
+			ndep := ConnectorNames(tun)
+			existing := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            ndep.Deployment,
+					Namespace:       tun.Namespace,
+					OwnerReferences: connectorOwnerRef(tun),
+				},
+			}
+			// Track calls only against Deployment Updates so unrelated SA/CM
+			// updates don't consume the budget.
+			calls := 0
+			funcs := interceptor.Funcs{
+				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if _, ok := obj.(*appsv1.Deployment); ok {
+						calls++
+						if calls <= n {
+							return apierrors.NewConflict(
+								schema.GroupResource{Group: "apps", Resource: "deployments"},
+								obj.GetName(),
+								fmt.Errorf("simulated conflict %d", calls),
+							)
+						}
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			}
+			c := buildInterceptedAggClient(funcs, tun, existing)
+
+			rules := []cloudflarev1alpha1.CloudflareTunnelRule{}
+			agg := Aggregate(tun.Status.TunnelID, rules, nil)
+			if err := reconcileConnectorResources(context.Background(), c, tun, agg); err != nil {
+				t.Fatalf("expected nil error after %d conflicts, got: %v", n, err)
+			}
+			if calls < n+1 {
+				t.Errorf("expected at least %d Deployment update attempts, got %d", n+1, calls)
+			}
+		})
+	}
+}
+
+// TestReconcileConnectorResources_NonConflictErrorShortCircuits verifies
+// that non-conflict errors from Update propagate immediately without
+// retry — preserves existing semantics for real failures.
+func TestReconcileConnectorResources_NonConflictErrorShortCircuits(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	ndep := ConnectorNames(tun)
+	existing := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ndep.Deployment,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	calls := 0
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				calls++
+				return apierrors.NewBadRequest("simulated bad request")
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+	c := buildInterceptedAggClient(funcs, tun, existing)
+
+	agg := Aggregate(tun.Status.TunnelID, nil, nil)
+	err := reconcileConnectorResources(context.Background(), c, tun, agg)
+	if err == nil {
+		t.Fatal("expected error from non-conflict Update failure, got nil")
+	}
+	if calls != 1 {
+		t.Errorf("expected exactly 1 Deployment update attempt, got %d", calls)
+	}
+}
+
+// TestReconcileConnectorResources_PersistentConflictPropagates verifies
+// that a conflict storm exhausting the retry budget still propagates the
+// final error — the controller is no worse off than today in pathological
+// cases.
+func TestReconcileConnectorResources_PersistentConflictPropagates(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	ndep := ConnectorNames(tun)
+	existing := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ndep.Deployment,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				return apierrors.NewConflict(
+					schema.GroupResource{Group: "apps", Resource: "deployments"},
+					obj.GetName(),
+					fmt.Errorf("permanent conflict"),
+				)
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+	c := buildInterceptedAggClient(funcs, tun, existing)
+
+	agg := Aggregate(tun.Status.TunnelID, nil, nil)
+	err := reconcileConnectorResources(context.Background(), c, tun, agg)
+	if err == nil {
+		t.Fatal("expected propagated conflict error after retry budget exhausted, got nil")
+	}
+	if !apierrors.IsConflict(err) {
+		t.Errorf("expected IsConflict error, got %v", err)
+	}
 }
