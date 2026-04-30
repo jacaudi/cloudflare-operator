@@ -11,12 +11,17 @@ import (
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -376,5 +381,128 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 	}
 	if !foundCondition {
 		t.Error("expected Ready condition to be set")
+	}
+}
+
+// buildInterceptedTunnelReconciler is the same as buildTunnelReconciler
+// but wraps the fake client with the given interceptor.Funcs so individual
+// API calls can be intercepted (e.g. to inject conflict storms).
+func buildInterceptedTunnelReconciler(mock *mockTunnelClient, funcs interceptor.Funcs, objs ...client.Object) *CloudflareTunnelReconciler {
+	s := testScheme(&testing.T{})
+	// testScheme registers v1alpha1 + corev1; we need appsv1 for Deployments.
+	if err := appsv1.AddToScheme(s); err != nil {
+		panic("add appsv1 to scheme: " + err.Error())
+	}
+
+	var statusObjs []client.Object
+	for _, o := range objs {
+		if _, ok := o.(*cloudflarev1alpha1.CloudflareTunnel); ok {
+			statusObjs = append(statusObjs, o)
+		}
+	}
+
+	base := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithStatusSubresource(statusObjs...).
+		Build()
+	wrapped := interceptor.NewClient(base, funcs)
+
+	return &CloudflareTunnelReconciler{
+		Client:         wrapped,
+		Scheme:         s,
+		Recorder:       record.NewFakeRecorder(10),
+		ClientFactory:  cfclient.NewClientFactory(wrapped),
+		TunnelClientFn: func(_ string) cfclient.TunnelClient { return mock },
+	}
+}
+
+// TestReconcile_ConnectorConflictStormDoesNotInflateRequeue is the
+// regression test for #59. When the connector Deployment Update path
+// returns transient IsConflict errors, Reconcile must NOT propagate the
+// error / set the 30s failReconcile RequeueAfter — that was the
+// workqueue-backoff inflation source that wedged finalizer cleanup.
+func TestReconcile_ConnectorConflictStormDoesNotInflateRequeue(t *testing.T) {
+	tun := newTestTunnel("test-tunnel", "default")
+	// Adopt an existing tunnel rather than creating one: pre-populate Status
+	// so the connector reconcile is reached and uses a deterministic ID.
+	tun.Spec.Connector = &cloudflarev1alpha1.ConnectorSpec{Enabled: true, Replicas: 2}
+	// Add the finalizer so the reconcile takes the standard path, not the add-finalizer path.
+	tun.Finalizers = append(tun.Finalizers, cloudflarev1alpha1.FinalizerName)
+	tun.Status.TunnelID = "test-tunnel-id"
+	tun.Status.TunnelCNAME = "test-tunnel-id.cfargotunnel.com"
+
+	// Pre-create the connector Deployment so reconcile takes the update path
+	// (where the conflict manifests).
+	ndep := ConnectorNames(tun)
+	existingDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ndep.Deployment,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	secret := newTestSecret("default")
+
+	mock := newMockTunnelClient()
+	// Seed the mock so GetTunnel returns the existing tunnel and the reconciler
+	// goes down the adoption path rather than CreateTunnel.
+	mock.tunnels[tun.Status.TunnelID] = &cfclient.Tunnel{
+		ID:   tun.Status.TunnelID,
+		Name: tun.Spec.Name,
+	}
+
+	calls := 0
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*appsv1.Deployment); ok {
+				calls++
+				if calls <= 3 {
+					return apierrors.NewConflict(
+						schema.GroupResource{Group: "apps", Resource: "deployments"},
+						obj.GetName(),
+						fmt.Errorf("simulated conflict %d", calls),
+					)
+				}
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+
+	r := buildInterceptedTunnelReconciler(mock, funcs, tun, secret, existingDep)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name},
+	})
+	// failReconcile returns (Result, nil), so err is unhelpful as a regression
+	// discriminator on its own — RequeueAfter and the persisted Ready condition
+	// (asserted below) are the load-bearing checks.
+	if err != nil {
+		t.Fatalf("Reconcile returned unexpected error: %v", err)
+	}
+	// failReconcile path uses 30s; success path uses spec.Interval (30 min in newTestTunnel).
+	// Anything ≤30s indicates the conflict propagated as a reconcile error and inflated the requeue.
+	if res.RequeueAfter > 0 && res.RequeueAfter <= 30*time.Second {
+		t.Errorf("RequeueAfter = %s; expected success-path requeue (>30s), not failReconcile (≤30s)", res.RequeueAfter)
+	}
+	if calls < 4 {
+		t.Errorf("expected ≥4 Deployment Update attempts (3 conflicts + 1 success), got %d", calls)
+	}
+
+	// Persisted-status discriminator: on the success path, writeTunnelAggStatus
+	// runs and persists Ready=True + IngressConfigured=True. On the pre-fix path
+	// the connector branch returns early with RequeueAfter=30s before
+	// writeTunnelAggStatus runs, so these conditions are absent / not True.
+	var got cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name}, &got); err != nil {
+		t.Fatalf("Get tunnel after Reconcile: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		t.Errorf("expected Ready=True after Reconcile (success path); got %+v", ready)
+	}
+	ingress := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured)
+	if ingress == nil || ingress.Status != metav1.ConditionTrue {
+		t.Errorf("expected IngressConfigured=True after Reconcile; got %+v", ingress)
 	}
 }
