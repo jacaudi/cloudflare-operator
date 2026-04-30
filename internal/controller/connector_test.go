@@ -377,3 +377,22 @@ func TestBuildConnectorDeployment_PartialResources_LimitsOnly(t *testing.T) {
 		t.Errorf("Limits[Memory] = %s, want 512Mi", q.String())
 	}
 }
+
+// TestBuildConnectorDeployment_ArgsExact pins the cloudflared Args to
+// [tunnel, --config, /etc/cloudflared/config.yaml, run]. The credentials
+// path is in config.yaml (see Aggregate), so --credentials-file must NOT
+// appear in Args (#58 follow-up: single source of truth for identity).
+func TestBuildConnectorDeployment_ArgsExact(t *testing.T) {
+	tun := tunnelFixture(true)
+	dep := BuildConnectorDeployment(tun, "h")
+	got := dep.Spec.Template.Spec.Containers[0].Args
+	want := []string{"tunnel", "--config", "/etc/cloudflared/config.yaml", "run"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Args = %v, want %v", got, want)
+	}
+	for _, a := range got {
+		if a == "--credentials-file" {
+			t.Errorf("--credentials-file must not appear in Args: %v", got)
+		}
+	}
+}

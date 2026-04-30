@@ -229,7 +229,6 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 				Args: []string{
 					"tunnel",
 					"--config", "/etc/cloudflared/config.yaml",
-					"--credentials-file", "/etc/cloudflared/credentials/credentials.json",
 					"run",
 				},
 				SecurityContext: &corev1.SecurityContext{
