@@ -67,15 +67,17 @@ type AggregationResult struct {
 
 // Aggregate produces the rendered config.yaml content and per-rule verdicts
 // for a set of CloudflareTunnelRule CRs targeting the same tunnel, plus the
-// tunnel's spec.routing defaults.
+// tunnel's spec.routing defaults. tunnelID is the parent tunnel's
+// Status.TunnelID; it is included in the rendered config.yaml header (see
+// Task 2) and therefore contributes to ConfigHash.
 //
-// Ordering rules (spec §4.3):
+// Ordering rules (spec §4.3): unchanged.
 //  1. Rules sorted by spec.priority desc, then metadata.name asc.
 //  2. Duplicate hostnames resolved by first writer (creationTimestamp asc,
 //     then UID asc); losers get RuleDuplicateHostname.
 //  3. config.yaml order: included rules, then spec.routing.defaultBackend (if
 //     set), then a fixed final http_status:404 catch-all.
-func Aggregate(rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudflarev1alpha1.TunnelRoutingSpec) AggregationResult {
+func Aggregate(tunnelID string, rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudflarev1alpha1.TunnelRoutingSpec) AggregationResult {
 	decisions := map[types.NamespacedName]RuleDecision{}
 	claims := map[string]types.NamespacedName{} // hostname -> winning rule key
 

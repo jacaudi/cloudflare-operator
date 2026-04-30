@@ -55,7 +55,7 @@ func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloud
 	}
 	filtered := filterRulesForTunnel(ruleList.Items, tun.Name, tun.Namespace)
 
-	agg := Aggregate(filtered, tun.Spec.Routing)
+	agg := Aggregate(tun.Status.TunnelID, filtered, tun.Spec.Routing)
 
 	if tun.Spec.Connector != nil && tun.Spec.Connector.Enabled {
 		if err := reconcileConnectorResources(ctx, c, tun, agg); err != nil {
