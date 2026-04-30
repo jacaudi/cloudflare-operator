@@ -634,6 +634,7 @@ func TestZoneConfigReconcile_PartialApply_BotManagement403(t *testing.T) {
 		cloudflarev1alpha1.ConditionTypeSecurityApplied:      {metav1.ConditionTrue, cloudflarev1alpha1.ReasonApplied},
 		cloudflarev1alpha1.ConditionTypePerformanceApplied:   {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
 		cloudflarev1alpha1.ConditionTypeNetworkApplied:       {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
+		cloudflarev1alpha1.ConditionTypeDNSApplied:           {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
 		cloudflarev1alpha1.ConditionTypeBotManagementApplied: {metav1.ConditionFalse, cloudflarev1alpha1.ReasonPermissionDenied},
 		cloudflarev1alpha1.ConditionTypeReady:                {metav1.ConditionFalse, cloudflarev1alpha1.ReasonPartialApply},
 	}
@@ -855,6 +856,7 @@ func TestZoneConfigReconcile_NotConfiguredCondition(t *testing.T) {
 		cloudflarev1alpha1.ConditionTypeSecurityApplied,
 		cloudflarev1alpha1.ConditionTypePerformanceApplied,
 		cloudflarev1alpha1.ConditionTypeNetworkApplied,
+		cloudflarev1alpha1.ConditionTypeDNSApplied,
 		cloudflarev1alpha1.ConditionTypeBotManagementApplied,
 	} {
 		c := findCondition(updated.Status.Conditions, ct)

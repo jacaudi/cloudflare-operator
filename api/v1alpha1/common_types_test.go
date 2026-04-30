@@ -39,6 +39,7 @@ func TestConditionTypeConstants(t *testing.T) {
 		ConditionTypeSecurityApplied,
 		ConditionTypePerformanceApplied,
 		ConditionTypeNetworkApplied,
+		ConditionTypeDNSApplied,
 		ConditionTypeBotManagementApplied,
 	}
 	for _, c := range conditionTypes {
