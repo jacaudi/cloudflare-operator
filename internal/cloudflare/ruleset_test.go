@@ -180,3 +180,50 @@ func TestRulesetClient_UpsertPhaseEntrypoint(t *testing.T) {
 		t.Errorf("expected 2 rules in response, got %d", len(rs.Rules))
 	}
 }
+
+func TestBuildPhaseUpdateRules_Logging(t *testing.T) {
+	en := true
+	rules := []RulesetRule{{
+		Action:     "skip",
+		Expression: "true",
+		Logging:    &RuleLogging{Enabled: &en},
+	}}
+	out := buildPhaseUpdateRules(rules)
+	if len(out) != 1 {
+		t.Fatalf("got %d sdk rules, want 1", len(out))
+	}
+	b, err := json.Marshal(out[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	logging, ok := got["logging"].(map[string]any)
+	if !ok {
+		t.Fatalf("logging missing/typed wrong: %v", got["logging"])
+	}
+	if logging["enabled"] != true {
+		t.Errorf("logging.enabled=%v want true", logging["enabled"])
+	}
+}
+
+func TestBuildPhaseUpdateRules_NoLogging(t *testing.T) {
+	rules := []RulesetRule{{Action: "block", Expression: "ip eq 1.2.3.4"}}
+	out := buildPhaseUpdateRules(rules)
+	if len(out) != 1 {
+		t.Fatalf("got %d sdk rules, want 1", len(out))
+	}
+	b, err := json.Marshal(out[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, present := got["logging"]; present {
+		t.Errorf("logging should not be present on the wire when nil; got %v", got)
+	}
+}

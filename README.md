@@ -9,7 +9,7 @@ A Kubernetes operator that manages Cloudflare resources declaratively via Custom
 | `CloudflareZone` | Onboard and manage domain lifecycle (create, adopt, activate, delete) |
 | `CloudflareDNSRecord` | Manage DNS records (A, AAAA, CNAME, SRV, MX, TXT, NS) with dynamic IP support |
 | `CloudflareTunnel` | Create tunnels and auto-generate `cloudflared` credentials Secrets |
-| `CloudflareZoneConfig` | Declaratively configure zone settings (SSL, security, performance, network) |
+| `CloudflareZoneConfig` | Declaratively configure zone settings (SSL, security, performance, network, DNS) |
 | `CloudflareRuleset` | Manage a zone's phase entrypoint ruleset (security / custom rules, rate limiting, transforms, redirects, …) across 14+ Rulesets-Engine phases |
 
 See [`docs/README.md`](docs/README.md) for the full CRD reference, field-by-field specs, and examples.

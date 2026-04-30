@@ -67,6 +67,11 @@ func buildPhaseUpdateRules(rules []RulesetRule) []rulesets.PhaseUpdateParamsRule
 		if r.ActionParameters != nil {
 			rule.ActionParameters = cfgo.F[any](r.ActionParameters)
 		}
+		if r.Logging != nil && r.Logging.Enabled != nil {
+			rule.Logging = cfgo.F(rulesets.LoggingParam{
+				Enabled: cfgo.F(*r.Logging.Enabled),
+			})
+		}
 		sdkRules = append(sdkRules, rule)
 	}
 	return sdkRules
@@ -111,6 +116,15 @@ func mapPhaseGetResponse(resp *rulesets.PhaseGetResponse) *Ruleset {
 			Enabled:     r.Enabled,
 		}
 		rule.ActionParameters = toMapStringAny(r.ActionParameters)
+		// Treat the SDK's Enabled=true as "logging configured"; Enabled=false is
+		// indistinguishable from "logging not configured" on this response shape
+		// (Cloudflare returns enabled=false when no logging block is present), so
+		// we leave Logging nil to avoid spurious diffs against desired state where
+		// the user did not set logging.
+		if r.Logging.Enabled {
+			t := true
+			rule.Logging = &RuleLogging{Enabled: &t}
+		}
 		rs.Rules = append(rs.Rules, rule)
 	}
 	return rs
@@ -133,6 +147,15 @@ func mapPhaseUpdateResponse(resp *rulesets.PhaseUpdateResponse) *Ruleset {
 			Enabled:     r.Enabled,
 		}
 		rule.ActionParameters = toMapStringAny(r.ActionParameters)
+		// Treat the SDK's Enabled=true as "logging configured"; Enabled=false is
+		// indistinguishable from "logging not configured" on this response shape
+		// (Cloudflare returns enabled=false when no logging block is present), so
+		// we leave Logging nil to avoid spurious diffs against desired state where
+		// the user did not set logging.
+		if r.Logging.Enabled {
+			t := true
+			rule.Logging = &RuleLogging{Enabled: &t}
+		}
 		rs.Rules = append(rs.Rules, rule)
 	}
 	return rs

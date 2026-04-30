@@ -1,6 +1,6 @@
 # Required token scopes per group:
-#   ssl / security / performance / network: Zone:Zone Settings:Edit
-#   botManagement:                           Zone:Bot Management:Edit (paid plan)
+#   ssl / security / performance / network / dns: Zone:Zone Settings:Edit
+#   botManagement:                                 Zone:Bot Management:Edit (paid plan)
 #
 # Groups you don't configure won't be touched. A failure on one group
 # (e.g., a 403 on botManagement) won't block the others — see
@@ -26,6 +26,14 @@ spec:
     challengeTTL: 1800
     browserCheck: "on"
     emailObfuscation: "on"
+    serverSideExclude: "on"
+    hotlinkProtection: "off"
+    securityHeader:
+      enabled: true
+      maxAge: 31536000
+      includeSubdomains: true
+      preload: false
+      nosniff: true
   performance:
     cacheLevel: "aggressive"
     browserCacheTTL: 14400
@@ -33,6 +41,8 @@ spec:
     earlyHints: "on"
     http2: "on"
     http3: "on"
+    alwaysOnline: "off"
+    rocketLoader: "on"
     minify:
       css: "on"
       html: "on"
@@ -42,6 +52,8 @@ spec:
     websockets: "on"
     ipGeolocation: "on"
     opportunisticOnion: "on"
+  dns:
+    cnameFlattening: "flatten_at_root"
   botManagement:
     enableJS: true
     fightMode: true

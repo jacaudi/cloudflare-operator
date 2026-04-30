@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -633,6 +634,7 @@ func TestZoneConfigReconcile_PartialApply_BotManagement403(t *testing.T) {
 		cloudflarev1alpha1.ConditionTypeSecurityApplied:      {metav1.ConditionTrue, cloudflarev1alpha1.ReasonApplied},
 		cloudflarev1alpha1.ConditionTypePerformanceApplied:   {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
 		cloudflarev1alpha1.ConditionTypeNetworkApplied:       {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
+		cloudflarev1alpha1.ConditionTypeDNSApplied:           {metav1.ConditionFalse, cloudflarev1alpha1.ReasonNotConfigured},
 		cloudflarev1alpha1.ConditionTypeBotManagementApplied: {metav1.ConditionFalse, cloudflarev1alpha1.ReasonPermissionDenied},
 		cloudflarev1alpha1.ConditionTypeReady:                {metav1.ConditionFalse, cloudflarev1alpha1.ReasonPartialApply},
 	}
@@ -854,6 +856,7 @@ func TestZoneConfigReconcile_NotConfiguredCondition(t *testing.T) {
 		cloudflarev1alpha1.ConditionTypeSecurityApplied,
 		cloudflarev1alpha1.ConditionTypePerformanceApplied,
 		cloudflarev1alpha1.ConditionTypeNetworkApplied,
+		cloudflarev1alpha1.ConditionTypeDNSApplied,
 		cloudflarev1alpha1.ConditionTypeBotManagementApplied,
 	} {
 		c := findCondition(updated.Status.Conditions, ct)
@@ -985,5 +988,287 @@ func TestZoneConfigReconcile_NoEventSpamInSteadyDegradedState(t *testing.T) {
 	}
 	if bmApplyFailedCount != 1 {
 		t.Errorf("expected exactly 1 SettingsApplyFailed BotManagement event (transition-only); got %d. events=%v", bmApplyFailedCount, got)
+	}
+}
+
+// equalSettingUpdates compares two []settingUpdate slices using reflect.DeepEqual.
+// settingUpdate.value is `any`, so DeepEqual handles both flat string values and
+// nested map[string]any payloads.
+func equalSettingUpdates(a, b []settingUpdate) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+func TestAppendSecurity_NewFields(t *testing.T) {
+	t.Run("nil section emits nothing", func(t *testing.T) {
+		got := appendSecurity(nil, nil)
+		if len(got) != 0 {
+			t.Fatalf("got %d updates, want 0", len(got))
+		}
+	})
+
+	t.Run("server_side_exclude only", func(t *testing.T) {
+		on := "on"
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{ServerSideExclude: &on})
+		want := []settingUpdate{{id: "server_side_exclude", value: "on"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("hotlink_protection only", func(t *testing.T) {
+		off := "off"
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{HotlinkProtection: &off})
+		want := []settingUpdate{{id: "hotlink_protection", value: "off"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("security_header full", func(t *testing.T) {
+		en, sub, pre, ns := true, true, false, true
+		ma := 31536000
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{
+				Enabled:           &en,
+				MaxAge:            &ma,
+				IncludeSubdomains: &sub,
+				Preload:           &pre,
+				Nosniff:           &ns,
+			},
+		})
+		if len(got) != 1 || got[0].id != "security_header" {
+			t.Fatalf("got %+v", got)
+		}
+		val, ok := got[0].value.(map[string]any)
+		if !ok {
+			t.Fatalf("value type %T, want map[string]any", got[0].value)
+		}
+		sts, ok := val["strict_transport_security"].(map[string]any)
+		if !ok {
+			t.Fatalf("strict_transport_security missing or wrong type: %+v", val)
+		}
+		if len(sts) != 5 {
+			t.Errorf("inner len=%d, want 5; got %+v", len(sts), sts)
+		}
+		if sts["enabled"] != true || sts["max_age"] != 31536000 ||
+			sts["include_subdomains"] != true || sts["preload"] != false ||
+			sts["nosniff"] != true {
+			t.Errorf("inner payload: %+v", sts)
+		}
+	})
+
+	t.Run("security_header partial — only Enabled", func(t *testing.T) {
+		en := true
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{Enabled: &en},
+		})
+		if len(got) != 1 {
+			t.Fatalf("got %d updates, want 1", len(got))
+		}
+		val := got[0].value.(map[string]any)
+		sts := val["strict_transport_security"].(map[string]any)
+		if len(sts) != 1 {
+			t.Errorf("inner payload should have only 'enabled'; got %+v", sts)
+		}
+		if sts["enabled"] != true {
+			t.Errorf("enabled=%v want true", sts["enabled"])
+		}
+	})
+
+	t.Run("security_header partial — only MaxAge", func(t *testing.T) {
+		ma := 86400
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{MaxAge: &ma},
+		})
+		if len(got) != 1 {
+			t.Fatalf("got %d updates, want 1", len(got))
+		}
+		val := got[0].value.(map[string]any)
+		sts := val["strict_transport_security"].(map[string]any)
+		if len(sts) != 1 || sts["max_age"] != 86400 {
+			t.Errorf("inner payload: %+v", sts)
+		}
+	})
+
+	t.Run("security_header all-nil — skip", func(t *testing.T) {
+		got := appendSecurity(nil, &cloudflarev1alpha1.SecuritySettings{
+			SecurityHeader: &cloudflarev1alpha1.SecurityHeaderSettings{},
+		})
+		for _, u := range got {
+			if u.id == "security_header" {
+				t.Errorf("security_header should not be emitted when all inner fields nil; got %+v", u)
+			}
+		}
+	})
+}
+
+func TestAppendPerformance_NewFields(t *testing.T) {
+	t.Run("always_online only", func(t *testing.T) {
+		on := "on"
+		got := appendPerformance(nil, &cloudflarev1alpha1.PerformanceSettings{AlwaysOnline: &on})
+		want := []settingUpdate{{id: "always_online", value: "on"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("rocket_loader only", func(t *testing.T) {
+		on := "on"
+		got := appendPerformance(nil, &cloudflarev1alpha1.PerformanceSettings{RocketLoader: &on})
+		want := []settingUpdate{{id: "rocket_loader", value: "on"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestAppendDNS(t *testing.T) {
+	t.Run("nil section emits nothing", func(t *testing.T) {
+		got := appendDNS(nil, nil)
+		if len(got) != 0 {
+			t.Fatalf("got %d updates, want 0", len(got))
+		}
+	})
+
+	t.Run("cname_flattening only", func(t *testing.T) {
+		v := "flatten_at_root"
+		got := appendDNS(nil, &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v})
+		want := []settingUpdate{{id: "cname_flattening", value: "flatten_at_root"}}
+		if !equalSettingUpdates(got, want) {
+			t.Errorf("got %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestApplyDNSGroup(t *testing.T) {
+	ctx := context.Background()
+	zoneID := "zone-123"
+
+	t.Run("nil section returns not-configured and makes no API calls", func(t *testing.T) {
+		mock := newMockZoneClient()
+		g := applyDNSGroup(ctx, mock, zoneID, nil)
+		if g.configured {
+			t.Errorf("configured=true, want false")
+		}
+		if g.err != nil {
+			t.Errorf("err=%v, want nil", g.err)
+		}
+		if g.conditionType != cloudflarev1alpha1.ConditionTypeDNSApplied {
+			t.Errorf("conditionType=%q, want %q", g.conditionType, cloudflarev1alpha1.ConditionTypeDNSApplied)
+		}
+		if mock.updateSettingCalls != 0 {
+			t.Errorf("expected 0 UpdateSetting calls, got %d", mock.updateSettingCalls)
+		}
+		if g.status() != metav1.ConditionFalse {
+			t.Errorf("status=%v, want False", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonNotConfigured {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonNotConfigured)
+		}
+	})
+
+	t.Run("success applies settings and reports True/Applied", func(t *testing.T) {
+		mock := newMockZoneClient()
+		v := "flatten_at_root"
+		dns := &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v}
+
+		g := applyDNSGroup(ctx, mock, zoneID, dns)
+		if !g.configured {
+			t.Errorf("configured=false, want true")
+		}
+		if g.err != nil {
+			t.Errorf("err=%v, want nil", g.err)
+		}
+		if g.settingsCount != 1 {
+			t.Errorf("settingsCount=%d, want 1", g.settingsCount)
+		}
+		if mock.updateSettingCalls != 1 {
+			t.Errorf("expected 1 UpdateSetting call, got %d", mock.updateSettingCalls)
+		}
+		if mock.settings["cname_flattening"] != "flatten_at_root" {
+			t.Errorf("expected cname_flattening=flatten_at_root, got %v", mock.settings["cname_flattening"])
+		}
+		if g.status() != metav1.ConditionTrue {
+			t.Errorf("status=%v, want True", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonApplied {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonApplied)
+		}
+	})
+
+	t.Run("permission denied classifies as PermissionDenied", func(t *testing.T) {
+		mock := newMockZoneClient()
+		mock.updateErrors["cname_flattening"] = &cfgov6.Error{StatusCode: http.StatusForbidden}
+		v := "flatten_at_root"
+		dns := &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v}
+
+		g := applyDNSGroup(ctx, mock, zoneID, dns)
+		if !g.configured {
+			t.Errorf("configured=false, want true")
+		}
+		if g.err == nil {
+			t.Fatal("err=nil, want non-nil")
+		}
+		if g.status() != metav1.ConditionFalse {
+			t.Errorf("status=%v, want False", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonPermissionDenied {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonPermissionDenied)
+		}
+	})
+
+	t.Run("generic API error classifies as CloudflareError", func(t *testing.T) {
+		mock := newMockZoneClient()
+		mock.updateErrors["cname_flattening"] = &cfgov6.Error{StatusCode: http.StatusBadGateway}
+		v := "flatten_at_root"
+		dns := &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &v}
+
+		g := applyDNSGroup(ctx, mock, zoneID, dns)
+		if !g.configured {
+			t.Errorf("configured=false, want true")
+		}
+		if g.err == nil {
+			t.Fatal("err=nil, want non-nil")
+		}
+		if g.status() != metav1.ConditionFalse {
+			t.Errorf("status=%v, want False", g.status())
+		}
+		if g.reason() != cloudflarev1alpha1.ReasonCloudflareError {
+			t.Errorf("reason=%q, want %q", g.reason(), cloudflarev1alpha1.ReasonCloudflareError)
+		}
+	})
+}
+
+func TestHashZoneConfigSpec_IncludesDNS(t *testing.T) {
+	a := "flatten_at_root"
+	b := "flatten_all"
+	specA := cloudflarev1alpha1.CloudflareZoneConfigSpec{DNS: &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &a}}
+	specB := cloudflarev1alpha1.CloudflareZoneConfigSpec{DNS: &cloudflarev1alpha1.DNSSettings{CNAMEFlattening: &b}}
+	if hashZoneConfigSpec(&specA) == hashZoneConfigSpec(&specB) {
+		t.Errorf("hash should differ when DNS.CNAMEFlattening changes")
+	}
+}
+
+func TestHashZoneConfigSpec_ChangesOnNewFields(t *testing.T) {
+	on := "on"
+	off := "off"
+	a := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Security: &cloudflarev1alpha1.SecuritySettings{ServerSideExclude: &on},
+	}
+	b := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Security: &cloudflarev1alpha1.SecuritySettings{ServerSideExclude: &off},
+	}
+	if hashZoneConfigSpec(&a) == hashZoneConfigSpec(&b) {
+		t.Errorf("hash should differ when ServerSideExclude flips")
+	}
+
+	c := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Performance: &cloudflarev1alpha1.PerformanceSettings{RocketLoader: &on},
+	}
+	d := cloudflarev1alpha1.CloudflareZoneConfigSpec{
+		Performance: &cloudflarev1alpha1.PerformanceSettings{RocketLoader: &off},
+	}
+	if hashZoneConfigSpec(&c) == hashZoneConfigSpec(&d) {
+		t.Errorf("hash should differ when RocketLoader flips")
 	}
 }

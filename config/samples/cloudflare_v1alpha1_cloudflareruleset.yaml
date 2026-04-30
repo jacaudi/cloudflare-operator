@@ -22,6 +22,15 @@ spec:
       expression: '(not ip.geoip.country in {"CA" "US" "GB"})'
       description: "Block non-allowed countries"
       enabled: true
+    - action: skip
+      expression: '(ip.src in {192.0.2.0/24})'
+      description: "Allowlist office IPs"
+      enabled: true
+      # logging.enabled forces logging on for `skip`, where Cloudflare's default
+      # is off — useful when you want to audit which traffic was allowlisted.
+      # Omit the logging block entirely if you want default behavior.
+      logging:
+        enabled: true
 ---
 # Same ruleset, but referencing a CloudflareZone by name instead of a raw zoneID.
 apiVersion: cloudflare.io/v1alpha1

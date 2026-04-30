@@ -66,6 +66,12 @@ type Ruleset struct {
 	Rules       []RulesetRule
 }
 
+// RuleLogging configures per-rule logging behavior.
+// Pointer Enabled so callers can distinguish "unset" (nil) from "set to false".
+type RuleLogging struct {
+	Enabled *bool
+}
+
 // RulesetRule is a single rule in a ruleset.
 type RulesetRule struct {
 	ID               string
@@ -74,6 +80,7 @@ type RulesetRule struct {
 	Description      string
 	Enabled          bool
 	ActionParameters map[string]any
+	Logging          *RuleLogging
 }
 
 // RulesetParams are parameters for creating/updating a ruleset.

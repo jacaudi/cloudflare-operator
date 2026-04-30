@@ -173,6 +173,32 @@ func appendSecurity(updates []settingUpdate, sec *cloudflarev1alpha1.SecuritySet
 	updates = appendIfSet(updates, "challenge_ttl", sec.ChallengeTTL)
 	updates = appendIfSet(updates, "browser_check", sec.BrowserCheck)
 	updates = appendIfSet(updates, "email_obfuscation", sec.EmailObfuscation)
+	updates = appendIfSet(updates, "server_side_exclude", sec.ServerSideExclude)
+	updates = appendIfSet(updates, "hotlink_protection", sec.HotlinkProtection)
+	if sec.SecurityHeader != nil {
+		sts := map[string]any{}
+		if sec.SecurityHeader.Enabled != nil {
+			sts["enabled"] = *sec.SecurityHeader.Enabled
+		}
+		if sec.SecurityHeader.MaxAge != nil {
+			sts["max_age"] = *sec.SecurityHeader.MaxAge
+		}
+		if sec.SecurityHeader.IncludeSubdomains != nil {
+			sts["include_subdomains"] = *sec.SecurityHeader.IncludeSubdomains
+		}
+		if sec.SecurityHeader.Preload != nil {
+			sts["preload"] = *sec.SecurityHeader.Preload
+		}
+		if sec.SecurityHeader.Nosniff != nil {
+			sts["nosniff"] = *sec.SecurityHeader.Nosniff
+		}
+		if len(sts) > 0 {
+			updates = append(updates, settingUpdate{
+				id:    "security_header",
+				value: map[string]any{"strict_transport_security": sts},
+			})
+		}
+	}
 	return updates
 }
 
@@ -202,6 +228,8 @@ func appendPerformance(updates []settingUpdate, perf *cloudflarev1alpha1.Perform
 	updates = appendIfSet(updates, "early_hints", perf.EarlyHints)
 	updates = appendIfSet(updates, "http2", perf.HTTP2)
 	updates = appendIfSet(updates, "http3", perf.HTTP3)
+	updates = appendIfSet(updates, "always_online", perf.AlwaysOnline)
+	updates = appendIfSet(updates, "rocket_loader", perf.RocketLoader)
 	return updates
 }
 
@@ -214,6 +242,14 @@ func appendNetwork(updates []settingUpdate, net *cloudflarev1alpha1.NetworkSetti
 	updates = appendIfSet(updates, "pseudo_ipv4", net.PseudoIPv4)
 	updates = appendIfSet(updates, "ip_geolocation", net.IPGeolocation)
 	updates = appendIfSet(updates, "opportunistic_onion", net.OpportunisticOnion)
+	return updates
+}
+
+func appendDNS(updates []settingUpdate, dns *cloudflarev1alpha1.DNSSettings) []settingUpdate {
+	if dns == nil {
+		return updates
+	}
+	updates = appendIfSet(updates, "cname_flattening", dns.CNAMEFlattening)
 	return updates
 }
 
@@ -287,6 +323,7 @@ func (r *CloudflareZoneConfigReconciler) reconcileZoneConfig(ctx context.Context
 		applySecurityGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Security),
 		applyPerformanceGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Performance),
 		applyNetworkGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.Network),
+		applyDNSGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.DNS),
 		applyBotManagementGroup(ctx, zoneClient, zoneID, zoneConfig.Spec.BotManagement),
 	}
 
@@ -388,6 +425,24 @@ func applyNetworkGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zone
 	return g
 }
 
+// applyDNSGroup applies the DNS settings group, if configured.
+func applyDNSGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, dns *cloudflarev1alpha1.DNSSettings) groupResult {
+	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeDNSApplied, groupLabel: "DNS"}
+	if dns == nil {
+		return g
+	}
+	g.configured = true
+	updates := appendDNS(nil, dns)
+	for _, s := range updates {
+		if err := zoneClient.UpdateSetting(ctx, zoneID, s.id, s.value); err != nil {
+			g.err = fmt.Errorf("update setting %s: %w", s.id, err)
+			return g
+		}
+	}
+	g.settingsCount = len(updates)
+	return g
+}
+
 // applyBotManagementGroup applies the BotManagement settings group, if configured.
 func applyBotManagementGroup(ctx context.Context, zoneClient cfclient.ZoneClient, zoneID string, bm *cloudflarev1alpha1.BotManagementSettings) groupResult {
 	g := groupResult{conditionType: cloudflarev1alpha1.ConditionTypeBotManagementApplied, groupLabel: "BotManagement"}
@@ -470,8 +525,9 @@ func hashZoneConfigSpec(spec *cloudflarev1alpha1.CloudflareZoneConfigSpec) strin
 		Security      *cloudflarev1alpha1.SecuritySettings      `json:"security,omitempty"`
 		Performance   *cloudflarev1alpha1.PerformanceSettings   `json:"performance,omitempty"`
 		Network       *cloudflarev1alpha1.NetworkSettings       `json:"network,omitempty"`
+		DNS           *cloudflarev1alpha1.DNSSettings           `json:"dns,omitempty"`
 		BotManagement *cloudflarev1alpha1.BotManagementSettings `json:"botManagement,omitempty"`
-	}{spec.SSL, spec.Security, spec.Performance, spec.Network, spec.BotManagement}
+	}{spec.SSL, spec.Security, spec.Performance, spec.Network, spec.DNS, spec.BotManagement}
 
 	// json.Marshal is deterministic for structs (field order is source order)
 	// and omits nil pointers via omitempty, so semantically equal specs hash equal.
