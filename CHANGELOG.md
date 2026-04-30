@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.6.2...v0.7.0) (2026-04-30)
+
+### Features
+
+* **crd:** close TF-parity gaps on CloudflareZoneConfig + Ruleset ([#57](https://github.com/jacaudi/cloudflare-operator/issues/57)) ([#61](https://github.com/jacaudi/cloudflare-operator/issues/61)) ([90f7e02](https://github.com/jacaudi/cloudflare-operator/commit/90f7e02e5f5632f4a88ab60c763698e50f261bfb))
+
 ## [0.6.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.6.1...v0.6.2) (2026-04-28)
 
 ### Bug Fixes
