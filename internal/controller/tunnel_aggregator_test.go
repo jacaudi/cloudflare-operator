@@ -60,7 +60,7 @@ func TestAggregate_SortAndRender(t *testing.T) {
 		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{URL: strPtr("https://envoy.network.svc:443")},
 	}
 
-	result := Aggregate(rules, routing)
+	result := Aggregate("test-tunnel-id", rules, routing)
 
 	if len(result.Rendered) == 0 {
 		t.Fatal("expected rendered bytes")
@@ -101,7 +101,7 @@ func TestAggregate_DuplicateHostname_FirstWriterWins(t *testing.T) {
 		ruleAt("later", "apps", late, 100, "home", []string{"dup.example.com"}, "http://b:8080"),
 		ruleAt("earlier", "apps", early, 100, "home", []string{"dup.example.com"}, "http://a:8080"),
 	}
-	result := Aggregate(rules, nil)
+	result := Aggregate("test-tunnel-id", rules, nil)
 
 	if result.Decisions[nn("apps", "earlier")].Status != RuleIncluded {
 		t.Errorf("earlier should win, got decision %+v", result.Decisions[nn("apps", "earlier")])
@@ -137,7 +137,7 @@ func TestAggregate_DuplicateHostname_SwapEvictsHigherPriority(t *testing.T) {
 		// Y: lower priority but earlier creation — wins the first-writer tiebreak.
 		ruleAt("y-low", "apps", early, 50, "home", []string{"a.example.com"}, "http://y:8080"),
 	}
-	result := Aggregate(rules, nil)
+	result := Aggregate("test-tunnel-id", rules, nil)
 
 	if got := result.Decisions[nn("apps", "y-low")].Status; got != RuleIncluded {
 		t.Errorf("y-low (earlier creationTimestamp) should be Included, got %v", got)
@@ -181,7 +181,7 @@ func TestAggregate_DuplicateHostname_ReleasedClaimReusable(t *testing.T) {
 		ruleAt("q", "apps", earliest, 200, "home", []string{"a.example.com"}, "http://q:8080"),
 		ruleAt("r", "apps", latest, 50, "home", []string{"b.example.com"}, "http://r:8080"),
 	}
-	result := Aggregate(rules, nil)
+	result := Aggregate("test-tunnel-id", rules, nil)
 
 	// P is evicted by Q (Q has earlier creationTimestamp).
 	if got := result.Decisions[nn("apps", "p")].Status; got != RuleDuplicateHostname {
@@ -222,7 +222,7 @@ func TestAggregate_HashStableAcrossShuffle(t *testing.T) {
 		ruleAt("b", "apps", t0, 100, "home", []string{"b.example.com"}, "http://b:8080"),
 		ruleAt("a", "apps", t0, 100, "home", []string{"a.example.com"}, "http://a:8080"),
 	}
-	if Aggregate(rulesA, nil).ConfigHash != Aggregate(rulesB, nil).ConfigHash {
+	if Aggregate("test-tunnel-id", rulesA, nil).ConfigHash != Aggregate("test-tunnel-id", rulesB, nil).ConfigHash {
 		t.Fatal("hash must be stable regardless of input order")
 	}
 }
@@ -239,8 +239,8 @@ func TestAggregate_HashChangesWithRouting(t *testing.T) {
 	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
 		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{URL: strPtr("https://default.svc:443")},
 	}
-	hashWithout := Aggregate(rules, nil).ConfigHash
-	hashWith := Aggregate(rules, routing).ConfigHash
+	hashWithout := Aggregate("test-tunnel-id", rules, nil).ConfigHash
+	hashWith := Aggregate("test-tunnel-id", rules, routing).ConfigHash
 	if hashWithout == hashWith {
 		t.Fatalf("ConfigHash must differ when routing.DefaultBackend changes; both = %s", hashWithout)
 	}
@@ -264,7 +264,7 @@ func TestAggregate_ResolvesServiceRef(t *testing.T) {
 			Priority: 100,
 		},
 	}
-	result := Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{r}, nil)
+	result := Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{r}, nil)
 	got := string(result.Rendered)
 	if !strings.Contains(got, "http://rickroll.selfhosted.svc.cluster.local:8080") {
 		t.Errorf("expected resolved serviceRef in render:\n%s", got)
@@ -287,7 +287,7 @@ func TestAggregate_RuleInvalid(t *testing.T) {
 			},
 		}
 		good := ruleAt("good", "apps", t0, 100, "home", []string{"good.example.com"}, "http://good:8080")
-		result := Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{bad, good}, nil)
+		result := Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{bad, good}, nil)
 
 		if got := result.Decisions[nn("apps", "bad")].Status; got != RuleInvalid {
 			t.Errorf("bad rule status = %v, want RuleInvalid", got)
@@ -317,7 +317,7 @@ func TestAggregate_RuleInvalid(t *testing.T) {
 				Priority: 100,
 			},
 		}
-		result := Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{bad}, nil)
+		result := Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{bad}, nil)
 
 		if got := result.Decisions[nn("apps", "bad")].Status; got != RuleInvalid {
 			t.Errorf("bad rule status = %v, want RuleInvalid", got)
@@ -344,7 +344,7 @@ func TestAggregate_WildcardSortsAfterSpecific(t *testing.T) {
 		ruleAt("alpha", "apps", t0, 100, "home", []string{"*.example.com"}, "http://alpha:8080"),
 		ruleAt("beta", "apps", t0, 100, "home", []string{"api.example.com"}, "http://beta:8080"),
 	}
-	result := Aggregate(rules, nil)
+	result := Aggregate("test-tunnel-id", rules, nil)
 
 	got := string(result.Rendered)
 	idxLiteral := strings.Index(got, "api.example.com")
@@ -378,7 +378,7 @@ func TestAggregate_WildcardSpecificityWithinRule(t *testing.T) {
 			[]string{"*.example.com", "api.example.com", "*.api.example.com"},
 			"http://mixed:8080"),
 	}
-	result := Aggregate(rules, nil)
+	result := Aggregate("test-tunnel-id", rules, nil)
 
 	got := string(result.Rendered)
 	idxLiteral := strings.Index(got, "api.example.com")
@@ -416,7 +416,7 @@ func TestAggregate_PriorityBeatsSpecificity(t *testing.T) {
 		ruleAt("wildcard-high", "apps", t0, 200, "home", []string{"*.example.com"}, "http://wild:8080"),
 		ruleAt("literal-low", "apps", t0, 100, "home", []string{"api.example.com"}, "http://lit:8080"),
 	}
-	result := Aggregate(rules, nil)
+	result := Aggregate("test-tunnel-id", rules, nil)
 
 	got := string(result.Rendered)
 	idxWildcard := strings.Index(got, "*.example.com")
@@ -491,7 +491,7 @@ func TestMergedOriginRequest(t *testing.T) {
 				OriginServerName: "tunnel.example.com",
 			},
 		}
-		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(nil)}, routing).Rendered)
+		got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{mkRule(nil)}, routing).Rendered)
 		if !strings.Contains(got, "originRequest:") {
 			t.Errorf("expected originRequest block in render:\n%s", got)
 		}
@@ -508,7 +508,7 @@ func TestMergedOriginRequest(t *testing.T) {
 			NoTLSVerify:      true,
 			OriginServerName: "rule.example.com",
 		}
-		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, nil).Rendered)
+		got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, nil).Rendered)
 		if !strings.Contains(got, "noTLSVerify: true") {
 			t.Errorf("expected rule noTLSVerify:true in render:\n%s", got)
 		}
@@ -530,7 +530,7 @@ func TestMergedOriginRequest(t *testing.T) {
 			OriginServerName: "rule.example.com",
 			// No HTTPHostHeader on rule — must NOT inherit from tunnel.
 		}
-		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, routing).Rendered)
+		got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, routing).Rendered)
 		if !strings.Contains(got, "originServerName: rule.example.com") {
 			t.Errorf("expected rule originServerName to win:\n%s", got)
 		}
@@ -556,7 +556,7 @@ func TestMergedOriginRequest(t *testing.T) {
 			NoTLSVerify:      false,
 			OriginServerName: "rule.example.com",
 		}
-		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, routing).Rendered)
+		got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{mkRule(own)}, routing).Rendered)
 		if strings.Contains(got, "noTLSVerify") {
 			t.Errorf("rule's NoTLSVerify=false must suppress the noTLSVerify line entirely (rule wins):\n%s", got)
 		}
@@ -566,7 +566,7 @@ func TestMergedOriginRequest(t *testing.T) {
 	})
 
 	t.Run("neither set: no originRequest block", func(t *testing.T) {
-		got := string(Aggregate([]cloudflarev1alpha1.CloudflareTunnelRule{mkRule(nil)}, nil).Rendered)
+		got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{mkRule(nil)}, nil).Rendered)
 		if strings.Contains(got, "originRequest") {
 			t.Errorf("did NOT expect originRequest block when neither side sets it:\n%s", got)
 		}
