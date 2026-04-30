@@ -55,6 +55,9 @@ func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloud
 	}
 	filtered := filterRulesForTunnel(ruleList.Items, tun.Name, tun.Namespace)
 
+	if tun.Status.TunnelID == "" {
+		return fmt.Errorf("render connector config: tunnel ID is empty on %s/%s", tun.Namespace, tun.Name)
+	}
 	agg := Aggregate(tun.Status.TunnelID, filtered, tun.Spec.Routing)
 
 	if tun.Spec.Connector != nil && tun.Spec.Connector.Enabled {

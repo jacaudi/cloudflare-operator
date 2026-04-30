@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
@@ -705,6 +706,28 @@ func TestReconcileAggregation_ResolvedBackendClearedOnNonIncluded(t *testing.T) 
 	// Confirm it is indeed a DuplicateHostname decision (TunnelAccepted=False, Conflict=True).
 	assertCondition(t, ur2.Status.Conditions, cloudflarev1alpha1.ConditionTypeTunnelAccepted, metav1.ConditionFalse)
 	assertCondition(t, ur2.Status.Conditions, cloudflarev1alpha1.ConditionTypeConflict, metav1.ConditionTrue)
+}
+
+// TestReconcileAggregation_EmptyTunnelIDFailsLoud verifies that
+// ReconcileConnectorAndRules returns a clear error when Status.TunnelID
+// is empty, rather than rendering an invalid config.yaml. The gating
+// invariant at the controller level should make this unreachable in
+// practice; this is defense-in-depth.
+func TestReconcileAggregation_EmptyTunnelIDFailsLoud(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	tun.Status.TunnelID = "" // simulate the broken invariant
+	c := buildAggFakeClient(tun)
+
+	err := ReconcileConnectorAndRules(context.Background(), c, tun, nil)
+	if err == nil {
+		t.Fatal("expected an error when Status.TunnelID is empty, got nil")
+	}
+	if !strings.Contains(err.Error(), "tunnel ID is empty") {
+		t.Errorf("error %q does not mention empty tunnel ID", err)
+	}
+	if !strings.Contains(err.Error(), "network/home") {
+		t.Errorf("error %q should be self-locating (mention namespace/name): want substring %q", err, "network/home")
+	}
 }
 
 // ---- P2.7 AppliedToConfigHash -------------------------------------------
