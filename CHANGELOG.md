@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.1...v0.7.2) (2026-05-01)
+
+### Bug Fixes
+
+* **deps:** update module github.com/cloudflare/cloudflare-go/v6 to v6.10.0 ([ee06089](https://github.com/jacaudi/cloudflare-operator/commit/ee06089394aa6b0383609c8059b68f8162e455ae))
+* **deps:** update test-libraries ([722cd83](https://github.com/jacaudi/cloudflare-operator/commit/722cd832afa8e11913e9ac08ec5cee00e66f2230))
+
 ## [0.7.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.0...v0.7.1) (2026-05-01)
 
 ### Bug Fixes
