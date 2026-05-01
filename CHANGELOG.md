@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.9.1...v0.9.2) (2026-05-01)
+
+### Bug Fixes
+
+* **connector:** httpGet readiness probe + safe rollout ([#75](https://github.com/jacaudi/cloudflare-operator/issues/75), [#76](https://github.com/jacaudi/cloudflare-operator/issues/76)) ([1dcbfcc](https://github.com/jacaudi/cloudflare-operator/commit/1dcbfcc2c6f716eb4bb5efb7b1f63928b6350b29))
+
 ## [0.9.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.9.0...v0.9.1) (2026-05-01)
 
 ### Bug Fixes
