@@ -288,6 +288,85 @@ func TestAggregate_DefaultBackendWithRules(t *testing.T) {
 	}
 }
 
+// TestAggregate_DefaultBackendInheritsOriginRequest verifies that tunnel-level
+// routing.originRequest defaults are applied to the defaultBackend catch-all
+// (#81). Without this, defaultBackend silently ignores originServerName /
+// noTLSVerify / httpHostHeader, breaking SNI-sensitive upstreams (e.g. Envoy
+// Gateway) that need a non-default originServerName on the TLS handshake.
+func TestAggregate_DefaultBackendInheritsOriginRequest(t *testing.T) {
+	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+		OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			OriginServerName: "tunnel.example.com",
+			HTTPHostHeader:   "tunnel-host",
+		},
+	}
+	got := string(Aggregate("test-tunnel-id", nil, routing).Rendered)
+
+	if !strings.Contains(got, "- service: https://default.example.com\n") {
+		t.Fatalf("rendered config missing defaultBackend entry:\n%s", got)
+	}
+	if !strings.Contains(got, "originRequest:") {
+		t.Errorf("expected originRequest block under defaultBackend (#81):\n%s", got)
+	}
+	if !strings.Contains(got, "originServerName: tunnel.example.com") {
+		t.Errorf("expected tunnel originServerName under defaultBackend (#81):\n%s", got)
+	}
+	if !strings.Contains(got, "httpHostHeader: tunnel-host") {
+		t.Errorf("expected tunnel httpHostHeader under defaultBackend (#81):\n%s", got)
+	}
+	// The originRequest block must be associated with the defaultBackend entry,
+	// i.e. appear after the "- service:" line, not before.
+	svcIdx := strings.Index(got, "- service: https://default.example.com")
+	oreqIdx := strings.Index(got, "originRequest:")
+	if svcIdx < 0 || oreqIdx < 0 || oreqIdx < svcIdx {
+		t.Errorf("originRequest must follow defaultBackend service line:\n%s", got)
+	}
+}
+
+// TestAggregate_DefaultBackendNoOriginRequest verifies that the defaultBackend
+// arm does not emit a stray originRequest block when no tunnel-level
+// originRequest is configured (regression guard for #81 fix).
+func TestAggregate_DefaultBackendNoOriginRequest(t *testing.T) {
+	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+	}
+	got := string(Aggregate("test-tunnel-id", nil, routing).Rendered)
+	if strings.Contains(got, "originRequest") {
+		t.Errorf("did NOT expect originRequest block when tunnel originRequest is unset:\n%s", got)
+	}
+}
+
+// TestAggregate_HashChangesWithDefaultBackendOriginRequest locks in that
+// changes to routing.OriginRequest are reflected in ConfigHash even when the
+// tunnel has no rules and only a defaultBackend — otherwise the tunnel
+// controller's rollout-on-hash-change would miss originRequest edits and
+// SNI/host-header changes would silently fail to roll out (#81).
+func TestAggregate_HashChangesWithDefaultBackendOriginRequest(t *testing.T) {
+	base := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+	}
+	with := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+		OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			OriginServerName: "tunnel.example.com",
+		},
+	}
+	hashWithout := Aggregate("test-tunnel-id", nil, base).ConfigHash
+	hashWith := Aggregate("test-tunnel-id", nil, with).ConfigHash
+	if hashWithout == hashWith {
+		t.Fatalf("ConfigHash must differ when routing.OriginRequest changes; both = %s", hashWithout)
+	}
+}
+
 // TestAggregate_HashChangesWithRouting locks in that routing.DefaultBackend
 // participates in the rendered config and therefore the ConfigHash. If this
 // test ever passes for the wrong reason (i.e. hashes match), the rollout
