@@ -574,6 +574,88 @@ func TestBuildConnectorPodDisruptionBudget_NameOverride(t *testing.T) {
 	}
 }
 
+// TestBuildConnectorDeployment_DefaultTSC_AppliedAtReplicas2 asserts the
+// default soft per-hostname topologySpreadConstraint is injected when the
+// user has not set spec.connector.affinity or spec.connector.topologySpreadConstraints.
+func TestBuildConnectorDeployment_DefaultTSC_AppliedAtReplicas2(t *testing.T) {
+	tun := tunnelFixture(true) // Replicas == 2, no affinity, no TSC
+	dep := BuildConnectorDeployment(tun, "h")
+	tsc := dep.Spec.Template.Spec.TopologySpreadConstraints
+	if len(tsc) != 1 {
+		t.Fatalf("expected 1 default TSC, got %d: %+v", len(tsc), tsc)
+	}
+	c := tsc[0]
+	if c.MaxSkew != 1 {
+		t.Errorf("MaxSkew = %d, want 1", c.MaxSkew)
+	}
+	if c.TopologyKey != "kubernetes.io/hostname" {
+		t.Errorf("TopologyKey = %q, want kubernetes.io/hostname", c.TopologyKey)
+	}
+	if c.WhenUnsatisfiable != corev1.ScheduleAnyway {
+		t.Errorf("WhenUnsatisfiable = %v, want ScheduleAnyway", c.WhenUnsatisfiable)
+	}
+	if c.LabelSelector == nil || !reflect.DeepEqual(c.LabelSelector.MatchLabels, connectorLabels(tun)) {
+		t.Errorf("LabelSelector.MatchLabels = %v, want %v", c.LabelSelector, connectorLabels(tun))
+	}
+}
+
+// TestBuildConnectorDeployment_DefaultTSC_NotAppliedAtReplicasOne asserts
+// no default TSC is injected at replicas==1 (TSC across one pod is meaningless).
+func TestBuildConnectorDeployment_DefaultTSC_NotAppliedAtReplicasOne(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Replicas = 1
+	dep := BuildConnectorDeployment(tun, "h")
+	if got := dep.Spec.Template.Spec.TopologySpreadConstraints; len(got) != 0 {
+		t.Errorf("expected no TSC at replicas==1, got %+v", got)
+	}
+}
+
+// TestBuildConnectorDeployment_DefaultTSC_RespectUserAffinity asserts the
+// default TSC is NOT injected when the user has set spec.connector.affinity.
+// Any user customization disables the default wholesale (least-surprise rule
+// from the design doc).
+func TestBuildConnectorDeployment_DefaultTSC_RespectUserAffinity(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Affinity = &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: []corev1.NodeSelectorRequirement{{
+						Key:      "node-role.kubernetes.io/worker",
+						Operator: corev1.NodeSelectorOpExists,
+					}},
+				}},
+			},
+		},
+	}
+	dep := BuildConnectorDeployment(tun, "h")
+	if got := dep.Spec.Template.Spec.TopologySpreadConstraints; len(got) != 0 {
+		t.Errorf("expected no default TSC when Affinity is set, got %+v", got)
+	}
+	// User Affinity must still flow through.
+	if dep.Spec.Template.Spec.Affinity == nil {
+		t.Error("user-supplied Affinity dropped from podSpec")
+	}
+}
+
+// TestBuildConnectorDeployment_DefaultTSC_RespectUserTSC asserts user-supplied
+// TopologySpreadConstraints land verbatim with no default appended.
+func TestBuildConnectorDeployment_DefaultTSC_RespectUserTSC(t *testing.T) {
+	tun := tunnelFixture(true)
+	userTSC := []corev1.TopologySpreadConstraint{{
+		MaxSkew:           2,
+		TopologyKey:       "topology.kubernetes.io/zone",
+		WhenUnsatisfiable: corev1.DoNotSchedule,
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+	}}
+	tun.Spec.Connector.TopologySpreadConstraints = userTSC
+	dep := BuildConnectorDeployment(tun, "h")
+	got := dep.Spec.Template.Spec.TopologySpreadConstraints
+	if !reflect.DeepEqual(got, userTSC) {
+		t.Errorf("user TSC altered: got %+v, want %+v", got, userTSC)
+	}
+}
+
 // TestBuildConnectorDeployment_ArgsExact pins the cloudflared Args. The
 // credentials path is in config.yaml (see Aggregate), so --credentials-file
 // must NOT appear in Args (#58 follow-up: single source of truth for
