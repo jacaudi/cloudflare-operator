@@ -1152,6 +1152,99 @@ func TestCloudflareTunnel_NoPDBAtReplicasOne(t *testing.T) {
 	}
 }
 
+// TestCloudflareTunnel_PDBIdempotentUpdate exercises the default branch of
+// applyOwnedPDB's switch — the path where a PDB already exists, ownership
+// passes, and Spec/Labels/OwnerReferences are re-applied and Update is called.
+// This is the path that fires on every steady-state reconcile after the first.
+func TestCloudflareTunnel_PDBIdempotentUpdate(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true) // Replicas==2 → PDB desired
+	c := buildAggFakeClient(tun)
+
+	// First reconcile: creates the PDB.
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("first ReconcileConnectorAndRules: %v", err)
+	}
+
+	n := ConnectorNames(tun)
+	var pdbAfterCreate policyv1.PodDisruptionBudget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: n.PodDisruptionBudget}, &pdbAfterCreate); err != nil {
+		t.Fatalf("PDB not found after first reconcile: %v", err)
+	}
+
+	// Second reconcile: PDB exists → must hit the default (update) branch.
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("second ReconcileConnectorAndRules: %v", err)
+	}
+
+	// Assert PDB still exists with the correct shape after the update path.
+	var pdb policyv1.PodDisruptionBudget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: n.PodDisruptionBudget}, &pdb); err != nil {
+		t.Fatalf("expected PDB to exist after second reconcile: %v", err)
+	}
+
+	// MinAvailable must be 1.
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("MinAvailable = %v, want 1", pdb.Spec.MinAvailable)
+	}
+
+	// Selector.MatchLabels must match the canonical four connectorLabels.
+	wantSelectorLabels := map[string]string{
+		"app.kubernetes.io/name":       "cloudflared",
+		"app.kubernetes.io/instance":   tun.Name,
+		"app.kubernetes.io/managed-by": "cloudflare-operator",
+		"cloudflare.io/tunnel":         tun.Name,
+	}
+	if pdb.Spec.Selector == nil {
+		t.Fatal("PDB Spec.Selector is nil after update")
+	}
+	if !reflect.DeepEqual(pdb.Spec.Selector.MatchLabels, wantSelectorLabels) {
+		t.Errorf("Selector.MatchLabels = %v, want %v", pdb.Spec.Selector.MatchLabels, wantSelectorLabels)
+	}
+
+	// OwnerReferences must point back to the tunnel with Controller=true, BlockOwnerDeletion=true.
+	if len(pdb.OwnerReferences) != 1 || pdb.OwnerReferences[0].UID != tun.UID {
+		t.Errorf("OwnerReferences missing or wrong tunnel UID: %+v", pdb.OwnerReferences)
+	}
+	ref := pdb.OwnerReferences[0]
+	if ref.Controller == nil || !*ref.Controller {
+		t.Errorf("OwnerReferences[0].Controller = %v, want true", ref.Controller)
+	}
+	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
+		t.Errorf("OwnerReferences[0].BlockOwnerDeletion = %v, want true", ref.BlockOwnerDeletion)
+	}
+}
+
+// TestCloudflareTunnel_PDBOwnershipGuard asserts applyOwnedPDB refuses to
+// adopt a pre-existing PDB at the standard name that isn't owner-referenced
+// by this tunnel. The error must satisfy errors.Is(err, ErrUnownedPDB).
+func TestCloudflareTunnel_PDBOwnershipGuard(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true) // Replicas==2 → PDB desired
+	n := ConnectorNames(tun)
+
+	// Pre-create a PDB at the standard name owned by a DIFFERENT tunnel.
+	preExisting := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      n.PodDisruptionBudget,
+			Namespace: tun.Namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: cloudflarev1alpha1.GroupVersion.String(),
+				Kind:       "CloudflareTunnel",
+				Name:       "other-tunnel",
+				UID:        "different-tunnel-uid",
+			}},
+		},
+	}
+	c := buildAggFakeClient(tun, preExisting)
+
+	err := ReconcileConnectorAndRules(context.Background(), c, tun, nil)
+	if err == nil {
+		t.Fatal("expected error for unowned PDB, got nil")
+	}
+	if !errors.Is(err, ErrUnownedPDB) {
+		t.Errorf("expected errors.Is(err, ErrUnownedPDB), got: %v", err)
+	}
+}
+
 // TestApplyOwned_RetriesOnServiceAccountConflict verifies the same recovery
 // for the ServiceAccount Update path.
 func TestApplyOwned_RetriesOnServiceAccountConflict(t *testing.T) {
