@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.8.1...v0.9.0) (2026-05-01)
+
+### Features
+
+* **connector:** add spec.connector.nameOverride to customize resource names ([#68](https://github.com/jacaudi/cloudflare-operator/issues/68)) ([0f87275](https://github.com/jacaudi/cloudflare-operator/commit/0f87275f6867e30c493307a8912db6b98548f4ac))
+
 ## [0.8.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.8.0...v0.8.1) (2026-05-01)
 
 ### Bug Fixes
