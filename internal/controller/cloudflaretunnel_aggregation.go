@@ -103,12 +103,13 @@ func filterRulesForTunnel(all []cloudflarev1alpha1.CloudflareTunnelRule, tunnelN
 // reconcileConnectorResources reconciles the ServiceAccount, ConfigMap, and
 // Deployment for the operator-managed cloudflared workload.
 //
-// The Deployment update path uses retry.RetryOnConflict to absorb transient
-// optimistic-concurrency conflicts (kube-side metadata bumps between our
-// Get and Update). Without this, sustained conflicts propagate as reconcile
-// errors, the controller workqueue rate-limiter applies exponential backoff
-// up to ~16 minutes, and downstream events (e.g. CR deletion) sit behind
-// that backoff until the operator pod is restarted (#59).
+// All three apply paths absorb transient optimistic-concurrency conflicts
+// in-process via retry.RetryOnConflict (see applyOwned for the SA + ConfigMap
+// path; the Deployment path retries inline below). Without this, sustained
+// conflicts propagate as reconcile errors, the controller workqueue
+// rate-limiter applies exponential backoff up to ~16 minutes, and downstream
+// events (e.g. CR deletion) sit behind that backoff until the operator pod
+// is restarted (#59).
 func reconcileConnectorResources(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel, agg AggregationResult) error {
 	sa := BuildConnectorServiceAccount(tun)
 	if err := applyOwned(ctx, c, sa, &corev1.ServiceAccount{}); err != nil {
