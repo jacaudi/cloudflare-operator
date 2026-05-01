@@ -161,10 +161,11 @@ func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1
 	desired := BuildConnectorPodDisruptionBudget(tun)
 	name := ConnectorNames(tun).PodDisruptionBudget
 
-	var existing policyv1.PodDisruptionBudget
-	getErr := c.Get(ctx, types.NamespacedName{Name: name, Namespace: tun.Namespace}, &existing)
-
 	if desired == nil {
+		// Ensure absent: single Get + Delete; no retry needed because the
+		// existing-state check already handled the race at the call site.
+		var existing policyv1.PodDisruptionBudget
+		getErr := c.Get(ctx, types.NamespacedName{Name: name, Namespace: tun.Namespace}, &existing)
 		if errors.IsNotFound(getErr) {
 			return nil
 		}
@@ -177,24 +178,24 @@ func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1
 		return nil
 	}
 
-	if errors.IsNotFound(getErr) {
-		if createErr := c.Create(ctx, desired); createErr != nil {
-			return fmt.Errorf("create PDB %s/%s: %w", tun.Namespace, name, createErr)
-		}
-		return nil
-	}
-	if getErr != nil {
-		return fmt.Errorf("get PDB %s/%s: %w", tun.Namespace, name, getErr)
-	}
-
+	// Ensure present: re-fetch inside the retry closure on every iteration so
+	// that a genuine optimistic-concurrency conflict can be healed. Mirrors the
+	// Deployment apply idiom in reconcileConnectorResources.
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		existing.Spec = desired.Spec
-		existing.Labels = desired.Labels
-		existing.OwnerReferences = desired.OwnerReferences
-		if updateErr := c.Update(ctx, &existing); updateErr != nil {
-			return fmt.Errorf("update PDB %s/%s: %w", tun.Namespace, name, updateErr)
+		var existing policyv1.PodDisruptionBudget
+		err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: tun.Namespace}, &existing)
+		switch {
+		case errors.IsNotFound(err):
+			// Race: PDB was deleted between the outer nil-check and now. Create.
+			return c.Create(ctx, desired)
+		case err != nil:
+			return fmt.Errorf("get PDB %s/%s: %w", tun.Namespace, name, err)
+		default:
+			existing.Spec = desired.Spec
+			existing.Labels = desired.Labels
+			existing.OwnerReferences = desired.OwnerReferences
+			return c.Update(ctx, &existing)
 		}
-		return nil
 	})
 }
 
