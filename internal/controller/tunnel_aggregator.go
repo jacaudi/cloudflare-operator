@@ -43,7 +43,7 @@ const (
 
 // originRequestHeader is the literal indented header line written before any
 // originRequest field rendering. Centralising the string lets the empty-block
-// guard (in mergedOriginRequest) compare lengths against the header, instead
+// guard (in renderOriginRequest) compare lengths against the header, instead
 // of duplicating the literal — so changes to indent don't silently break
 // suppression.
 const originRequestHeader = "    originRequest:\n"
@@ -225,6 +225,13 @@ func Aggregate(tunnelID string, rules []cloudflarev1alpha1.CloudflareTunnelRule,
 	switch {
 	case routing != nil && routing.DefaultBackend != nil:
 		fmt.Fprintf(&b, "  - service: %s\n", renderBackend(routing.DefaultBackend, ""))
+		// defaultBackend inherits tunnel-level originRequest defaults; without
+		// this the catch-all silently ignores originServerName / noTLSVerify /
+		// httpHostHeader (#81) and SNI-sensitive upstreams (e.g. Envoy Gateway)
+		// reset every connection.
+		if routing.OriginRequest != nil {
+			b.WriteString(renderOriginRequest(routing.OriginRequest))
+		}
 	default:
 		b.WriteString("  - service: http_status:404\n")
 	}
@@ -372,26 +379,35 @@ func mergedOriginRequest(r *cloudflarev1alpha1.CloudflareTunnelRule, routing *cl
 		// Rule wins on all fields when it has an explicit OriginRequest block.
 		merge = *own
 	}
+	return renderOriginRequest(&merge)
+}
 
+// renderOriginRequest formats a TunnelRuleOriginRequest as the indented
+// cloudflared YAML block. Returns "" when o is nil or every field is zero, so
+// the caller emits nothing — avoids a dangling "originRequest:\n" with no
+// fields underneath. Used by both the per-rule merge path (mergedOriginRequest)
+// and the defaultBackend arm in Aggregate (#81), which has no rule-level
+// overrides and inherits tunnel defaults directly.
+func renderOriginRequest(o *cloudflarev1alpha1.TunnelRuleOriginRequest) string {
+	if o == nil {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString(originRequestHeader)
-	if merge.NoTLSVerify {
+	if o.NoTLSVerify {
 		b.WriteString("      noTLSVerify: true\n")
 	}
-	if merge.OriginServerName != "" {
-		fmt.Fprintf(&b, "      originServerName: %s\n", merge.OriginServerName)
+	if o.OriginServerName != "" {
+		fmt.Fprintf(&b, "      originServerName: %s\n", o.OriginServerName)
 	}
-	if merge.ConnectTimeout != nil {
+	if o.ConnectTimeout != nil {
 		// cloudflared accepts Go's time.Duration string format here
 		// (e.g. "30s", "1m30s") for connectTimeout.
-		fmt.Fprintf(&b, "      connectTimeout: %s\n", merge.ConnectTimeout.Duration.String())
+		fmt.Fprintf(&b, "      connectTimeout: %s\n", o.ConnectTimeout.Duration.String())
 	}
-	if merge.HTTPHostHeader != "" {
-		fmt.Fprintf(&b, "      httpHostHeader: %s\n", merge.HTTPHostHeader)
+	if o.HTTPHostHeader != "" {
+		fmt.Fprintf(&b, "      httpHostHeader: %s\n", o.HTTPHostHeader)
 	}
-	// Empty-block suppression: if only the header was written (every merged
-	// field is zero), return "" so the caller emits nothing — avoids a
-	// dangling "originRequest:\n" with no fields underneath.
 	if b.Len() == len(originRequestHeader) {
 		return ""
 	}
