@@ -18,9 +18,11 @@ package controller
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -348,7 +350,9 @@ func TestBuildConnectorDeployment_SecurityPosture(t *testing.T) {
 }
 
 // TestBuildConnectorDeployment_ReadinessProbe asserts the cloudflared
-// readiness probe is wired correctly so failing connectors are flagged unready.
+// readiness probe targets the metrics server's /ready endpoint via httpGet.
+// The exec form is rejected by current cloudflared releases without --metrics
+// on the CLI; httpGet is the stable, documented surface (see issue #76).
 func TestBuildConnectorDeployment_ReadinessProbe(t *testing.T) {
 	tun := tunnelFixture(true)
 	dep := BuildConnectorDeployment(tun, "h")
@@ -359,15 +363,71 @@ func TestBuildConnectorDeployment_ReadinessProbe(t *testing.T) {
 	if probe == nil {
 		t.Fatal("ReadinessProbe is nil")
 	}
-	if probe.Exec == nil {
-		t.Fatal("ReadinessProbe.Exec is nil")
+	if probe.HTTPGet == nil {
+		t.Fatal("ReadinessProbe.HTTPGet is nil; want httpGet probe (issue #76)")
 	}
-	wantCmd := []string{"cloudflared", "tunnel", "--config", "/etc/cloudflared/config.yaml", "ready"}
-	if !reflect.DeepEqual(probe.Exec.Command, wantCmd) {
-		t.Errorf("ReadinessProbe.Exec.Command = %v, want %v", probe.Exec.Command, wantCmd)
+	if probe.HTTPGet.Path != "/ready" {
+		t.Errorf("ReadinessProbe.HTTPGet.Path = %q, want /ready", probe.HTTPGet.Path)
+	}
+	if probe.HTTPGet.Port.IntValue() != connectorMetricsPort {
+		t.Errorf("ReadinessProbe.HTTPGet.Port = %v, want %d", probe.HTTPGet.Port, connectorMetricsPort)
 	}
 	if probe.PeriodSeconds != 10 {
 		t.Errorf("ReadinessProbe.PeriodSeconds = %d, want 10", probe.PeriodSeconds)
+	}
+}
+
+// TestBuildConnectorDeployment_MetricsArgsAndPort asserts cloudflared is
+// started with --metrics bound on the well-known port and that the matching
+// containerPort is declared. Both are required for the readiness probe to
+// resolve and for ServiceMonitor scrapes to land.
+func TestBuildConnectorDeployment_MetricsArgsAndPort(t *testing.T) {
+	tun := tunnelFixture(true)
+	dep := BuildConnectorDeployment(tun, "h")
+	c := dep.Spec.Template.Spec.Containers[0]
+
+	wantArg := "0.0.0.0:" + strconv.Itoa(connectorMetricsPort)
+	foundMetricsFlag := false
+	for i, a := range c.Args {
+		if a == "--metrics" {
+			if i+1 < len(c.Args) && c.Args[i+1] == wantArg {
+				foundMetricsFlag = true
+			}
+			break
+		}
+	}
+	if !foundMetricsFlag {
+		t.Errorf("Args = %v; expected '--metrics %s' (issue #76)", c.Args, wantArg)
+	}
+
+	if len(c.Ports) != 1 || c.Ports[0].Name != "metrics" || c.Ports[0].ContainerPort != connectorMetricsPort {
+		t.Errorf("expected single 'metrics' containerPort %d, got %v", connectorMetricsPort, c.Ports)
+	}
+}
+
+// TestBuildConnectorDeployment_RolloutStrategy asserts the Deployment uses an
+// explicit RollingUpdate with maxUnavailable=maxSurge=1 and a 10s
+// minReadySeconds grace period, so single-replica image upgrades surge-then-
+// terminate and never run zero ready tunnels (issue #75).
+func TestBuildConnectorDeployment_RolloutStrategy(t *testing.T) {
+	tun := tunnelFixture(true)
+	dep := BuildConnectorDeployment(tun, "h")
+
+	if dep.Spec.Strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+		t.Errorf("Strategy.Type = %v, want RollingUpdate", dep.Spec.Strategy.Type)
+	}
+	ru := dep.Spec.Strategy.RollingUpdate
+	if ru == nil {
+		t.Fatal("Strategy.RollingUpdate is nil")
+	}
+	if ru.MaxUnavailable == nil || ru.MaxUnavailable.IntValue() != 1 {
+		t.Errorf("Strategy.RollingUpdate.MaxUnavailable = %v, want 1", ru.MaxUnavailable)
+	}
+	if ru.MaxSurge == nil || ru.MaxSurge.IntValue() != 1 {
+		t.Errorf("Strategy.RollingUpdate.MaxSurge = %v, want 1", ru.MaxSurge)
+	}
+	if dep.Spec.MinReadySeconds != 10 {
+		t.Errorf("MinReadySeconds = %d, want 10", dep.Spec.MinReadySeconds)
 	}
 }
 
@@ -428,15 +488,20 @@ func TestBuildConnectorDeployment_PartialResources_LimitsOnly(t *testing.T) {
 	}
 }
 
-// TestBuildConnectorDeployment_ArgsExact pins the cloudflared Args to
-// [tunnel, --config, /etc/cloudflared/config.yaml, run]. The credentials
-// path is in config.yaml (see Aggregate), so --credentials-file must NOT
-// appear in Args (#58 follow-up: single source of truth for identity).
+// TestBuildConnectorDeployment_ArgsExact pins the cloudflared Args. The
+// credentials path is in config.yaml (see Aggregate), so --credentials-file
+// must NOT appear in Args (#58 follow-up: single source of truth for
+// identity). --metrics is required for the readiness probe to resolve (#76).
 func TestBuildConnectorDeployment_ArgsExact(t *testing.T) {
 	tun := tunnelFixture(true)
 	dep := BuildConnectorDeployment(tun, "h")
 	got := dep.Spec.Template.Spec.Containers[0].Args
-	want := []string{"tunnel", "--config", "/etc/cloudflared/config.yaml", "run"}
+	want := []string{
+		"tunnel",
+		"--config", "/etc/cloudflared/config.yaml",
+		"--metrics", "0.0.0.0:" + strconv.Itoa(connectorMetricsPort),
+		"run",
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Args = %v, want %v", got, want)
 	}
