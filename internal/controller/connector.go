@@ -22,6 +22,7 @@ import (
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -47,9 +48,10 @@ const DefaultConnectorImage = defaultConnectorRepo + ":" + defaultConnectorTag
 // ConnectorResourceNames are the deterministic names of the resources the
 // connector sub-reconciler manages for a given CloudflareTunnel.
 type ConnectorResourceNames struct {
-	Deployment     string
-	ConfigMap      string
-	ServiceAccount string
+	Deployment          string
+	ConfigMap           string
+	ServiceAccount      string
+	PodDisruptionBudget string
 }
 
 // ConnectorNames returns the deterministic resource names for tun.
@@ -64,9 +66,10 @@ func ConnectorNames(tun *cloudflarev1alpha1.CloudflareTunnel) ConnectorResourceN
 		base = tun.Spec.Connector.NameOverride
 	}
 	return ConnectorResourceNames{
-		Deployment:     base,
-		ConfigMap:      base + "-config",
-		ServiceAccount: base,
+		Deployment:          base,
+		ConfigMap:           base + "-config",
+		ServiceAccount:      base,
+		PodDisruptionBudget: base + "-pdb",
 	}
 }
 
@@ -145,6 +148,41 @@ func BuildConnectorConfigMap(tun *cloudflarev1alpha1.CloudflareTunnel, renderedC
 		},
 		Data: map[string]string{
 			"config.yaml": string(renderedConfig),
+		},
+	}
+}
+
+// BuildConnectorPodDisruptionBudget returns the PDB that protects the
+// cloudflared connector deployment from voluntary disruption (node drain,
+// autoscaler scale-down, manual evict).
+//
+// Returns nil when:
+//   - tun.Spec.Connector is unset (connector disabled), or
+//   - replicas < 2.
+//
+// At replicas == 1 a minAvailable:1 PDB blocks all voluntary disruptions
+// (strictly worse than no PDB) and maxUnavailable:1 permits all evictions
+// (no protection). Skipping the PDB entirely is the correct call. The
+// reconciler treats nil as "ensure absent" so transitions from replicas:2
+// to replicas:1 cleanly delete the PDB.
+func BuildConnectorPodDisruptionBudget(tun *cloudflarev1alpha1.CloudflareTunnel) *policyv1.PodDisruptionBudget {
+	if tun.Spec.Connector == nil || tun.Spec.Connector.Replicas < 2 {
+		return nil
+	}
+	n := ConnectorNames(tun)
+	minAvail := intstr.FromInt(1)
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            n.PodDisruptionBudget,
+			Namespace:       tun.Namespace,
+			Labels:          connectorLabels(tun),
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MinAvailable: &minAvail,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: connectorLabels(tun),
+			},
 		},
 	}
 }

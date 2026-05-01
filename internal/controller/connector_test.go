@@ -488,6 +488,73 @@ func TestBuildConnectorDeployment_PartialResources_LimitsOnly(t *testing.T) {
 	}
 }
 
+// TestBuildConnectorPodDisruptionBudget_NilWhenReplicasOne asserts the build
+// function returns nil at replicas==1 so the reconciler treats this as
+// "ensure absent" — a minAvailable:1 PDB on a single-replica deployment
+// blocks all voluntary disruptions and is strictly worse than no PDB.
+func TestBuildConnectorPodDisruptionBudget_NilWhenReplicasOne(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.Replicas = 1
+	if got := BuildConnectorPodDisruptionBudget(tun); got != nil {
+		t.Errorf("expected nil at replicas==1, got %+v", got)
+	}
+}
+
+// TestBuildConnectorPodDisruptionBudget_NilWhenConnectorNil covers the
+// defensive case where Spec.Connector is unset (connector disabled).
+func TestBuildConnectorPodDisruptionBudget_NilWhenConnectorNil(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector = nil
+	if got := BuildConnectorPodDisruptionBudget(tun); got != nil {
+		t.Errorf("expected nil when connector spec absent, got %+v", got)
+	}
+}
+
+// TestBuildConnectorPodDisruptionBudget_AtReplicasTwo locks the shape:
+// minAvailable=1, selector matches connector labels exactly, owner-ref to
+// the tunnel, name picks up the standard "<base>-pdb" suffix.
+func TestBuildConnectorPodDisruptionBudget_AtReplicasTwo(t *testing.T) {
+	tun := tunnelFixture(true) // Replicas == 2 in the fixture
+	pdb := BuildConnectorPodDisruptionBudget(tun)
+	if pdb == nil {
+		t.Fatal("expected non-nil PDB at replicas==2")
+	}
+	if pdb.Name != "home-connector-pdb" {
+		t.Errorf("Name = %q, want %q", pdb.Name, "home-connector-pdb")
+	}
+	if pdb.Namespace != tun.Namespace {
+		t.Errorf("Namespace = %q, want %q", pdb.Namespace, tun.Namespace)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("MinAvailable = %v, want 1", pdb.Spec.MinAvailable)
+	}
+	if pdb.Spec.MaxUnavailable != nil {
+		t.Errorf("MaxUnavailable = %v, want nil (we set MinAvailable)", pdb.Spec.MaxUnavailable)
+	}
+	wantSelector := connectorLabels(tun)
+	if !reflect.DeepEqual(pdb.Spec.Selector.MatchLabels, wantSelector) {
+		t.Errorf("Selector.MatchLabels = %v, want %v", pdb.Spec.Selector.MatchLabels, wantSelector)
+	}
+	if len(pdb.OwnerReferences) != 1 || pdb.OwnerReferences[0].UID != tun.UID {
+		t.Errorf("OwnerReferences missing tunnel ref: %+v", pdb.OwnerReferences)
+	}
+}
+
+// TestBuildConnectorPodDisruptionBudget_NameOverride verifies that
+// spec.connector.nameOverride flows through to the PDB name (since
+// ConnectorNames.PodDisruptionBudget derives from the same base).
+func TestBuildConnectorPodDisruptionBudget_NameOverride(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.NameOverride = "cloudflared-prod"
+	pdb := BuildConnectorPodDisruptionBudget(tun)
+	if pdb == nil {
+		t.Fatal("expected non-nil PDB at replicas==2")
+	}
+	if pdb.Name != "cloudflared-prod-pdb" {
+		t.Errorf("Name = %q, want %q", pdb.Name, "cloudflared-prod-pdb")
+	}
+}
+
 // TestBuildConnectorDeployment_ArgsExact pins the cloudflared Args. The
 // credentials path is in config.yaml (see Aggregate), so --credentials-file
 // must NOT appear in Args (#58 follow-up: single source of truth for
