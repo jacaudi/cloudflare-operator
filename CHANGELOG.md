@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.10.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.0...v0.10.1) (2026-05-01)
+
 ## [0.10.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.9.2...v0.10.0) (2026-05-01)
 
 * feat(sources)!: rename emitted CR names to <kind>-<source-name>-<hash>[-txt] ([#71](https://github.com/jacaudi/cloudflare-operator/issues/71)) ([2d74b23](https://github.com/jacaudi/cloudflare-operator/commit/2d74b23c3146d2d9c43d49395fb21bcea6b023ff))
