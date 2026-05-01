@@ -120,6 +120,18 @@ rbac:
             - get
             - list
             - watch
+        - apiGroups:
+            - policy
+          resources:
+            - poddisruptionbudgets
+          verbs:
+            - create
+            - delete
+            - get
+            - list
+            - patch
+            - update
+            - watch
 {{- if .Values.leaderElection.enabled }}
     leader-election:
       enabled: true
