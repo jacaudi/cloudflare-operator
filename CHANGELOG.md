@@ -1,12 +1,10 @@
 # Changelog
 
-## [0.10.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.1...v0.10.2) (2026-05-01)
+## [0.10.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.0...v0.10.2) (2026-05-01)
 
 ### Bug Fixes
 
 * **tunnel:** defaultBackend inherits routing.originRequest ([#81](https://github.com/jacaudi/cloudflare-operator/issues/81)) ([#82](https://github.com/jacaudi/cloudflare-operator/issues/82)) ([7e4ed94](https://github.com/jacaudi/cloudflare-operator/commit/7e4ed94d60f1b20562cdef1d7fb9767ea9ba4f2d))
-
-## [0.10.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.0...v0.10.1) (2026-05-01)
 
 ## [0.10.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.9.2...v0.10.0) (2026-05-01)
 
