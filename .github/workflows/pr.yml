@@ -1,6 +1,7 @@
 ---
 # Pull Request Validation
-# Fast feedback on PRs: lint, test, build, and scan
+# Fast feedback on PRs: lint, test, and helm/CRD sync verification.
+# Container image builds run only on the post-release CI/CD pipeline.
 name: PR Validation
 
 "on":
@@ -90,49 +91,3 @@ jobs:
             exit 1
           fi
           echo "Helm chart CRDs are in sync"
-
-  # Build multi-arch container images natively (no push)
-  container-amd64:
-    name: Build Container (amd64)
-    needs: [lint, test, verify-helm-rbac, verify-helm-crds]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build (amd64)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: cloudflare-operator:pr-${{ github.event.pull_request.number }}-amd64
-          cache-from: type=gha,scope=amd64
-          cache-to: type=gha,mode=max,scope=amd64
-
-
-  container-arm64:
-    name: Build Container (arm64)
-    needs: [lint, test, verify-helm-rbac, verify-helm-crds]
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build (arm64)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/arm64
-          push: false
-          load: true
-          tags: cloudflare-operator:pr-${{ github.event.pull_request.number }}-arm64
-          cache-from: type=gha,scope=arm64
-          cache-to: type=gha,mode=max,scope=arm64

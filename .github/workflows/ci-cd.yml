@@ -74,9 +74,11 @@ jobs:
         ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version-v }}
         ghcr.io/${{ github.repository }}:latest
 
-  # Publish Helm chart to OCI registry (runs in parallel with container build)
+  # Publish Helm chart to OCI registry (runs after container build so the
+  # chart's appVersion always points at an image tag that exists in the
+  # registry)
   helm:
-    needs: [release]
+    needs: [release, container]
     if: needs.release.outputs.new-release-published == 'true'
     uses: jacaudi/github-actions/.github/workflows/component-helm-publish.yml@v0.20.1
     permissions:
