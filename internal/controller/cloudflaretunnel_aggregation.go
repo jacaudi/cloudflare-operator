@@ -41,6 +41,11 @@ import (
 // Tests MUST use errors.Is(err, ErrUnownedDeployment) to assert this case.
 var ErrUnownedDeployment = stderrors.New("refusing to adopt Deployment not owned by this tunnel")
 
+// ErrUnownedPDB is returned when applyOwnedPDB finds an existing
+// PodDisruptionBudget that is not owned by the reconciled CloudflareTunnel.
+// Tests MUST use errors.Is(err, ErrUnownedPDB) to assert this case.
+var ErrUnownedPDB = stderrors.New("refusing to adopt PodDisruptionBudget not owned by this tunnel")
+
 // ReconcileConnectorAndRules performs the Task 8 additions to the tunnel
 // reconcile: aggregates CloudflareTunnelRule CRs for this tunnel, renders
 // config.yaml, reconciles the connector workload (when enabled), and writes
@@ -191,6 +196,9 @@ func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1
 		case err != nil:
 			return fmt.Errorf("get PDB %s/%s: %w", tun.Namespace, name, err)
 		default:
+			if !isOwnedBy(existing.OwnerReferences, tun.UID) {
+				return fmt.Errorf("%w: %s/%s", ErrUnownedPDB, existing.Namespace, existing.Name)
+			}
 			existing.Spec = desired.Spec
 			existing.Labels = desired.Labels
 			existing.OwnerReferences = desired.OwnerReferences

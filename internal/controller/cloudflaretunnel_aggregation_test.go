@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1074,6 +1075,25 @@ func TestCloudflareTunnel_PDBCreated(t *testing.T) {
 	}
 	if len(pdb.OwnerReferences) != 1 || pdb.OwnerReferences[0].UID != tun.UID {
 		t.Errorf("OwnerReferences missing tunnel ref: %+v", pdb.OwnerReferences)
+	}
+	ref := pdb.OwnerReferences[0]
+	if ref.Controller == nil || !*ref.Controller {
+		t.Errorf("OwnerReferences[0].Controller = %v, want true", ref.Controller)
+	}
+	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
+		t.Errorf("OwnerReferences[0].BlockOwnerDeletion = %v, want true", ref.BlockOwnerDeletion)
+	}
+	wantSelectorLabels := map[string]string{
+		"app.kubernetes.io/name":       "cloudflared",
+		"app.kubernetes.io/instance":   tun.Name,
+		"app.kubernetes.io/managed-by": "cloudflare-operator",
+		"cloudflare.io/tunnel":         tun.Name,
+	}
+	if pdb.Spec.Selector == nil {
+		t.Fatal("PDB Spec.Selector is nil")
+	}
+	if !reflect.DeepEqual(pdb.Spec.Selector.MatchLabels, wantSelectorLabels) {
+		t.Errorf("Selector.MatchLabels = %v, want %v", pdb.Spec.Selector.MatchLabels, wantSelectorLabels)
 	}
 }
 
