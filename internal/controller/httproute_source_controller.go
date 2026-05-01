@@ -289,7 +289,7 @@ func (r *HTTPRouteSourceReconciler) reconcileTunnelRule(
 	ownerRefs []metav1.OwnerReference,
 ) error {
 	upstream := ann[AnnotationTunnelUpstream]
-	ruleName := fmt.Sprintf("httproute-%s-%s", route.Namespace, route.Name)
+	ruleName := emittedTunnelRuleName("httproute", route.Name)
 
 	if upstream != "" {
 		rule := &cloudflarev1alpha1.CloudflareTunnelRule{
@@ -392,7 +392,7 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 	ownerRefs []metav1.OwnerReference,
 	sourceAnnotations map[string]string,
 ) error {
-	crName := capCRName(fmt.Sprintf("httproute-%s-%s-%s", route.Namespace, route.Name, sanitizeDNSForCRName(hostname)))
+	crName := emittedDNSRecordName("httproute", route.Name, hostname)
 	// Propagate cloudflare.io/adopt from the source object to the emitted CR so
 	// the DNS controller's registry decision can honour it.
 	var dnsRecordAnnotations map[string]string
@@ -434,7 +434,7 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 		SourceNamespace: route.Namespace,
 		SourceName:      route.Name,
 	})
-	txtCRName := capCRName(fmt.Sprintf("httproute-%s-%s-%s-txt", route.Namespace, route.Name, sanitizeDNSForCRName(hostname)))
+	txtCRName := crName + "-txt"
 	txtRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      txtCRName,

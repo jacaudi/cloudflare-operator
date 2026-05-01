@@ -357,7 +357,7 @@ func TestHTTPRouteSource_TunnelUpstreamAbsent_DeletesOrphanRule(t *testing.T) {
 	// Pre-create the orphan rule at the expected name.
 	orphanRule := &cloudflarev1alpha1.CloudflareTunnelRule{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "httproute-apps-my-route",
+			Name:      emittedTunnelRuleName("httproute", "my-route"),
 			Namespace: "apps",
 		},
 		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
@@ -693,9 +693,9 @@ func TestHTTPRouteSource_CRNaming_HTTPRoutePrefix(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expectedDNSName := "httproute-apps-my-route-foo-example-com"
-	expectedTXTName := "httproute-apps-my-route-foo-example-com-txt"
-	expectedRuleName := "httproute-apps-my-route"
+	expectedDNSName := emittedDNSRecordName("httproute", "my-route", "foo.example.com")
+	expectedTXTName := expectedDNSName + "-txt"
+	expectedRuleName := emittedTunnelRuleName("httproute", "my-route")
 
 	var records cloudflarev1alpha1.CloudflareDNSRecordList
 	if err := r.List(context.Background(), &records); err != nil {
@@ -1465,18 +1465,15 @@ func TestHTTPRouteSource_AdoptAnnotation_PropagatedToCR(t *testing.T) {
 }
 
 // ---- TestHTTPRouteSource_CRNameCapped_LongInput ----------------------------
-// P2.9: CR name for an HTTPRoute with a very long namespace+name+hostname must
-// be ≤ 253 chars (no trailing dashes).
+// P2.9: CR name for an HTTPRoute with a long namespace+name+hostname must
+// be ≤ 253 chars and a valid DNS-1123 subdomain. Under the new
+// emittedDNSRecordName scheme, hostname goes only into the hash, so length is
+// driven by sourceName plus a fixed kind prefix and 8-char suffix.
 
 func TestHTTPRouteSource_CRNameCapped_LongInput(t *testing.T) {
 	longNS := strings.Repeat("a", 63)
 	longName := strings.Repeat("b", 63)
 	longHostname := strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".example.com"
-
-	uncapped := "httproute-" + longNS + "-" + longName + "-" + sanitizeDNSForCRName(longHostname)
-	if len(uncapped) <= 253 {
-		t.Skipf("test setup error: uncapped name is only %d chars (want >253)", len(uncapped))
-	}
 
 	s := httpRouteScheme(t)
 	zone := newZone("z", longNS, "example.com", "cf-secret")

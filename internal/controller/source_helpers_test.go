@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -68,49 +69,6 @@ func TestSplitAndTrim_TrailingComma(t *testing.T) {
 	got := splitAndTrim("foo.example.com,")
 	if len(got) != 1 || got[0] != testHostnameFoo {
 		t.Errorf("unexpected result: %v", got)
-	}
-}
-
-// ---- TestSanitizeDNSForCRName -----------------------------------------------
-
-func TestSanitizeDNSForCRName_Normal(t *testing.T) {
-	got := sanitizeDNSForCRName(testHostnameFoo)
-	if got != "foo-example-com" {
-		t.Errorf("expected foo-example-com, got %q", got)
-	}
-}
-
-func TestSanitizeDNSForCRName_Uppercase(t *testing.T) {
-	got := sanitizeDNSForCRName("FOO.EXAMPLE.COM")
-	if got != "foo-example-com" {
-		t.Errorf("expected foo-example-com, got %q", got)
-	}
-}
-
-func TestSanitizeDNSForCRName_Wildcard(t *testing.T) {
-	got := sanitizeDNSForCRName("*.apps.example.com")
-	if got != "wild-apps-example-com" {
-		t.Errorf("expected wild-apps-example-com, got %q", got)
-	}
-}
-
-func TestSanitizeDNSForCRName_WildcardIsValidDNS1123(t *testing.T) {
-	got := sanitizeDNSForCRName("*.apps.example.com")
-	// Must not contain asterisk or dots.
-	for _, ch := range got {
-		if ch == '*' || ch == '.' {
-			t.Errorf("invalid character %q in CR name %q", ch, got)
-		}
-	}
-	if len(got) == 0 {
-		t.Error("empty CR name")
-	}
-}
-
-func TestSanitizeDNSForCRName_BareWildcard(t *testing.T) {
-	got := sanitizeDNSForCRName("*")
-	if got != "wild" {
-		t.Errorf("expected wild, got %q", got)
 	}
 }
 
@@ -220,6 +178,58 @@ func TestSecretRefNamespace_BothEmpty(t *testing.T) {
 	got := secretRefNamespace(ref, "")
 	if got != "" {
 		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+// ---- TestEmittedDNSRecordName / TestEmittedTunnelRuleName -------------------
+
+func TestEmittedDNSRecordName_Shape(t *testing.T) {
+	name := emittedDNSRecordName("httproute", "jellyfin", "app.example.com")
+	// <kind>-<source-name>-<8 hex chars>
+	if !regexp.MustCompile(`^httproute-jellyfin-[0-9a-f]{8}$`).MatchString(name) {
+		t.Errorf("name = %q does not match expected shape", name)
+	}
+	// Length check: bounded.
+	if len(name) > 63 {
+		t.Errorf("name = %q exceeds 63 chars (DNS-1123 label limit)", name)
+	}
+}
+
+func TestEmittedDNSRecordName_DistinctFQDNsHashDistinctly(t *testing.T) {
+	a := emittedDNSRecordName("httproute", "jellyfin", "app.example.com")
+	b := emittedDNSRecordName("httproute", "jellyfin", "api.example.com")
+	if a == b {
+		t.Errorf("distinct FQDNs produced same name: %q", a)
+	}
+}
+
+func TestEmittedDNSRecordName_WildcardSafe(t *testing.T) {
+	name := emittedDNSRecordName("httproute", "apps", "*.example.com")
+	// The asterisk must NOT appear in the CR name (DNS-1123 forbids it).
+	if strings.Contains(name, "*") {
+		t.Errorf("name contains asterisk: %q", name)
+	}
+	// Must still match the expected shape.
+	if !regexp.MustCompile(`^httproute-apps-[0-9a-f]{8}$`).MatchString(name) {
+		t.Errorf("wildcard name shape wrong: %q", name)
+	}
+}
+
+func TestEmittedDNSRecordName_DeterministicAcrossKinds(t *testing.T) {
+	// Same FQDN, different source kinds: distinct names (hash input differs).
+	a := emittedDNSRecordName("httproute", "myapp", "app.example.com")
+	b := emittedDNSRecordName("svc", "myapp", "app.example.com")
+	if a == b {
+		t.Errorf("different source kinds produced same name: %q", a)
+	}
+}
+
+func TestEmittedTunnelRuleName(t *testing.T) {
+	if got := emittedTunnelRuleName("httproute", "jellyfin"); got != "httproute-jellyfin" {
+		t.Errorf("got %q", got)
+	}
+	if got := emittedTunnelRuleName("svc", "myapp"); got != "svc-myapp" {
+		t.Errorf("got %q", got)
 	}
 }
 

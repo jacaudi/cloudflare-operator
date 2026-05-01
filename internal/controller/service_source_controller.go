@@ -212,7 +212,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	// 15. Emit TunnelRule when target is tunnel.
 	if ts.Kind == TargetKindTunnel {
-		ruleName := fmt.Sprintf("svc-%s-%s", svc.Namespace, svc.Name)
+		ruleName := emittedTunnelRuleName("svc", svc.Name)
 		rule := &cloudflarev1alpha1.CloudflareTunnelRule{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            ruleName,
@@ -282,7 +282,7 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 	sourceAnnotations map[string]string,
 ) error {
 	const recordType = "CNAME"
-	crName := capCRName(fmt.Sprintf("svc-%s-%s-%s", svc.Namespace, svc.Name, sanitizeDNSForCRName(hostname)))
+	crName := emittedDNSRecordName("svc", svc.Name, hostname)
 	// Propagate cloudflare.io/adopt from the source object to the emitted CR so
 	// the DNS controller's registry decision can honour it.
 	var dnsRecordAnnotations map[string]string
@@ -324,7 +324,7 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 		SourceNamespace: svc.Namespace,
 		SourceName:      svc.Name,
 	})
-	txtCRName := capCRName(fmt.Sprintf("svc-%s-%s-%s-txt", svc.Namespace, svc.Name, sanitizeDNSForCRName(hostname)))
+	txtCRName := crName + "-txt"
 	txtRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      txtCRName,
