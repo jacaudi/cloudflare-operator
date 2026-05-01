@@ -92,6 +92,20 @@ type ConnectorSpec struct {
 	// TopologySpreadConstraints is a pass-through to the pod spec.
 	// +optional
 	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// NameOverride sets the base name for the operator-managed connector
+	// resources. When set, the Deployment and ServiceAccount are named
+	// exactly NameOverride and the ConfigMap is named "<NameOverride>-config".
+	// When unset, the operator falls back to "<tunnel.metadata.name>-connector"
+	// for the Deployment + ServiceAccount and "<tunnel.metadata.name>-connector-config"
+	// for the ConfigMap.
+	//
+	// Changing NameOverride on a live tunnel reconciles new resources at the
+	// new name; the old resources are not cleaned up automatically (see #52).
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	NameOverride string `json:"nameOverride,omitempty"`
 }
 
 // ConnectorImage specifies the cloudflared container image.

@@ -1002,6 +1002,20 @@ spec:
                           compile-time default bumped per operator release.
                         type: string
                     type: object
+                  nameOverride:
+                    description: |-
+                      NameOverride sets the base name for the operator-managed connector
+                      resources. When set, the Deployment and ServiceAccount are named
+                      exactly NameOverride and the ConfigMap is named "<NameOverride>-config".
+                      When unset, the operator falls back to "<tunnel.metadata.name>-connector"
+                      for the Deployment + ServiceAccount and "<tunnel.metadata.name>-connector-config"
+                      for the ConfigMap.
+
+                      Changing NameOverride on a live tunnel reconciles new resources at the
+                      new name; the old resources are not cleaned up automatically (see #52).
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
                   nodeSelector:
                     additionalProperties:
                       type: string

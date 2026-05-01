@@ -46,11 +46,20 @@ type ConnectorResourceNames struct {
 }
 
 // ConnectorNames returns the deterministic resource names for tun.
+//
+// When tun.Spec.Connector.NameOverride is set, the Deployment and
+// ServiceAccount are named exactly NameOverride and the ConfigMap is named
+// "<NameOverride>-config". When unset, names fall back to the
+// "<tunnel.metadata.name>-connector" family.
 func ConnectorNames(tun *cloudflarev1alpha1.CloudflareTunnel) ConnectorResourceNames {
+	base := tun.Name + "-connector"
+	if tun.Spec.Connector != nil && tun.Spec.Connector.NameOverride != "" {
+		base = tun.Spec.Connector.NameOverride
+	}
 	return ConnectorResourceNames{
-		Deployment:     tun.Name + "-connector",
-		ConfigMap:      tun.Name + "-connector-config",
-		ServiceAccount: tun.Name + "-connector",
+		Deployment:     base,
+		ConfigMap:      base + "-config",
+		ServiceAccount: base,
 	}
 }
 

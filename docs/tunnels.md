@@ -42,6 +42,9 @@ spec:
   connector:
     enabled: true           # default: false. Must be true to deploy cloudflared.
     replicas: 2             # default: 2. Minimum: 1.
+    nameOverride: ""        # default: "". When set, names the Deployment + SA exactly
+                            # this value and the ConfigMap "<nameOverride>-config".
+                            # When unset, names use "<tunnel.metadata.name>-connector".
     image:
       repository: docker.io/cloudflare/cloudflared
       tag: "2026.3.0"       # omit to use the operator's compile-time default
@@ -58,6 +61,27 @@ spec:
 ```
 
 All fields in `connector` except `enabled` are optional. Omitting `connector` entirely (or setting `enabled: false`) means you are responsible for running cloudflared yourself.
+
+### Naming the connector resources
+
+By default the operator names the Deployment, ServiceAccount, and ConfigMap as `<tunnel.metadata.name>-connector`, `<tunnel.metadata.name>-connector`, and `<tunnel.metadata.name>-connector-config`. To use a different name family — for example, to fit existing monitoring labels or GitOps drift expectations — set `spec.connector.nameOverride`:
+
+```yaml
+spec:
+  connector:
+    enabled: true
+    nameOverride: cloudflared-prod
+```
+
+This produces:
+
+- Deployment: `cloudflared-prod`
+- ServiceAccount: `cloudflared-prod`
+- ConfigMap: `cloudflared-prod-config`
+
+Changing `nameOverride` on a live tunnel reconciles new resources at the new name; the old resources are NOT cleaned up automatically (tracked alongside [#52](https://github.com/jacaudi/cloudflare-operator/issues/52)). Delete the orphaned Deployment/SA/ConfigMap manually after a rename.
+
+`nameOverride` must be a valid DNS-1123 subdomain (lowercase alphanumerics and `-`, length ≤ 253).
 
 ### Upgrading the cloudflared image
 
