@@ -291,16 +291,19 @@ func TestAggregate_DefaultBackendWithRules(t *testing.T) {
 // TestAggregate_DefaultBackendInheritsOriginRequest verifies that tunnel-level
 // routing.originRequest defaults are applied to the defaultBackend catch-all
 // (#81). Without this, defaultBackend silently ignores originServerName /
-// noTLSVerify / httpHostHeader, breaking SNI-sensitive upstreams (e.g. Envoy
-// Gateway) that need a non-default originServerName on the TLS handshake.
+// noTLSVerify / httpHostHeader / connectTimeout, breaking SNI-sensitive
+// upstreams (e.g. Envoy Gateway) that need a non-default originServerName on
+// the TLS handshake.
 func TestAggregate_DefaultBackendInheritsOriginRequest(t *testing.T) {
 	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
 		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
 			URL: strPtr("https://default.example.com"),
 		},
 		OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			NoTLSVerify:      true,
 			OriginServerName: "tunnel.example.com",
 			HTTPHostHeader:   "tunnel-host",
+			ConnectTimeout:   &metav1.Duration{Duration: 30 * time.Second},
 		},
 	}
 	got := string(Aggregate("test-tunnel-id", nil, routing).Rendered)
@@ -311,11 +314,17 @@ func TestAggregate_DefaultBackendInheritsOriginRequest(t *testing.T) {
 	if !strings.Contains(got, "originRequest:") {
 		t.Errorf("expected originRequest block under defaultBackend (#81):\n%s", got)
 	}
+	if !strings.Contains(got, "noTLSVerify: true") {
+		t.Errorf("expected tunnel noTLSVerify under defaultBackend (#81):\n%s", got)
+	}
 	if !strings.Contains(got, "originServerName: tunnel.example.com") {
 		t.Errorf("expected tunnel originServerName under defaultBackend (#81):\n%s", got)
 	}
 	if !strings.Contains(got, "httpHostHeader: tunnel-host") {
 		t.Errorf("expected tunnel httpHostHeader under defaultBackend (#81):\n%s", got)
+	}
+	if !strings.Contains(got, "connectTimeout: 30s") {
+		t.Errorf("expected tunnel connectTimeout under defaultBackend (#81):\n%s", got)
 	}
 	// The originRequest block must be associated with the defaultBackend entry,
 	// i.e. appear after the "- service:" line, not before.
@@ -323,6 +332,57 @@ func TestAggregate_DefaultBackendInheritsOriginRequest(t *testing.T) {
 	oreqIdx := strings.Index(got, "originRequest:")
 	if svcIdx < 0 || oreqIdx < 0 || oreqIdx < svcIdx {
 		t.Errorf("originRequest must follow defaultBackend service line:\n%s", got)
+	}
+}
+
+// TestAggregate_DefaultBackendOriginRequestWithRuleOverride locks in the
+// combined shape: an included rule with its own OriginRequest, a tunnel-level
+// routing.OriginRequest, and a defaultBackend. The rule emits its own merged
+// block (rule wins entirely); the defaultBackend emits the tunnel defaults
+// verbatim. Without this test the combined path is only covered by inspection.
+func TestAggregate_DefaultBackendOriginRequestWithRuleOverride(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rule := cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "apps", UID: "r-uid", CreationTimestamp: metav1.NewTime(t0)},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home"},
+			Hostnames: []string{"h.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: strPtr("http://b:8080")},
+			Priority:  100,
+			OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+				OriginServerName: "rule.example.com",
+			},
+		},
+	}
+	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+		OriginRequest: &cloudflarev1alpha1.TunnelRuleOriginRequest{
+			OriginServerName: "tunnel.example.com",
+		},
+	}
+	got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{rule}, routing).Rendered)
+
+	// Rule's own OriginRequest wins entirely — must contain rule's value but
+	// NOT the tunnel value as the rule's serverName.
+	if !strings.Contains(got, "originServerName: rule.example.com") {
+		t.Errorf("expected rule originServerName in render:\n%s", got)
+	}
+	// defaultBackend gets tunnel defaults — the tunnel originServerName must
+	// appear in the render too (under the defaultBackend entry).
+	if !strings.Contains(got, "originServerName: tunnel.example.com") {
+		t.Errorf("expected tunnel originServerName under defaultBackend (#81):\n%s", got)
+	}
+	// Position check: rule's block precedes defaultBackend's block.
+	ruleIdx := strings.Index(got, "originServerName: rule.example.com")
+	defSvcIdx := strings.Index(got, "- service: https://default.example.com")
+	tunIdx := strings.Index(got, "originServerName: tunnel.example.com")
+	if ruleIdx < 0 || defSvcIdx < 0 || tunIdx < 0 {
+		t.Fatalf("missing one of rule/default-svc/tunnel markers:\n%s", got)
+	}
+	if !(ruleIdx < defSvcIdx && defSvcIdx < tunIdx) {
+		t.Errorf("expected order rule < defaultBackend service < tunnel originRequest:\n%s", got)
 	}
 }
 

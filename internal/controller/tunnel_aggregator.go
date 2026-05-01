@@ -43,7 +43,7 @@ const (
 
 // originRequestHeader is the literal indented header line written before any
 // originRequest field rendering. Centralising the string lets the empty-block
-// guard (in mergedOriginRequest) compare lengths against the header, instead
+// guard (in renderOriginRequest) compare lengths against the header, instead
 // of duplicating the literal — so changes to indent don't silently break
 // suppression.
 const originRequestHeader = "    originRequest:\n"
