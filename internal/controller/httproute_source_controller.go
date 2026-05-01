@@ -414,7 +414,10 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 			Proxied:   boolPtr(proxied),
 			TTL:       ttl,
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: zone.Spec.SecretRef.Name},
-			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: zone.Name},
+			ZoneRef: &cloudflarev1alpha1.ZoneReference{
+				Name:      zone.Name,
+				Namespace: zone.Namespace,
+			},
 		},
 	}
 	if err := upsertDNSRecord(ctx, r.Client, dnsRecord); err != nil {
@@ -445,7 +448,10 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 			Content:   strPtr(txtContent),
 			TTL:       120,
 			SecretRef: cloudflarev1alpha1.SecretReference{Name: zone.Spec.SecretRef.Name},
-			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: zone.Name},
+			ZoneRef: &cloudflarev1alpha1.ZoneReference{
+				Name:      zone.Name,
+				Namespace: zone.Namespace,
+			},
 		},
 	}
 	if err := upsertDNSRecord(ctx, r.Client, txtRecord); err != nil {

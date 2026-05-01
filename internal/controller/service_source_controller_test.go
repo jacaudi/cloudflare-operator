@@ -1306,3 +1306,66 @@ func TestServiceSource_AffixConfig_UsedForTXTName(t *testing.T) {
 		t.Fatal("no TXT CloudflareDNSRecord emitted")
 	}
 }
+
+// ---- TestServiceSource_ZoneRefCrossNamespace_PropagatedToEmittedCR ---------
+// Regression for issue #65: when the CloudflareZone lives in a different
+// namespace than the Service, the emitted CloudflareDNSRecord (data + TXT)
+// must carry the zone's namespace in Spec.ZoneRef.Namespace so downstream
+// ResolveZoneID can locate the zone. Without the fix, ResolveZoneID would
+// look up the zone in the emitted CR's namespace (= source namespace) and
+// fail with "CloudflareZone … not found".
+
+func TestServiceSource_ZoneRefCrossNamespace_PropagatedToEmittedCR(t *testing.T) {
+	s := svcTestScheme(t)
+
+	// Zone lives in "zones"; service + tunnel live in "apps".
+	zone := newZone("example-com", "zones", "example.com", "cf-secret")
+	zone.Status.ZoneID = "zone-id-from-status"
+
+	tunnel := newReadyTunnel("home", "apps")
+	svc := newSvc("my-svc", "apps", map[string]string{
+		AnnotationTarget:           "tunnel:home",
+		AnnotationHostnames:        "foo.example.com",
+		AnnotationZoneRef:          "example-com",
+		AnnotationZoneRefNamespace: "zones",
+	})
+
+	r, _ := buildSvcReconciler(s, "owner1", svc, zone, tunnel)
+
+	if _, err := r.Reconcile(context.Background(), req("apps", "my-svc")); err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list DNS records: %v", err)
+	}
+	if len(records.Items) < 2 {
+		t.Fatalf("expected at least 2 emitted DNS records (data + TXT), got %d", len(records.Items))
+	}
+
+	for i := range records.Items {
+		rec := &records.Items[i]
+		if rec.Spec.ZoneRef == nil {
+			t.Errorf("emitted CR %q has nil ZoneRef", rec.Name)
+			continue
+		}
+		if rec.Spec.ZoneRef.Name != "example-com" {
+			t.Errorf("emitted CR %q: ZoneRef.Name = %q, want %q", rec.Name, rec.Spec.ZoneRef.Name, "example-com")
+		}
+		if rec.Spec.ZoneRef.Namespace != "zones" {
+			t.Errorf("emitted CR %q: ZoneRef.Namespace = %q, want %q", rec.Name, rec.Spec.ZoneRef.Namespace, "zones")
+		}
+
+		// Sanity: ResolveZoneID must succeed against the emitted CR even
+		// though the CR lives in "apps" and the zone lives in "zones".
+		got, err := ResolveZoneID(context.Background(), r.Client, rec)
+		if err != nil {
+			t.Errorf("ResolveZoneID(%q) returned error: %v", rec.Name, err)
+			continue
+		}
+		if got != "zone-id-from-status" {
+			t.Errorf("ResolveZoneID(%q) = %q, want %q", rec.Name, got, "zone-id-from-status")
+		}
+	}
+}
