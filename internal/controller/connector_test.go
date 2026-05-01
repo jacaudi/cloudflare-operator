@@ -55,6 +55,9 @@ func TestConnectorNames(t *testing.T) {
 	if n.ServiceAccount != "home-connector" {
 		t.Errorf("ServiceAccount name = %q", n.ServiceAccount)
 	}
+	if n.PodDisruptionBudget != "home-connector-pdb" {
+		t.Errorf("PodDisruptionBudget name = %q, want %q", n.PodDisruptionBudget, "home-connector-pdb")
+	}
 }
 
 // TestConnectorNames_NameOverride verifies that spec.connector.nameOverride
@@ -534,6 +537,22 @@ func TestBuildConnectorPodDisruptionBudget_AtReplicasTwo(t *testing.T) {
 	wantSelector := connectorLabels(tun)
 	if !reflect.DeepEqual(pdb.Spec.Selector.MatchLabels, wantSelector) {
 		t.Errorf("Selector.MatchLabels = %v, want %v", pdb.Spec.Selector.MatchLabels, wantSelector)
+	}
+	wantLabels := map[string]string{
+		"app.kubernetes.io/name":       "cloudflared",
+		"app.kubernetes.io/instance":   tun.Name,
+		"app.kubernetes.io/managed-by": "cloudflare-operator",
+		"cloudflare.io/tunnel":         tun.Name,
+	}
+	gotLabels := pdb.Labels
+	// Pattern #6: assert total map length to catch label-bleed regressions.
+	if len(gotLabels) != len(wantLabels) {
+		t.Errorf("PDB labels count = %d, want %d: %v", len(gotLabels), len(wantLabels), gotLabels)
+	}
+	for k, v := range wantLabels {
+		if gotLabels[k] != v {
+			t.Errorf("label %q = %q, want %q", k, gotLabels[k], v)
+		}
 	}
 	if len(pdb.OwnerReferences) != 1 || pdb.OwnerReferences[0].UID != tun.UID {
 		t.Errorf("OwnerReferences missing tunnel ref: %+v", pdb.OwnerReferences)
