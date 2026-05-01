@@ -240,6 +240,7 @@ For the full operator-managed connector story — connector spec fields in depth
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | When `true`, the operator reconciles a Deployment, ConfigMap, and ServiceAccount running cloudflared. |
 | `replicas` | int | `2` | Number of cloudflared replicas. Minimum `1`. |
+| `nameOverride` | string | `""` | Optional base name for the connector resources. When set, the Deployment and ServiceAccount are named exactly `<nameOverride>` and the ConfigMap is named `<nameOverride>-config`. When unset, the operator falls back to `<tunnel.metadata.name>-connector` (and `…-config` for the ConfigMap). DNS-1123 subdomain validation. See [`tunnels.md`](tunnels.md) for caveats around live renames. |
 | `image.repository` | string | `docker.io/cloudflare/cloudflared` | Container image repository. |
 | `image.tag` | string | compile-time default | Container image tag. |
 | `resources` | object | sane defaults | Container `resources` (requests + limits). |
