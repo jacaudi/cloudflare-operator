@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.2...v0.11.0) (2026-05-01)
+
+### Bug Fixes
+
+* **connector:** add ownership guard + tighten PDB test assertions ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([7c5b931](https://github.com/jacaudi/cloudflare-operator/commit/7c5b93165c587b51ea66575afbc897fb69d14448))
+* **connector:** address code review feedback for PDB build ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([7f91fb3](https://github.com/jacaudi/cloudflare-operator/commit/7f91fb3df038a93ef0ea1400e25416bd7712bdf7))
+* **connector:** re-fetch existing PDB inside retry-on-conflict closure ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([f938499](https://github.com/jacaudi/cloudflare-operator/commit/f93849905205dfdff7a8ad10d8ac5942d236a486))
+
+
+### Features
+
+* **chart:** default PDB and topologySpreadConstraints at replicas>=2 ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([c8ccbfb](https://github.com/jacaudi/cloudflare-operator/commit/c8ccbfb85f7cd5b11ff3fb62d01006a049c95851))
+* **connector:** add PodDisruptionBudget build function ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([d09e387](https://github.com/jacaudi/cloudflare-operator/commit/d09e3877455d531462cc82cc4c2094fee8f04d6c))
+* **connector:** inject default per-hostname topologySpreadConstraint at replicas>=2 ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([8481698](https://github.com/jacaudi/cloudflare-operator/commit/8481698e408a5aba2fbedddc286cf2afd8bff53e))
+* **connector:** reconcile connector PDB and watch owned PDBs ([#77](https://github.com/jacaudi/cloudflare-operator/issues/77)) ([cd8d757](https://github.com/jacaudi/cloudflare-operator/commit/cd8d7578414097249c430a6ae1bb1cab7e087cab))
+
 ## [0.10.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.0...v0.10.2) (2026-05-01)
 
 ### Bug Fixes
