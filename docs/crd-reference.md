@@ -274,6 +274,54 @@ Conditions: `Ready`, `IngressConfigured`, and (when connector is enabled) `Conne
 - **Conflict-tolerant connector reconcile**: SA / ConfigMap / Deployment update paths absorb transient optimistic-concurrency conflicts in-process via `retry.RetryOnConflict`, so a churning connector resource never inflates the controller workqueue's exponential backoff or wedges finalizer cleanup.
 - **Adoption**: If a tunnel with the same name exists in Cloudflare, the operator adopts it rather than creating a duplicate.
 
+### Default scheduling and disruption budget
+
+When `spec.connector.replicas` is `>= 2`, the operator automatically creates two safe-by-default Kubernetes objects to keep the connector available during voluntary disruption:
+
+- A **`PodDisruptionBudget`** named `<connector-base>-pdb` (where `<connector-base>` follows the same naming as the Deployment, including any `spec.connector.nameOverride`) with `minAvailable: 1`. This protects the connector from node drains, autoscaler scale-downs, and manual evictions.
+- A **`topologySpreadConstraint`** on the connector pod template with `maxSkew: 1`, `topologyKey: kubernetes.io/hostname`, `whenUnsatisfiable: ScheduleAnyway`. Connector replicas land on different nodes by default. Soft semantics preserve scheduling on small clusters where `replicas > nodes`.
+
+Both defaults are skipped at `replicas: 1`. A `minAvailable: 1` PDB on a single-replica deployment blocks all voluntary disruptions (strictly worse than no PDB), and a `topologySpreadConstraint` across one pod is meaningless.
+
+**Override semantics**: the default `topologySpreadConstraint` is injected **only when both `spec.connector.affinity` and `spec.connector.topologySpreadConstraints` are unset**. Setting either one disables the default wholesale — the operator never merges user input with its defaults. Any scheduling override the user provides is honoured exactly, with no silent additions.
+
+The PDB is unconditional at `replicas >= 2`. There is no `spec.connector.disruptionBudget` knob; if you need one, file an issue.
+
+#### Rendered example
+
+At `spec.connector.replicas: 2` with no scheduling overrides, the operator emits:
+
+```yaml
+# Connector Deployment pod spec gains:
+spec:
+  template:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudflared
+              app.kubernetes.io/instance: <tunnel-name>
+              app.kubernetes.io/managed-by: cloudflare-operator
+              cloudflare.io/tunnel: <tunnel-name>
+
+# Alongside the Deployment, this PDB is created:
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: <tunnel-name>-connector-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+      app.kubernetes.io/instance: <tunnel-name>
+      app.kubernetes.io/managed-by: cloudflare-operator
+      cloudflare.io/tunnel: <tunnel-name>
+```
+
 ### Example
 
 ```yaml

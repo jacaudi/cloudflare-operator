@@ -62,6 +62,8 @@ spec:
 
 All fields in `connector` except `enabled` are optional. Omitting `connector` entirely (or setting `enabled: false`) means you are responsible for running cloudflared yourself.
 
+At `replicas: 2` or higher the operator additionally creates a `PodDisruptionBudget` and injects a default per-hostname `topologySpreadConstraint`. See [crd-reference.md → Default scheduling and disruption budget](crd-reference.md#default-scheduling-and-disruption-budget) for the override semantics.
+
 ### Naming the connector resources
 
 By default the operator names the Deployment, ServiceAccount, and ConfigMap as `<tunnel.metadata.name>-connector`, `<tunnel.metadata.name>-connector`, and `<tunnel.metadata.name>-connector-config`. To use a different name family — for example, to fit existing monitoring labels or GitOps drift expectations — set `spec.connector.nameOverride`:
