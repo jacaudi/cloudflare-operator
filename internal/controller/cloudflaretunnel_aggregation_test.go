@@ -26,6 +26,7 @@ import (
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,9 +37,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-// aggTestScheme builds a scheme with v1alpha1, corev1, and appsv1 registered.
-// testScheme (from cloudflarednsrecord_controller_test.go) only registers
-// v1alpha1 and corev1; we extend it here with appsv1 for Deployment support.
+// aggTestScheme builds a scheme with v1alpha1, corev1, appsv1, and policyv1
+// registered. testScheme (from cloudflarednsrecord_controller_test.go) only
+// registers v1alpha1, corev1, appsv1, and policyv1; we mirror those here so
+// the aggregation client supports PodDisruptionBudget objects.
 func aggTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	if err := cloudflarev1alpha1.AddToScheme(s); err != nil {
@@ -49,6 +51,9 @@ func aggTestScheme() *runtime.Scheme {
 	}
 	if err := appsv1.AddToScheme(s); err != nil {
 		panic("add appsv1 to scheme: " + err.Error())
+	}
+	if err := policyv1.AddToScheme(s); err != nil {
+		panic("add policyv1 to scheme: " + err.Error())
 	}
 	return s
 }
@@ -1043,6 +1048,87 @@ func TestApplyOwned_RetriesOnConfigMapConflict(t *testing.T) {
 	}
 	if calls < 3 {
 		t.Errorf("expected >=3 update attempts, got %d", calls)
+	}
+}
+
+// ---- PDB reconcile tests ----------------------------------------------------
+
+// TestCloudflareTunnel_PDBCreated asserts that reconciling a connector-enabled
+// tunnel with replicas==2 produces an owner-ref-bound PDB alongside the
+// Deployment.
+func TestCloudflareTunnel_PDBCreated(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true) // Replicas==2
+	c := buildAggFakeClient(tun)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	n := ConnectorNames(tun)
+	var pdb policyv1.PodDisruptionBudget
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: n.PodDisruptionBudget}, &pdb); err != nil {
+		t.Fatalf("expected PDB to be created: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("MinAvailable = %v, want 1", pdb.Spec.MinAvailable)
+	}
+	if len(pdb.OwnerReferences) != 1 || pdb.OwnerReferences[0].UID != tun.UID {
+		t.Errorf("OwnerReferences missing tunnel ref: %+v", pdb.OwnerReferences)
+	}
+}
+
+// TestCloudflareTunnel_PDBDeletedOnReplicasDowngrade asserts the operator
+// removes the PDB when spec.connector.replicas drops to 1
+// (BuildConnectorPodDisruptionBudget returns nil → applyOwnedPDB sees
+// existing PDB + nil desired → Delete).
+func TestCloudflareTunnel_PDBDeletedOnReplicasDowngrade(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	tun.Spec.Connector.Replicas = 1 // downgrade: PDB should be absent
+
+	// Pre-create a PDB at the standard name (simulates PDB left over from replicas==2).
+	n := ConnectorNames(tun)
+	preExistingPDB := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            n.PodDisruptionBudget,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	c := buildAggFakeClient(tun, preExistingPDB)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	var pdb policyv1.PodDisruptionBudget
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: n.PodDisruptionBudget}, &pdb)
+	if err == nil {
+		t.Fatal("expected PDB to be deleted after replicas downgrade to 1, but it still exists")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected IsNotFound error after PDB deletion, got: %v", err)
+	}
+}
+
+// TestCloudflareTunnel_NoPDBAtReplicasOne asserts no PDB is created when a
+// fresh tunnel starts at replicas==1.
+func TestCloudflareTunnel_NoPDBAtReplicasOne(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	tun.Spec.Connector.Replicas = 1
+	c := buildAggFakeClient(tun)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	n := ConnectorNames(tun)
+	var pdb policyv1.PodDisruptionBudget
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: tun.Namespace, Name: n.PodDisruptionBudget}, &pdb)
+	if err == nil {
+		t.Fatal("expected no PDB at replicas==1, but one was created")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected IsNotFound error, got: %v", err)
 	}
 }
 

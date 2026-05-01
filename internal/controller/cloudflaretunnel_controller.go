@@ -27,6 +27,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -62,6 +63,7 @@ type CloudflareTunnelReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile moves the current state of the cluster closer to the desired state
@@ -358,6 +360,7 @@ func (r *CloudflareTunnelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&corev1.Secret{}).
 		Watches(&cloudflarev1alpha1.CloudflareTunnelRule{}, handler.EnqueueRequestsFromMapFunc(r.mapRuleToTunnel)).
 		Complete(r)
