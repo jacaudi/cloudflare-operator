@@ -28,7 +28,7 @@ jobs:
     with:
       yaml: true
       go: true
-      go-version: '1.25'
+      go-version: '1.26'
 
   # Run Go tests with coverage
   test:
@@ -37,7 +37,7 @@ jobs:
       contents: read
     with:
       test-framework: 'go'
-      go-version: '1.25'
+      go-version: '1.26'
       coverage: true
       coverage-threshold: 40
       test-packages: './internal/controller/... ./internal/cloudflare/... ./internal/ipresolver/... ./internal/status/... ./api/...'
