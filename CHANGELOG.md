@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.3](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.2...v0.7.3) (2026-05-01)
+
+### Bug Fixes
+
+* **deps:** update kubernetes-client-libraries ([7f064c2](https://github.com/jacaudi/cloudflare-operator/commit/7f064c235541cdd373dca5fca2e01fef94d900c5))
+
 ## [0.7.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.1...v0.7.2) (2026-05-01)
 
 ### Bug Fixes
