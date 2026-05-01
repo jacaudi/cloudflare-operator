@@ -25,7 +25,7 @@ Upgrade to cloudflare-operator v1:
 ```bash
 helm upgrade cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.6.0 \
+  --version 0.8.0 \
   --namespace cloudflare-operator \
   --reuse-values
 ```
@@ -33,7 +33,7 @@ helm upgrade cloudflare-operator \
 Apply the updated CRDs before upgrading (Helm does not upgrade CRDs automatically on `helm upgrade`):
 
 ```bash
-helm pull oci://ghcr.io/jacaudi/charts/cloudflare-operator --version 0.6.0 --untar
+helm pull oci://ghcr.io/jacaudi/charts/cloudflare-operator --version 0.8.0 --untar
 kubectl apply -f cloudflare-operator/crds/
 ```
 
@@ -66,7 +66,7 @@ registry:
 ```bash
 helm upgrade cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.6.0 \
+  --version 0.8.0 \
   --namespace cloudflare-operator \
   -f values.yaml
 ```
@@ -131,7 +131,7 @@ registry:
 ```bash
 helm install cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.6.0 \
+  --version 0.8.0 \
   --namespace cloudflare-operator \
   -f values.yaml
 ```
@@ -197,7 +197,7 @@ registry:
 ```bash
 helm install cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.6.0 \
+  --version 0.8.0 \
   --namespace cloudflare-operator \
   -f values.yaml
 ```

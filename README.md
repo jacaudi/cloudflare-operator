@@ -2,17 +2,20 @@
 
 A Kubernetes operator that manages Cloudflare resources declaratively via Custom Resources. Define DNS records, tunnels, security + transform rulesets, zone settings, and zone lifecycle as Kubernetes objects with drift detection and automatic reconciliation.
 
+> **Unofficial — community project.** This is not an official Cloudflare product and is not endorsed by or affiliated with Cloudflare, Inc. The operator implements its Cloudflare API access on top of the official [`cloudflare/cloudflare-go`](https://github.com/cloudflare/cloudflare-go) Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc. Use at your own discretion.
+
 ## Custom Resources
 
 | CRD | Purpose |
 |-----|---------|
 | `CloudflareZone` | Onboard and manage domain lifecycle (create, adopt, activate, delete) |
 | `CloudflareDNSRecord` | Manage DNS records (A, AAAA, CNAME, SRV, MX, TXT, NS) with dynamic IP support |
-| `CloudflareTunnel` | Create tunnels and auto-generate `cloudflared` credentials Secrets |
+| `CloudflareTunnel` | Create tunnels, auto-generate `cloudflared` credentials Secrets, and (optionally) reconcile the operator-managed cloudflared Deployment + ingress config |
+| `CloudflareTunnelRule` | Author a single hostname → backend ingress rule for a tunnel (also emitted automatically by the Gateway API / Service source controllers) |
 | `CloudflareZoneConfig` | Declaratively configure zone settings (SSL, security, performance, network, DNS) |
 | `CloudflareRuleset` | Manage a zone's phase entrypoint ruleset (security / custom rules, rate limiting, transforms, redirects, …) across 14+ Rulesets-Engine phases |
 
-See [`docs/README.md`](docs/README.md) for the full CRD reference, field-by-field specs, and examples.
+For end-to-end walkthroughs and topical guides, see [`docs/README.md`](docs/README.md). For field-by-field specs, see [`docs/crd-reference.md`](docs/crd-reference.md).
 
 ## Quickstart
 
@@ -21,6 +24,7 @@ New to cloudflare-operator? Start here: **[docs/domain-onboarding.md](docs/domai
 Already familiar with the CRDs? See:
 - [Gateway API + Service annotations](docs/gateway-api-source.md) — the primary user interface in v1.
 - [Tunnels](docs/tunnels.md) — tunnel CRDs and the operator-managed cloudflared runtime.
+- [CRD reference](docs/crd-reference.md) — every field on every CRD.
 - [Migrating from external-dns](docs/external-dns-migration.md).
 - [Troubleshooting](docs/troubleshooting.md).
 
@@ -30,7 +34,7 @@ Already familiar with the CRDs? See:
 
 - Kubernetes 1.28+
 - Helm 3.8+ (for OCI chart support)
-- A [Cloudflare API token](https://dash.cloudflare.com/profile/api-tokens) with permissions for the resources you plan to manage (see [authentication](docs/README.md#authentication))
+- A [Cloudflare API token](https://dash.cloudflare.com/profile/api-tokens) with permissions for the resources you plan to manage (see [authentication](docs/crd-reference.md#authentication))
 
 ### 1. Install the operator
 
@@ -39,7 +43,7 @@ The Helm chart is published as an OCI artifact to GHCR. It installs the CRDs, th
 ```sh
 helm install cloudflare-operator \
   oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.6.0 \
+  --version 0.8.0 \
   --namespace cloudflare-operator \
   --create-namespace
 ```
@@ -121,7 +125,7 @@ kubectl describe cloudflarednsrecord homelab -n cloudflare-operator
 
 `Ready=True` means the record is in sync with Cloudflare. Prefer `zoneRef` — the controller resolves the zone ID from status and waits for the zone to be ready. `zoneID: "<id>"` is still supported for standalone cases.
 
-More examples — CNAME, SRV, tunnels, rulesets, zone settings — live in [`config/samples/`](config/samples) and [`docs/README.md`](docs/README.md).
+More examples — CNAME, SRV, tunnels, rulesets, zone settings — live in [`config/samples/`](config/samples) and [`docs/crd-reference.md`](docs/crd-reference.md).
 
 ## Upgrading
 
@@ -179,7 +183,8 @@ See [`AGENTS.md`](AGENTS.md) for project conventions (kubebuilder layout, genera
 
 ## Documentation
 
-- [`docs/README.md`](docs/README.md) — full CRD reference: fields, defaults, behavior, examples
+- [`docs/README.md`](docs/README.md) — topical-doc index (onboarding, Gateway API, tunnels, migration, troubleshooting)
+- [`docs/crd-reference.md`](docs/crd-reference.md) — field-by-field CRD reference
 - [`config/samples/`](config/samples) — runnable sample manifests for each CRD
 - [`chart/values.yaml`](chart/values.yaml) — all Helm chart configuration options
 - [`CHANGELOG.md`](CHANGELOG.md) — release notes
@@ -187,3 +192,5 @@ See [`AGENTS.md`](AGENTS.md) for project conventions (kubebuilder layout, genera
 ## License
 
 Copyright 2026. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+"Cloudflare" and the Cloudflare logo are trademarks of Cloudflare, Inc. This project is not endorsed by or affiliated with Cloudflare, Inc. Cloudflare API access is implemented via the official [`cloudflare/cloudflare-go`](https://github.com/cloudflare/cloudflare-go) Go SDK.
