@@ -18,6 +18,26 @@ controller:
   replicas: 1
   strategy: Recreate
 
+  # -- Default soft per-hostname topologySpreadConstraints applied when
+  # replicas > 1 AND neither controller.affinity nor
+  # controller.topologySpreadConstraints is set. To disable, leave both
+  # empty (single-replica deployments don't benefit from spread). To
+  # override the default, set controller.affinity or
+  # controller.topologySpreadConstraints to your desired value — the
+  # operator-injected default is replaced wholesale, never merged.
+  topologySpreadConstraints: []
+
+  # -- Affinity rules. When set, suppresses the default
+  # topologySpreadConstraint above.
+  affinity: {}
+
+  # -- PodDisruptionBudget for the operator deployment. Created with
+  # minAvailable:1 only when replicas > 1; ignored at replicas:1 because
+  # a minAvailable:1 PDB on a single-replica deployment blocks all
+  # voluntary disruptions, which is strictly worse than no PDB.
+  podDisruptionBudget:
+    enabled: true
+
 # -- Leader election for HA (active-passive)
 # When enabled with multiple replicas, only one instance processes resources
 leaderElection:
