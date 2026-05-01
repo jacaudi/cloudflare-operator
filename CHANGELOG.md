@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.8.0...v0.8.1) (2026-05-01)
+
+### Bug Fixes
+
+* **connector:** drop redundant http_status:404 when defaultBackend is set ([#66](https://github.com/jacaudi/cloudflare-operator/issues/66)) ([2a10741](https://github.com/jacaudi/cloudflare-operator/commit/2a107417e3fe174f5d0bd3bc119c20789855ae72))
+* **sources:** propagate zone namespace into emitted ZoneRef ([#65](https://github.com/jacaudi/cloudflare-operator/issues/65)) ([ed78538](https://github.com/jacaudi/cloudflare-operator/commit/ed7853878910fc13c185ba36d2d242746498435b))
+
 ## [0.8.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.4...v0.8.0) (2026-05-01)
 
 ### Bug Fixes
