@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.9.0...v0.9.1) (2026-05-01)
+
+### Bug Fixes
+
+* **sources:** propagate secret namespace into emitted SecretRef ([#70](https://github.com/jacaudi/cloudflare-operator/issues/70)) ([17b1909](https://github.com/jacaudi/cloudflare-operator/commit/17b19095d1d84b144625890d920cd66f4efb3e1d))
+
 ## [0.9.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.8.1...v0.9.0) (2026-05-01)
 
 ### Features
