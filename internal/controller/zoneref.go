@@ -46,7 +46,8 @@ type zoneReferencer interface {
 
 // ResolveZoneID returns the Cloudflare zone ID for obj: either its inline
 // Spec.ZoneID, or the ZoneID from the CloudflareZone it references via
-// Spec.ZoneRef (looked up in obj's namespace). Returns ErrZoneRefNotReady
+// Spec.ZoneRef. The lookup namespace is ref.Namespace when set, otherwise
+// it falls back to obj's own namespace. Returns ErrZoneRefNotReady
 // (wrapped) when the referenced zone exists but hasn't populated ZoneID yet.
 func ResolveZoneID(ctx context.Context, k8sClient client.Client, obj zoneReferencer) (string, error) {
 	if id := obj.GetZoneID(); id != "" {
@@ -57,10 +58,15 @@ func ResolveZoneID(ctx context.Context, k8sClient client.Client, obj zoneReferen
 		return "", fmt.Errorf("one of zoneID or zoneRef is required")
 	}
 
+	ns := ref.Namespace
+	if ns == "" {
+		ns = obj.GetNamespace()
+	}
+
 	var zone cloudflarev1alpha1.CloudflareZone
 	if err := k8sClient.Get(ctx, types.NamespacedName{
 		Name:      ref.Name,
-		Namespace: obj.GetNamespace(),
+		Namespace: ns,
 	}, &zone); err != nil {
 		return "", fmt.Errorf("failed to get CloudflareZone %q: %w", ref.Name, err)
 	}

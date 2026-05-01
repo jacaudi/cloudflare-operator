@@ -9,12 +9,17 @@ type SecretReference struct {
 	Name string `json:"name"`
 }
 
-// ZoneReference refers to a CloudflareZone CR in the same namespace.
+// ZoneReference refers to a CloudflareZone CR.
 type ZoneReference struct {
 	// Name of the CloudflareZone resource.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
+
+	// Namespace of the CloudflareZone. Defaults to the referencing CR's own
+	// namespace when empty.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // TunnelReference identifies a CloudflareTunnel this rule attaches to.
