@@ -24,7 +24,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+// connectorMetricsPort is the bind port for cloudflared's metrics server.
+// The cloudflared CLI requires --metrics to be passed for `tunnel ... ready`
+// to function and for the kubelet to probe /ready. The port is fixed so the
+// container port, args, and readiness probe stay in lock-step.
+const connectorMetricsPort = 20241
 
 // Default connector image components. DefaultConnectorImage is built from
 // these so version bumps stay consistent with the partial-image fallback in
@@ -238,7 +245,15 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 				Args: []string{
 					"tunnel",
 					"--config", "/etc/cloudflared/config.yaml",
+					"--metrics", fmt.Sprintf("0.0.0.0:%d", connectorMetricsPort),
 					"run",
+				},
+				Ports: []corev1.ContainerPort{
+					{
+						Name:          "metrics",
+						ContainerPort: connectorMetricsPort,
+						Protocol:      corev1.ProtocolTCP,
+					},
 				},
 				SecurityContext: &corev1.SecurityContext{
 					RunAsNonRoot:             &nonRoot,
@@ -252,14 +267,16 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 					{Name: "config", MountPath: "/etc/cloudflared", ReadOnly: true},
 					{Name: "credentials", MountPath: "/etc/cloudflared/credentials", ReadOnly: true},
 				},
+				// Readiness probes the metrics server's /ready endpoint, which
+				// reports whether cloudflared has registered tunnel connections
+				// to the Cloudflare edge. The exec form (`cloudflared tunnel
+				// ready`) requires --metrics on the CLI and is brittle across
+				// cloudflared versions; httpGet is the documented stable surface.
 				ReadinessProbe: &corev1.Probe{
 					ProbeHandler: corev1.ProbeHandler{
-						Exec: &corev1.ExecAction{
-							Command: []string{
-								"cloudflared", "tunnel",
-								"--config", "/etc/cloudflared/config.yaml",
-								"ready",
-							},
+						HTTPGet: &corev1.HTTPGetAction{
+							Path: "/ready",
+							Port: intstr.FromInt(connectorMetricsPort),
 						},
 					},
 					PeriodSeconds: 10,
@@ -267,6 +284,14 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 			},
 		},
 	}
+
+	// Rollout strategy: at most one replica may be unavailable, and at most one
+	// surge replica is created. With replicas==1 this gives surge-then-terminate
+	// ordering so an image upgrade never runs zero ready tunnels. With replicas>1
+	// it is at least as safe as the percentage-based default and removes the
+	// replica-count dependency.
+	maxUnavailable := intstr.FromInt(1)
+	maxSurge := intstr.FromInt(1)
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -278,6 +303,18 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			// 10s grace before kubelet flips the new replica to Ready. cloudflared
+			// reports /ready as soon as the first edge connection is registered,
+			// but the tunnel only becomes truly redundant after multiple
+			// connections are up — this gap covers that window.
+			MinReadySeconds: 10,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxUnavailable: &maxUnavailable,
+					MaxSurge:       &maxSurge,
+				},
+			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: labels,
