@@ -283,7 +283,7 @@ The operator retries on the next reconcile and adopts the record, rewriting the 
 
 ## 6. Two Routes or Services Conflict on the Same FQDN
 
-**Symptom:** Two `HTTPRoute` or `Service` objects both claim the same hostname. Because each source controller names its emitted `CloudflareDNSRecord` after itself (e.g. `httproute-<ns>-<name>-<fqdn>` vs. `svc-<ns>-<name>-<fqdn>`), two CRs for the same FQDN can coexist and both attempt to reconcile the Cloudflare record. The TXT registry mediates ownership: the first CR to write the companion TXT claims ownership (`owner = txtOwnerID`). The second CR finds a TXT whose owner matches `txtOwnerID` and treats the record as already-owned, so it overwrites the DNS content on every reconcile cycle. The result is last-write-wins churn, not a hard error.
+**Symptom:** Two `HTTPRoute` or `Service` objects both claim the same hostname. Because each source controller names its emitted `CloudflareDNSRecord` after itself (e.g. `httproute-<source-name>-<hash>` vs. `svc-<source-name>-<hash>`, where `<hash>` is 8 hex chars derived from the source kind and FQDN), two CRs for the same FQDN can coexist and both attempt to reconcile the Cloudflare record. The TXT registry mediates ownership: the first CR to write the companion TXT claims ownership (`owner = txtOwnerID`). The second CR finds a TXT whose owner matches `txtOwnerID` and treats the record as already-owned, so it overwrites the DNS content on every reconcile cycle. The result is last-write-wins churn, not a hard error.
 
 ```bash
 # Find all CloudflareDNSRecord CRs for a hostname to identify competing sources
