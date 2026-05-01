@@ -170,7 +170,7 @@ func BuildConnectorPodDisruptionBudget(tun *cloudflarev1alpha1.CloudflareTunnel)
 		return nil
 	}
 	n := ConnectorNames(tun)
-	minAvail := intstr.FromInt(1)
+	minAvail := intstr.FromInt32(1)
 	return &policyv1.PodDisruptionBudget{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            n.PodDisruptionBudget,
