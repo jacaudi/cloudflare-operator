@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.4...v0.8.0) (2026-05-01)
+
+### Bug Fixes
+
+* **connector:** drop redundant --credentials-file Args ([#58](https://github.com/jacaudi/cloudflare-operator/issues/58)) ([a8d5833](https://github.com/jacaudi/cloudflare-operator/commit/a8d58336da88b49bf12a0c9b9f8ff005e1f66de9))
+* **connector:** render tunnel and credentials-file in config.yaml ([#58](https://github.com/jacaudi/cloudflare-operator/issues/58)) ([e1055ef](https://github.com/jacaudi/cloudflare-operator/commit/e1055efa53ff980124cf6254900b166381e42a00))
+* **connector:** retry on conflict in applyOwned (SA, ConfigMap) ([#59](https://github.com/jacaudi/cloudflare-operator/issues/59)) ([655e640](https://github.com/jacaudi/cloudflare-operator/commit/655e64097f0e7e22e6dcd06f1ecacbcef44efbcd))
+* **connector:** retry on conflict when updating connector Deployment ([#59](https://github.com/jacaudi/cloudflare-operator/issues/59)) ([f6a1d72](https://github.com/jacaudi/cloudflare-operator/commit/f6a1d729622271db326f2c904d296098d87f2f58))
+
+
+### Features
+
+* **connector:** fail loud when Status.TunnelID is empty ([3ad01b2](https://github.com/jacaudi/cloudflare-operator/commit/3ad01b25c3907d9979d8a67130999040d8a9d97d))
+
 ## [0.7.4](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.3...v0.7.4) (2026-05-01)
 
 ### Bug Fixes
