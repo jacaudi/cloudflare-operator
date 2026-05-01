@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.4](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.3...v0.7.4) (2026-05-01)
+
+### Bug Fixes
+
+* **deps:** update module sigs.k8s.io/gateway-api to v1.5.1 ([4fd3e67](https://github.com/jacaudi/cloudflare-operator/commit/4fd3e670ff99dcf481d7c933f70d207a78f0400b))
+
 ## [0.7.3](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.2...v0.7.3) (2026-05-01)
 
 ### Bug Fixes
