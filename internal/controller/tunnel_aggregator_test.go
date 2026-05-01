@@ -65,9 +65,13 @@ func TestAggregate_SortAndRender(t *testing.T) {
 	if len(result.Rendered) == 0 {
 		t.Fatal("expected rendered bytes")
 	}
-	// Priority 200 > 100 > 50, then default backend, then http_status:404
+	// Priority 200 > 100 > 50, then default backend (which IS the catch-all
+	// when set; #66 — no trailing http_status:404 in this case).
 	got := string(result.Rendered)
-	wantOrder := []string{"high.example.com", "mid.example.com", "low.example.com", "envoy.network.svc", "http_status:404"}
+	wantOrder := []string{"high.example.com", "mid.example.com", "low.example.com", "envoy.network.svc"}
+	if strings.Contains(got, "http_status:404") {
+		t.Errorf("rendered config must NOT contain http_status:404 when defaultBackend is set (#66):\n%s", got)
+	}
 	prev := -1
 	for _, token := range wantOrder {
 		idx := strings.Index(got, token)
@@ -224,6 +228,63 @@ func TestAggregate_HashStableAcrossShuffle(t *testing.T) {
 	}
 	if Aggregate("test-tunnel-id", rulesA, nil).ConfigHash != Aggregate("test-tunnel-id", rulesB, nil).ConfigHash {
 		t.Fatal("hash must be stable regardless of input order")
+	}
+}
+
+// TestAggregate_DefaultBackendReplacesHTTP404Catchall verifies that when
+// routing.defaultBackend is set, the rendered config does NOT also emit the
+// http_status:404 catch-all (which cloudflared would reject as unreachable
+// when no other rules precede it; #66).
+func TestAggregate_DefaultBackendReplacesHTTP404Catchall(t *testing.T) {
+	// No rules included; defaultBackend set.
+	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+	}
+	got := string(Aggregate("test-tunnel-id", nil, routing).Rendered)
+
+	if !strings.Contains(got, "- service: https://default.example.com\n") {
+		t.Errorf("rendered config missing defaultBackend entry:\n%s", got)
+	}
+	if strings.Contains(got, "http_status:404") {
+		t.Errorf("rendered config must NOT contain http_status:404 when defaultBackend is set (#66):\n%s", got)
+	}
+}
+
+// TestAggregate_HTTP404CatchallWhenNoDefaultBackend verifies that the
+// trailing http_status:404 is still emitted when defaultBackend is absent —
+// preserves the existing behavior for tunnels without a defaultBackend.
+func TestAggregate_HTTP404CatchallWhenNoDefaultBackend(t *testing.T) {
+	got := string(Aggregate("test-tunnel-id", nil, nil).Rendered)
+	if !strings.Contains(got, "- service: http_status:404\n") {
+		t.Errorf("rendered config must contain http_status:404 when defaultBackend is absent:\n%s", got)
+	}
+}
+
+// TestAggregate_DefaultBackendWithRules verifies that with at least one
+// included rule AND a defaultBackend set, the rule entries precede the
+// defaultBackend catch-all and no http_status:404 follows.
+func TestAggregate_DefaultBackendWithRules(t *testing.T) {
+	t0 := time.Date(2026, 4, 21, 0, 0, 0, 0, time.UTC)
+	rule := ruleAt("r", "apps", t0, 100, "home", []string{"h.example.com"}, "http://b:8080")
+	routing := &cloudflarev1alpha1.TunnelRoutingSpec{
+		DefaultBackend: &cloudflarev1alpha1.TunnelRuleBackend{
+			URL: strPtr("https://default.example.com"),
+		},
+	}
+	got := string(Aggregate("test-tunnel-id", []cloudflarev1alpha1.CloudflareTunnelRule{rule}, routing).Rendered)
+
+	ruleIdx := strings.Index(got, "- hostname:")
+	defaultIdx := strings.Index(got, "- service: https://default.example.com")
+	if ruleIdx < 0 || defaultIdx < 0 {
+		t.Fatalf("rendered config missing rule or defaultBackend:\n%s", got)
+	}
+	if !(ruleIdx < defaultIdx) {
+		t.Errorf("rule entries must precede defaultBackend:\n%s", got)
+	}
+	if strings.Contains(got, "http_status:404") {
+		t.Errorf("rendered config must NOT contain http_status:404 when defaultBackend is set (#66):\n%s", got)
 	}
 }
 

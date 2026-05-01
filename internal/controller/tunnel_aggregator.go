@@ -75,8 +75,12 @@ type AggregationResult struct {
 //  1. Rules sorted by spec.priority desc, then metadata.name asc.
 //  2. Duplicate hostnames resolved by first writer (creationTimestamp asc,
 //     then UID asc); losers get RuleDuplicateHostname.
-//  3. config.yaml order: included rules, then spec.routing.defaultBackend (if
-//     set), then a fixed final http_status:404 catch-all.
+//  3. config.yaml order: included rules, then either spec.routing.defaultBackend
+//     (if set) OR a final http_status:404 catch-all — never both. When
+//     defaultBackend is set it IS the catch-all (cloudflared treats an entry
+//     without `hostname:` as a wildcard); appending http_status:404 after it
+//     would render that 404 unreachable and, when no rules precede the
+//     defaultBackend, cloudflared rejects the config outright (#66).
 func Aggregate(tunnelID string, rules []cloudflarev1alpha1.CloudflareTunnelRule, routing *cloudflarev1alpha1.TunnelRoutingSpec) AggregationResult {
 	decisions := map[types.NamespacedName]RuleDecision{}
 	claims := map[string]types.NamespacedName{} // hostname -> winning rule key
@@ -218,10 +222,12 @@ func Aggregate(tunnelID string, rules []cloudflarev1alpha1.CloudflareTunnelRule,
 			b.WriteString(oReq)
 		}
 	}
-	if routing != nil && routing.DefaultBackend != nil {
+	switch {
+	case routing != nil && routing.DefaultBackend != nil:
 		fmt.Fprintf(&b, "  - service: %s\n", renderBackend(routing.DefaultBackend, ""))
+	default:
+		b.WriteString("  - service: http_status:404\n")
 	}
-	b.WriteString("  - service: http_status:404\n")
 
 	sum := sha256.Sum256([]byte(b.String()))
 	for k, ok := range includedSet {
