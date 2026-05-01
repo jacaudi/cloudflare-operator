@@ -19,7 +19,7 @@ jobs:
     with:
       yaml: true
       go: true
-      go-version: '1.25'
+      go-version: '1.26'
       helm: true
       helm-chart-path: 'chart'
 
@@ -28,7 +28,7 @@ jobs:
     uses: jacaudi/github-actions/.github/workflows/component-test.yml@v0.20.1
     with:
       test-framework: 'go'
-      go-version: '1.25'
+      go-version: '1.26'
       coverage: true
       coverage-threshold: 40
       test-packages: './internal/controller/... ./internal/cloudflare/... ./internal/ipresolver/... ./internal/status/... ./api/...'
