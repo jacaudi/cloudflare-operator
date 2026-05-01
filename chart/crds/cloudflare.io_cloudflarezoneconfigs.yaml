@@ -353,6 +353,11 @@ spec:
                     description: Name of the CloudflareZone resource.
                     minLength: 1
                     type: string
+                  namespace:
+                    description: |-
+                      Namespace of the CloudflareZone. Defaults to the referencing CR's own
+                      namespace when empty.
+                    type: string
                 required:
                 - name
                 type: object
