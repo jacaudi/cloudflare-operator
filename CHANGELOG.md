@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.7.0...v0.7.1) (2026-05-01)
+
+### Bug Fixes
+
+* **deps:** update module golang.org/x/sync to v0.20.0 ([7270f2c](https://github.com/jacaudi/cloudflare-operator/commit/7270f2c14b04e8fca1b1e54fedf4ba2c7b6af0e5))
+
 ## [0.7.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.6.2...v0.7.0) (2026-04-30)
 
 ### Features
