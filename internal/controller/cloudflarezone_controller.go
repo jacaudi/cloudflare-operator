@@ -85,7 +85,8 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// 4. Get Cloudflare credentials (API token + Account ID)
-	creds, err := r.ClientFactory.GetCredentials(ctx, zone.Spec.SecretRef.Name, zone.Namespace)
+	secretNs := secretRefNamespace(zone.Spec.SecretRef, zone.Namespace)
+	creds, err := r.ClientFactory.GetCredentials(ctx, zone.Spec.SecretRef.Name, secretNs)
 	if err != nil {
 		logger.Error(err, "failed to get credentials")
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
@@ -93,7 +94,7 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 	if creds.AccountID == "" {
 		err := fmt.Errorf("secret %s/%s does not contain %q key",
-			zone.Namespace, zone.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
+			secretNs, zone.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 		logger.Error(err, "missing Account ID")
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
@@ -238,7 +239,8 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 	logger := log.FromContext(ctx)
 
 	if zone.Spec.DeletionPolicy == cloudflarev1alpha1.DeletionPolicyDelete && zone.Status.ZoneID != "" {
-		apiToken, err := r.ClientFactory.GetAPIToken(ctx, zone.Spec.SecretRef.Name, zone.Namespace)
+		secretNs := secretRefNamespace(zone.Spec.SecretRef, zone.Namespace)
+		apiToken, err := r.ClientFactory.GetAPIToken(ctx, zone.Spec.SecretRef.Name, secretNs)
 		if err != nil {
 			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,

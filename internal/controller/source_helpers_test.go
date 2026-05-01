@@ -197,6 +197,32 @@ func TestFirstNonEmpty_BothEmpty(t *testing.T) {
 	}
 }
 
+// ---- TestSecretRefNamespace -------------------------------------------------
+
+func TestSecretRefNamespace_RefNamespaceWins(t *testing.T) {
+	ref := cloudflarev1alpha1.SecretReference{Name: "cf-creds", Namespace: "zones"}
+	got := secretRefNamespace(ref, "apps")
+	if got != "zones" {
+		t.Errorf("expected zones, got %q", got)
+	}
+}
+
+func TestSecretRefNamespace_FallbackUsedWhenEmpty(t *testing.T) {
+	ref := cloudflarev1alpha1.SecretReference{Name: "cf-creds"}
+	got := secretRefNamespace(ref, "apps")
+	if got != "apps" {
+		t.Errorf("expected apps, got %q", got)
+	}
+}
+
+func TestSecretRefNamespace_BothEmpty(t *testing.T) {
+	ref := cloudflarev1alpha1.SecretReference{Name: "cf-creds"}
+	got := secretRefNamespace(ref, "")
+	if got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
 // ---- TestOwnerRefsFor -------------------------------------------------------
 
 func TestOwnerRefsFor(t *testing.T) {

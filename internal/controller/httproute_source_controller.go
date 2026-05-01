@@ -413,7 +413,10 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 			Content:   strPtr(content),
 			Proxied:   boolPtr(proxied),
 			TTL:       ttl,
-			SecretRef: cloudflarev1alpha1.SecretReference{Name: zone.Spec.SecretRef.Name},
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name:      zone.Spec.SecretRef.Name,
+				Namespace: zone.Namespace,
+			},
 			ZoneRef: &cloudflarev1alpha1.ZoneReference{
 				Name:      zone.Name,
 				Namespace: zone.Namespace,
@@ -447,7 +450,10 @@ func (r *HTTPRouteSourceReconciler) emitDNSPair(
 			Type:      "TXT",
 			Content:   strPtr(txtContent),
 			TTL:       120,
-			SecretRef: cloudflarev1alpha1.SecretReference{Name: zone.Spec.SecretRef.Name},
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name:      zone.Spec.SecretRef.Name,
+				Namespace: zone.Namespace,
+			},
 			ZoneRef: &cloudflarev1alpha1.ZoneReference{
 				Name:      zone.Name,
 				Namespace: zone.Namespace,

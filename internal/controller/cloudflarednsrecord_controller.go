@@ -169,7 +169,8 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 
 	// 4. Get API token
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, dnsRecord.Namespace)
+	secretNs := secretRefNamespace(dnsRecord.Spec.SecretRef, dnsRecord.Namespace)
+	apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, secretNs)
 	if err != nil {
 		logger.Error(err, "failed to get API token")
 		return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
@@ -375,7 +376,8 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dns
 				cloudflarev1alpha1.ReasonZoneRefNotReady, wrapDeleteErr(err), 30*time.Second)
 		}
 
-		apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, dnsRecord.Namespace)
+		secretNs := secretRefNamespace(dnsRecord.Spec.SecretRef, dnsRecord.Namespace)
+		apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, secretNs)
 		if err != nil {
 			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,

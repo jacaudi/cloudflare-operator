@@ -85,6 +85,11 @@ spec:
                     description: Name of the Secret.
                     minLength: 1
                     type: string
+                  namespace:
+                    description: |-
+                      Namespace of the Secret. Defaults to the dependent CR's own namespace
+                      when empty.
+                    type: string
                 required:
                 - name
                 type: object
