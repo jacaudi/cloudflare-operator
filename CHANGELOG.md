@@ -66,6 +66,10 @@
 
 ## Unreleased
 
+### Added
+
+- `CloudflareTunnel.spec.connector.nameOverride`: optional field to set the base name used for the operator-managed Deployment, ServiceAccount, and ConfigMap. When set, the Deployment and ServiceAccount are named exactly `<nameOverride>` and the ConfigMap is named `<nameOverride>-config`. When unset, the existing `<tunnel.metadata.name>-connector` family is preserved. ([#68](https://github.com/jacaudi/cloudflare-operator/issues/68))
+
 ### Fixed
 
 - `CloudflareZoneConfig`: a permission/plan failure on one settings group (most commonly `bot_management` on Free zones, or a token without `Zone:Bot Management:Edit`) no longer blocks the rest of the spec from being applied. Each group now records its own `<Group>Applied` status condition with reason `Applied`, `NotConfigured`, `PermissionDenied`, or `CloudflareAPIError`. The resource's `Ready` condition is `False` with `Reason=PartialApply` until every configured group succeeds. ([#51](https://github.com/jacaudi/cloudflare-operator/issues/51))

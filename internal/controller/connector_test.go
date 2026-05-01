@@ -55,6 +55,56 @@ func TestConnectorNames(t *testing.T) {
 	}
 }
 
+// TestConnectorNames_NameOverride verifies that spec.connector.nameOverride
+// replaces the default "<tunnel-name>-connector" base across the Deployment,
+// ServiceAccount, and ConfigMap. ConfigMap retains its "-config" suffix to
+// disambiguate it from the Deployment/SA, which share the override name (#68).
+func TestConnectorNames_NameOverride(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.NameOverride = "cloudflared-prod"
+
+	n := ConnectorNames(tun)
+	if n.Deployment != "cloudflared-prod" {
+		t.Errorf("Deployment name = %q, want %q", n.Deployment, "cloudflared-prod")
+	}
+	if n.ServiceAccount != "cloudflared-prod" {
+		t.Errorf("ServiceAccount name = %q, want %q", n.ServiceAccount, "cloudflared-prod")
+	}
+	if n.ConfigMap != "cloudflared-prod-config" {
+		t.Errorf("ConfigMap name = %q, want %q", n.ConfigMap, "cloudflared-prod-config")
+	}
+}
+
+// TestConnectorNames_NameOverrideEmpty verifies that an empty NameOverride
+// (the zero value) falls back to the default "<tunnel-name>-connector" family.
+func TestConnectorNames_NameOverrideEmpty(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector.NameOverride = ""
+
+	n := ConnectorNames(tun)
+	if n.Deployment != "home-connector" {
+		t.Errorf("Deployment name = %q, want default %q", n.Deployment, "home-connector")
+	}
+	if n.ConfigMap != "home-connector-config" {
+		t.Errorf("ConfigMap name = %q, want default %q", n.ConfigMap, "home-connector-config")
+	}
+	if n.ServiceAccount != "home-connector" {
+		t.Errorf("ServiceAccount name = %q, want default %q", n.ServiceAccount, "home-connector")
+	}
+}
+
+// TestConnectorNames_NameOverrideNilConnector verifies that ConnectorNames
+// is safe when tun.Spec.Connector is nil (e.g., connector disabled / unset).
+func TestConnectorNames_NameOverrideNilConnector(t *testing.T) {
+	tun := tunnelFixture(true)
+	tun.Spec.Connector = nil
+
+	n := ConnectorNames(tun)
+	if n.Deployment != "home-connector" {
+		t.Errorf("Deployment name = %q, want default %q", n.Deployment, "home-connector")
+	}
+}
+
 func TestBuildConnectorResources_Basic(t *testing.T) {
 	tun := tunnelFixture(true)
 	configYAML := []byte("ingress:\n  - service: http_status:404\n")
