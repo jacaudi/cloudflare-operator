@@ -118,7 +118,7 @@ CUSTOM_GCL = $(LOCALBIN)/custom-gcl
 
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
-GOLANGCI_LINT_VERSION ?= v2.11.4
+GOLANGCI_LINT_VERSION ?= v2.12.1
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
