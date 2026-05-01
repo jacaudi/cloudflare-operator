@@ -2,6 +2,9 @@
 Build controllers structure from flat values
 */}}
 {{- define "cloudflare-operator.values.controllers" -}}
+{{- $replicas := int (.Values.controller.replicas | default 1) -}}
+{{- $tsc := .Values.controller.topologySpreadConstraints | default list -}}
+{{- $aff := .Values.controller.affinity | default dict -}}
 controllers:
   main:
     type: deployment
@@ -11,6 +14,27 @@ controllers:
     serviceAccount:
       identifier: main
     {{- end }}
+    {{- if and .Values.controller.podDisruptionBudget.enabled (gt $replicas 1) }}
+    podDisruptionBudget:
+      minAvailable: 1
+    {{- end }}
+    pod:
+      {{- if and (gt $replicas 1) (empty $tsc) (empty $aff) }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "cloudflare-operator.name" . }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/controller: main
+      {{- else if not (empty $tsc) }}
+      topologySpreadConstraints: {{ toYaml $tsc | nindent 8 }}
+      {{- end }}
+      {{- if not (empty $aff) }}
+      affinity: {{ toYaml $aff | nindent 8 }}
+      {{- end }}
     containers:
       main:
         image:
