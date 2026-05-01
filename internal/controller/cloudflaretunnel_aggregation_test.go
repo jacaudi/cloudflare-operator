@@ -970,6 +970,43 @@ func TestReconcileConnectorResources_PersistentConflictPropagates(t *testing.T) 
 	}
 }
 
+// TestApplyOwned_PersistentConflictPropagates verifies that when conflicts
+// exhaust retry.DefaultRetry's budget, applyOwned propagates the final
+// IsConflict error rather than silently swallowing it.
+func TestApplyOwned_PersistentConflictPropagates(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	ndep := ConnectorNames(tun)
+	existing := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ndep.ConfigMap,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	funcs := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok {
+				return apierrors.NewConflict(
+					schema.GroupResource{Group: "", Resource: "configmaps"},
+					obj.GetName(), fmt.Errorf("permanent conflict"),
+				)
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+	c := buildInterceptedAggClient(funcs, tun, existing)
+
+	agg := Aggregate(tun.Status.TunnelID, nil, nil)
+	cm := BuildConnectorConfigMap(tun, agg.Rendered, agg.ConfigHash)
+	err := applyOwned(context.Background(), c, cm, &corev1.ConfigMap{})
+	if err == nil {
+		t.Fatal("expected propagated conflict error after retry budget exhausted, got nil")
+	}
+	if !apierrors.IsConflict(err) {
+		t.Errorf("expected IsConflict error, got %v", err)
+	}
+}
+
 // TestApplyOwned_RetriesOnConfigMapConflict verifies that applyOwned recovers
 // from transient IsConflict errors on the ConfigMap Update path (#59).
 func TestApplyOwned_RetriesOnConfigMapConflict(t *testing.T) {

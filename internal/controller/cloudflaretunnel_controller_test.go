@@ -109,8 +109,9 @@ func newTestTunnel(name, namespace string) *cloudflarev1alpha1.CloudflareTunnel 
 }
 
 // buildTunnelReconciler creates a CloudflareTunnelReconciler wired to a fake client and mock tunnel client.
-func buildTunnelReconciler(mock *mockTunnelClient, objs ...client.Object) *CloudflareTunnelReconciler {
-	s := testScheme(&testing.T{})
+func buildTunnelReconciler(t *testing.T, mock *mockTunnelClient, objs ...client.Object) *CloudflareTunnelReconciler {
+	t.Helper()
+	s := testScheme(t)
 
 	// Collect CRD objects for status subresource registration
 	var statusObjs []client.Object
@@ -143,7 +144,7 @@ func TestTunnelReconcile_AddsFinalizerOnFirstReconcile(t *testing.T) {
 	secret := newTestSecret("default")
 	mock := newMockTunnelClient()
 
-	r := buildTunnelReconciler(mock, tunnel, secret)
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
 
 	result, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
@@ -176,7 +177,7 @@ func TestTunnelReconcile_CreatesTunnel(t *testing.T) {
 	secret := newTestSecret("default")
 	mock := newMockTunnelClient()
 
-	r := buildTunnelReconciler(mock, tunnel, secret)
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
 
 	result, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
@@ -255,7 +256,7 @@ func TestTunnelReconcile_AdoptsExistingTunnel(t *testing.T) {
 		Name: "my-tunnel",
 	}
 
-	r := buildTunnelReconciler(mock, tunnel, secret)
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
@@ -306,7 +307,7 @@ func TestTunnelReconcile_DeletesTunnel(t *testing.T) {
 		Name: "my-tunnel",
 	}
 
-	r := buildTunnelReconciler(mock, tunnel, secret)
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
@@ -347,7 +348,7 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 	// No secret created - should fail to get API token
 	mock := newMockTunnelClient()
 
-	r := buildTunnelReconciler(mock, tunnel)
+	r := buildTunnelReconciler(t, mock, tunnel)
 
 	result, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
@@ -387,12 +388,9 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 // buildInterceptedTunnelReconciler is the same as buildTunnelReconciler
 // but wraps the fake client with the given interceptor.Funcs so individual
 // API calls can be intercepted (e.g. to inject conflict storms).
-func buildInterceptedTunnelReconciler(mock *mockTunnelClient, funcs interceptor.Funcs, objs ...client.Object) *CloudflareTunnelReconciler {
-	s := testScheme(&testing.T{})
-	// testScheme registers v1alpha1 + corev1; we need appsv1 for Deployments.
-	if err := appsv1.AddToScheme(s); err != nil {
-		panic("add appsv1 to scheme: " + err.Error())
-	}
+func buildInterceptedTunnelReconciler(t *testing.T, mock *mockTunnelClient, funcs interceptor.Funcs, objs ...client.Object) *CloudflareTunnelReconciler {
+	t.Helper()
+	s := testScheme(t)
 
 	var statusObjs []client.Object
 	for _, o := range objs {
@@ -469,7 +467,7 @@ func TestReconcile_ConnectorConflictStormDoesNotInflateRequeue(t *testing.T) {
 		},
 	}
 
-	r := buildInterceptedTunnelReconciler(mock, funcs, tun, secret, existingDep)
+	r := buildInterceptedTunnelReconciler(t, mock, funcs, tun, secret, existingDep)
 
 	res, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Namespace: tun.Namespace, Name: tun.Name},
