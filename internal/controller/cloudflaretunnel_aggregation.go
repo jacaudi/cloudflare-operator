@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -123,7 +124,7 @@ func reconcileConnectorResources(ctx context.Context, c client.Client, tun *clou
 
 	desired := BuildConnectorDeployment(tun, agg.ConfigHash)
 
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		var existing appsv1.Deployment
 		err := c.Get(ctx, types.NamespacedName{Namespace: desired.Namespace, Name: desired.Name}, &existing)
 		switch {
@@ -145,6 +146,55 @@ func reconcileConnectorResources(ctx context.Context, c client.Client, tun *clou
 			existing.OwnerReferences = desired.OwnerReferences
 			return c.Update(ctx, &existing)
 		}
+	}); err != nil {
+		return err
+	}
+
+	return applyOwnedPDB(ctx, c, tun)
+}
+
+// applyOwnedPDB ensures the connector PDB matches what
+// BuildConnectorPodDisruptionBudget returns. A nil desired value means
+// "ensure absent" — so dropping spec.connector.replicas from 2 to 1 removes
+// the PDB on the next reconcile.
+func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel) error {
+	desired := BuildConnectorPodDisruptionBudget(tun)
+	name := ConnectorNames(tun).PodDisruptionBudget
+
+	var existing policyv1.PodDisruptionBudget
+	getErr := c.Get(ctx, types.NamespacedName{Name: name, Namespace: tun.Namespace}, &existing)
+
+	if desired == nil {
+		if errors.IsNotFound(getErr) {
+			return nil
+		}
+		if getErr != nil {
+			return fmt.Errorf("get PDB %s/%s: %w", tun.Namespace, name, getErr)
+		}
+		if delErr := c.Delete(ctx, &existing); delErr != nil && !errors.IsNotFound(delErr) {
+			return fmt.Errorf("delete PDB %s/%s: %w", tun.Namespace, name, delErr)
+		}
+		return nil
+	}
+
+	if errors.IsNotFound(getErr) {
+		if createErr := c.Create(ctx, desired); createErr != nil {
+			return fmt.Errorf("create PDB %s/%s: %w", tun.Namespace, name, createErr)
+		}
+		return nil
+	}
+	if getErr != nil {
+		return fmt.Errorf("get PDB %s/%s: %w", tun.Namespace, name, getErr)
+	}
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing.Spec = desired.Spec
+		existing.Labels = desired.Labels
+		existing.OwnerReferences = desired.OwnerReferences
+		if updateErr := c.Update(ctx, &existing); updateErr != nil {
+			return fmt.Errorf("update PDB %s/%s: %w", tun.Namespace, name, updateErr)
+		}
+		return nil
 	})
 }
 

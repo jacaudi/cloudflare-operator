@@ -13,6 +13,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -203,6 +204,9 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	}
 	if err := appsv1.AddToScheme(s); err != nil {
 		t.Fatalf("failed to add appsv1 to scheme: %v", err)
+	}
+	if err := policyv1.AddToScheme(s); err != nil {
+		t.Fatalf("failed to add policyv1 to scheme: %v", err)
 	}
 	return s
 }
