@@ -99,7 +99,8 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// 4. Get Cloudflare credentials (API token + Account ID)
-	creds, err := r.ClientFactory.GetCredentials(ctx, tunnel.Spec.SecretRef.Name, tunnel.Namespace)
+	secretNs := secretRefNamespace(tunnel.Spec.SecretRef, tunnel.Namespace)
+	creds, err := r.ClientFactory.GetCredentials(ctx, tunnel.Spec.SecretRef.Name, secretNs)
 	if err != nil {
 		logger.Error(err, "failed to get credentials")
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
@@ -107,7 +108,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	if creds.AccountID == "" {
 		err := fmt.Errorf("secret %s/%s does not contain %q key",
-			tunnel.Namespace, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
+			secretNs, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 		logger.Error(err, "missing Account ID")
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
 			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
@@ -311,7 +312,8 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 	logger := log.FromContext(ctx)
 
 	if tunnel.Status.TunnelID != "" {
-		creds, err := r.ClientFactory.GetCredentials(ctx, tunnel.Spec.SecretRef.Name, tunnel.Namespace)
+		secretNs := secretRefNamespace(tunnel.Spec.SecretRef, tunnel.Namespace)
+		creds, err := r.ClientFactory.GetCredentials(ctx, tunnel.Spec.SecretRef.Name, secretNs)
 		if err != nil {
 			logger.Error(err, "failed to get credentials during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
@@ -319,7 +321,7 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 		}
 		if creds.AccountID == "" {
 			err := fmt.Errorf("secret %s/%s does not contain %q key",
-				tunnel.Namespace, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
+				secretNs, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 			logger.Error(err, "missing Account ID during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
 				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)

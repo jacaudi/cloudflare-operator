@@ -1642,3 +1642,56 @@ func TestHTTPRouteSource_ZoneRefCrossNamespace_PropagatedToEmittedCR(t *testing.
 		}
 	}
 }
+
+// ---- TestHTTPRouteSource_SecretRefCrossNamespace_PropagatedToEmittedCR -----
+// Regression for issue #70: when the CloudflareZone (and the credentials
+// Secret it references) live in a different namespace than the HTTPRoute, the
+// emitted CloudflareDNSRecord (data + TXT) must carry the zone's namespace in
+// Spec.SecretRef.Namespace so the DNSRecord controller's GetAPIToken call
+// resolves the Secret in the right namespace. Without the fix, the call would
+// look up the Secret in the emitted CR's namespace (= source namespace) and
+// fail with "Secret … not found".
+
+func TestHTTPRouteSource_SecretRefCrossNamespace_PropagatedToEmittedCR(t *testing.T) {
+	s := httpRouteScheme(t)
+
+	// Zone + secret live in "zones"; route + tunnel live in "apps".
+	zone := newZone("example-com", "zones", "example.com", "cf-creds")
+	zone.Status.ZoneID = "zone-id-from-status"
+
+	tunnel := newReadyTunnel("home", "apps")
+	route := newHTTPRoute("apps", "my-route", map[string]string{
+		AnnotationTarget:           "tunnel:home",
+		AnnotationZoneRef:          "example-com",
+		AnnotationZoneRefNamespace: "zones",
+	}, hostnames("foo.example.com"), nil)
+
+	r, _ := buildHTTPRouteReconciler(s, "owner1", route, zone, tunnel)
+
+	if _, err := r.Reconcile(context.Background(), req("apps", "my-route")); err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+
+	var records cloudflarev1alpha1.CloudflareDNSRecordList
+	if err := r.List(context.Background(), &records); err != nil {
+		t.Fatalf("list DNS records: %v", err)
+	}
+	if len(records.Items) < 2 {
+		t.Fatalf("expected at least 2 emitted DNS records (data + TXT), got %d", len(records.Items))
+	}
+
+	for i := range records.Items {
+		rec := &records.Items[i]
+		if rec.Spec.SecretRef.Name != "cf-creds" {
+			t.Errorf("emitted CR %q: SecretRef.Name = %q, want %q", rec.Name, rec.Spec.SecretRef.Name, "cf-creds")
+		}
+		if rec.Spec.SecretRef.Namespace != "zones" {
+			t.Errorf("emitted CR %q: SecretRef.Namespace = %q, want %q", rec.Name, rec.Spec.SecretRef.Namespace, "zones")
+		}
+		// Sanity: secretRefNamespace returns the zone's namespace, not the CR's.
+		got := secretRefNamespace(rec.Spec.SecretRef, rec.Namespace)
+		if got != "zones" {
+			t.Errorf("secretRefNamespace for emitted CR %q resolved to %q, want %q", rec.Name, got, "zones")
+		}
+	}
+}

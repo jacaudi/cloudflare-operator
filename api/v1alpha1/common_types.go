@@ -7,6 +7,11 @@ type SecretReference struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
+
+	// Namespace of the Secret. Defaults to the dependent CR's own namespace
+	// when empty.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // ZoneReference refers to a CloudflareZone CR.

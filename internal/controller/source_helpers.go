@@ -160,6 +160,17 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
+// secretRefNamespace returns ref.Namespace when set; otherwise fallback.
+// This lets a SecretReference target a Secret in a namespace other than the
+// dependent CR's own (e.g. credentials co-located with a CloudflareZone in a
+// shared namespace, while the emitted CR lives alongside the workload).
+func secretRefNamespace(ref cloudflarev1alpha1.SecretReference, fallback string) string {
+	if ref.Namespace != "" {
+		return ref.Namespace
+	}
+	return fallback
+}
+
 // ownerRefsFor returns a single-element slice containing an OwnerReference
 // for obj with Controller=true and BlockOwnerDeletion=true.
 // The caller must ensure obj has its TypeMeta set (GroupVersionKind populated)

@@ -414,6 +414,57 @@ func TestReconcile_SecretNotFound(t *testing.T) {
 	}
 }
 
+// TestReconcile_SecretRefCrossNamespace is a regression test for issue #70.
+// When the CloudflareDNSRecord lives in one namespace ("apps") but the
+// credentials Secret lives in another ("zones") — typical when an HTTPRoute or
+// Service source emits a DNSRecord referencing a Secret co-located with the
+// zone — the controller must honor Spec.SecretRef.Namespace and resolve the
+// Secret in that namespace. Without the fix, GetAPIToken would look in the
+// CR's own namespace and fail.
+func TestReconcile_SecretRefCrossNamespace(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecord("test-rec", "apps")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	// Point SecretRef at the Secret in "zones", not "apps".
+	dnsRecord.Spec.SecretRef = cloudflarev1alpha1.SecretReference{
+		Name:      "cf-secret",
+		Namespace: "zones",
+	}
+	secret := newTestSecret("zones")
+	mock := newMockDNSClient()
+
+	r := buildReconciler(s, mock, dnsRecord, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "apps"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected reconcile error: %v", err)
+	}
+
+	// Reconcile should reach the create path (5m requeue), not fall through
+	// to a 30s SecretNotFound requeue.
+	if result.RequeueAfter != 5*time.Minute {
+		t.Errorf("expected RequeueAfter=5m (success), got %v", result.RequeueAfter)
+	}
+
+	// Verify Ready condition is True (Secret was resolved + record created).
+	var updated cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "apps"}, &updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	for _, c := range updated.Status.Conditions {
+		if c.Type == cloudflarev1alpha1.ConditionTypeReady {
+			if c.Reason == cloudflarev1alpha1.ReasonSecretNotFound {
+				t.Errorf("expected Secret to be resolved across namespaces, got SecretNotFound: %s", c.Message)
+			}
+		}
+	}
+	if !mock.createCalled {
+		t.Error("expected CreateRecord to be called (Secret resolved cross-namespace)")
+	}
+}
+
 func TestReconcile_DeletesRecord(t *testing.T) {
 	s := testScheme(t)
 	dnsRecord := newTestDNSRecord("test-rec", "default")

@@ -101,7 +101,8 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// 4. Get API token
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, ruleset.Namespace)
+	secretNs := secretRefNamespace(ruleset.Spec.SecretRef, ruleset.Namespace)
+	apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, secretNs)
 	if err != nil {
 		logger.Error(err, "failed to get API token")
 		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,

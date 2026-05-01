@@ -105,7 +105,8 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	zoneConfig.Status.ZoneID = resolvedZoneID
 
 	// 4. Get API token
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zoneConfig.Spec.SecretRef.Name, zoneConfig.Namespace)
+	secretNs := secretRefNamespace(zoneConfig.Spec.SecretRef, zoneConfig.Namespace)
+	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zoneConfig.Spec.SecretRef.Name, secretNs)
 	if err != nil {
 		logger.Error(err, "failed to get API token")
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
