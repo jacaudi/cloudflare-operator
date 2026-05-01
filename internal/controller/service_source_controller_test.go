@@ -670,9 +670,10 @@ func TestServiceSource_UpsertExistingRecord(t *testing.T) {
 	})
 
 	// Pre-create a DNS record at the expected name with wrong content.
+	expectedDNSName := emittedDNSRecordName("svc", "my-svc", "foo.example.com")
 	existingRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "svc-apps-my-svc-foo-example-com",
+			Name:      expectedDNSName,
 			Namespace: "apps",
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
@@ -693,7 +694,7 @@ func TestServiceSource_UpsertExistingRecord(t *testing.T) {
 	// Re-fetch the record and verify it was updated.
 	var updated cloudflarev1alpha1.CloudflareDNSRecord
 	if err := r.Get(context.Background(),
-		types.NamespacedName{Namespace: "apps", Name: "svc-apps-my-svc-foo-example-com"},
+		types.NamespacedName{Namespace: "apps", Name: expectedDNSName},
 		&updated); err != nil {
 		t.Fatalf("get updated record: %v", err)
 	}
@@ -753,27 +754,17 @@ func TestServiceSource_WildcardHostname_Sanitized(t *testing.T) {
 	if err := r.List(context.Background(), &records); err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	// All emitted CRs should have "wild" in the name and no asterisks or dots.
-	found := false
+	// Wildcard FQDNs are folded into the name hash, so no asterisks or dots
+	// should ever appear in the emitted CR names.
+	if len(records.Items) == 0 {
+		t.Fatal("expected at least one emitted CR for a wildcard hostname")
+	}
 	for _, rec := range records.Items {
 		for _, ch := range rec.Name {
 			if ch == '*' || ch == '.' {
 				t.Errorf("CR name %q contains invalid character %q", rec.Name, ch)
 			}
 		}
-		if strings.Contains(rec.Name, "wild") {
-			found = true
-		}
-	}
-	if !found && len(records.Items) > 0 {
-		t.Errorf("expected at least one CR name containing 'wild', got %v",
-			func() []string {
-				names := make([]string, len(records.Items))
-				for i, r := range records.Items {
-					names[i] = r.Name
-				}
-				return names
-			}())
 	}
 }
 
@@ -1163,22 +1154,15 @@ func TestServiceSource_AdoptAnnotation_PropagatedToCR(t *testing.T) {
 }
 
 // ---- TestServiceSource_CRNameCapped_LongInput ------------------------------
-// P2.9: CR name for a Service with a very long namespace+name+hostname must be
-// ≤ 253 chars and be a valid DNS-1123 subdomain (no trailing dashes).
+// P2.9: CR name for a Service with a long namespace+name+hostname must be
+// ≤ 253 chars and be a valid DNS-1123 subdomain (no trailing dashes). Under
+// the new emittedDNSRecordName scheme, hostname goes only into the hash, so
+// length is driven by sourceName plus a fixed kind prefix and 8-char suffix.
 
 func TestServiceSource_CRNameCapped_LongInput(t *testing.T) {
-	// Build a hostname that pushes the svc-<ns>-<name>-<hostname> pattern well past 253.
-	// Build inputs that together produce an uncapped CR name > 253 chars.
-	// svc-<ns>-<name>-<sanitized-hostname> = 4 + 63 + 1 + 63 + 1 + 63+1+63+11 = well over 253.
 	longNS := strings.Repeat("a", 63)
 	longName := strings.Repeat("b", 63)
 	longHostname := strings.Repeat("c", 63) + "." + strings.Repeat("d", 63) + ".example.com"
-
-	// Verify our test input actually produces a name > 253 before capping.
-	uncapped := "svc-" + longNS + "-" + longName + "-" + sanitizeDNSForCRName(longHostname)
-	if len(uncapped) <= 253 {
-		t.Skipf("test setup error: uncapped name is only %d chars (want >253)", len(uncapped))
-	}
 
 	s := svcTestScheme(t)
 	zone := newZone("z", longNS, "example.com", "cf-secret")

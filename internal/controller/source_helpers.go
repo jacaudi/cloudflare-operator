@@ -19,9 +19,7 @@ package controller
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -50,42 +48,6 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return out
-}
-
-var (
-	// invalidCRNameChars matches characters that are not valid in a DNS1123 subdomain label.
-	invalidCRNameChars = regexp.MustCompile(`[^a-z0-9-]`)
-	// multipleDashes collapses consecutive dashes.
-	multipleDashes = regexp.MustCompile(`-{2,}`)
-)
-
-// sanitizeDNSForCRName converts a DNS hostname into a valid Kubernetes
-// DNS1123 subdomain name suitable for use as a CR metadata.name.
-//
-// Transformation rules (applied in order):
-//  1. Lowercase.
-//  2. Replace leading wildcard "*" with "wild".
-//  3. Replace dots with dashes.
-//  4. Strip any remaining characters that are not [a-z0-9-].
-//  5. Collapse consecutive dashes.
-//  6. Trim leading/trailing dashes.
-func sanitizeDNSForCRName(s string) string {
-	s = strings.ToLower(s)
-	// Replace wildcard leaf with "wild".
-	if strings.HasPrefix(s, "*.") {
-		s = "wild" + s[1:]
-	} else if s == "*" {
-		s = "wild"
-	}
-	// Replace dots with dashes.
-	s = strings.ReplaceAll(s, ".", "-")
-	// Strip invalid characters.
-	s = invalidCRNameChars.ReplaceAllString(s, "")
-	// Collapse consecutive dashes.
-	s = multipleDashes.ReplaceAllString(s, "-")
-	// Trim leading/trailing dashes.
-	s = strings.Trim(s, "-")
-	return s
 }
 
 // isValidDNSName reports whether hostname is a valid DNS name for use as a
@@ -129,27 +91,23 @@ func isValidDNSName(hostname string) bool {
 	return true
 }
 
-// maxK8sName is the Kubernetes maximum length for resource names (DNS-1123 subdomain).
-const maxK8sName = 253
+// emittedDNSRecordName returns the deterministic CR name for a
+// source-emitted CloudflareDNSRecord. The 8-char suffix is a hash of
+// (sourceKind, fqdn) so that multiple FQDNs from the same source produce
+// distinct CR names while staying well under the DNS-1123 length limit.
+//
+// Wildcard FQDNs (e.g. "*.example.com") are safe: the asterisk is part of
+// the hash input only, not the visible CR name.
+func emittedDNSRecordName(sourceKind, sourceName, fqdn string) string {
+	sum := sha256.Sum256([]byte(sourceKind + "|" + fqdn))
+	return fmt.Sprintf("%s-%s-%x", sourceKind, sourceName, sum[:4])
+}
 
-// capCRName ensures a generated CR name does not exceed maxK8sName characters.
-// When the name is already within the limit, it is returned unchanged.
-// When it exceeds the limit, it is truncated and a 9-character hash suffix
-// ("-" + 8 hex chars from sha256 of the original full name) is appended to
-// preserve uniqueness. The result always satisfies DNS-1123 subdomain rules
-// (no trailing dashes — the truncation point trims any trailing dashes before
-// appending the hash).
-func capCRName(name string) string {
-	if len(name) <= maxK8sName {
-		return name
-	}
-	h := sha256.Sum256([]byte(name))
-	suffix := "-" + hex.EncodeToString(h[:4]) // "-" + 8 hex chars = 9 chars
-	maxHead := maxK8sName - len(suffix)
-	head := name[:maxHead]
-	// Trim any trailing dash introduced by truncation.
-	head = strings.TrimRight(head, "-")
-	return head + suffix
+// emittedTunnelRuleName returns the deterministic CR name for a
+// source-emitted CloudflareTunnelRule. There is one TunnelRule per source,
+// so no FQDN hash is needed.
+func emittedTunnelRuleName(sourceKind, sourceName string) string {
+	return fmt.Sprintf("%s-%s", sourceKind, sourceName)
 }
 
 // firstNonEmpty returns the first non-empty string among a and b.
