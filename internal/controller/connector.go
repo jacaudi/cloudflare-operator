@@ -187,6 +187,43 @@ func BuildConnectorPodDisruptionBudget(tun *cloudflarev1alpha1.CloudflareTunnel)
 	}
 }
 
+// orDefault returns user when non-empty, otherwise fallback. Used to apply
+// scheduling defaults only when the user has not set a value.
+func orDefault[T any](user []T, fallback []T) []T {
+	if len(user) > 0 {
+		return user
+	}
+	return fallback
+}
+
+// defaultTopologySpread returns the default soft per-hostname
+// topologySpreadConstraint slice when:
+//   - replicas > 1, AND
+//   - cspec.Affinity is unset, AND
+//   - cspec.TopologySpreadConstraints is empty.
+//
+// Returns nil otherwise — any user-set scheduling knob disables the default
+// wholesale (least-surprise: user intent honoured exactly, no merging).
+func defaultTopologySpread(cspec *cloudflarev1alpha1.ConnectorSpec, replicas int32, labels map[string]string) []corev1.TopologySpreadConstraint {
+	if replicas < 2 {
+		return nil
+	}
+	if cspec == nil {
+		return nil
+	}
+	if cspec.Affinity != nil || len(cspec.TopologySpreadConstraints) > 0 {
+		return nil
+	}
+	return []corev1.TopologySpreadConstraint{{
+		MaxSkew:           1,
+		TopologyKey:       "kubernetes.io/hostname",
+		WhenUnsatisfiable: corev1.ScheduleAnyway,
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels: labels,
+		},
+	}}
+}
+
 // BuildConnectorDeployment produces the desired Deployment running cloudflared.
 //
 // Replicas: when cspec is nil (defensive path), default to 2. When cspec is
@@ -246,7 +283,7 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 		NodeSelector:              cspec.NodeSelector,
 		Tolerations:               cspec.Tolerations,
 		Affinity:                  cspec.Affinity,
-		TopologySpreadConstraints: cspec.TopologySpreadConstraints,
+		TopologySpreadConstraints: orDefault(cspec.TopologySpreadConstraints, defaultTopologySpread(cspec, replicas, labels)),
 		// FSGroup is intentionally unset: both volumes are read-only, and
 		// FSGroup forces a recursive chown on some CSI drivers.
 		SecurityContext: &corev1.PodSecurityContext{
