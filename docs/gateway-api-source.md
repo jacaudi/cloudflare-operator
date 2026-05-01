@@ -11,6 +11,31 @@ Sources never call the Cloudflare API directly. They only emit primitive CRs tha
 
 **Prerequisite:** Set `registry.txtOwnerID` in your Helm values (or the `TXT_OWNER_ID` environment variable). Without it, source controllers are inert.
 
+### Emitted CR naming
+
+Source controllers name the CRs they emit deterministically:
+
+- **`CloudflareDNSRecord`**: `<kind>-<source-name>-<8-hex-hash>` (and `<...>-txt` for the companion ownership TXT)
+- **`CloudflareTunnelRule`**: `<kind>-<source-name>` (one per source — no FQDN hash needed)
+
+`<kind>` is `httproute` for `HTTPRoute` sources and `svc` for `Service` sources. The 8-hex-char hash is `sha256(kind|fqdn)` truncated, so multiple FQDNs from the same source produce distinct CR names without leaking the FQDN. Wildcards (`*.example.com`) fold into the hash and never appear in the visible CR name.
+
+Example: an HTTPRoute named `jellyfin` carrying `app.example.com` produces a CR like `httproute-jellyfin-7f8a9b2c` (and `httproute-jellyfin-7f8a9b2c-txt`).
+
+### Upgrading from earlier operator versions
+
+Releases before v0.10.0 used a longer name shape: `<kind>-<namespace>-<source-name>-<sanitized-hostname>[-txt]`. After upgrading, the source controllers emit only the new short-form CRs; previously emitted long-form CRs become **orphans** in your cluster.
+
+The simplest cleanup is to delete every operator-managed `CloudflareDNSRecord` and let the source controllers re-emit them with the new names on the next reconcile:
+
+```bash
+kubectl get cloudflarednsrecord -A \
+  -l app.kubernetes.io/managed-by=cloudflare-operator \
+  -o name | xargs -r kubectl delete
+```
+
+Owner-reference garbage collection also removes long-form CRs automatically when the source `HTTPRoute` or `Service` is deleted, so leaving them in place is safe — they will eventually disappear on their own. Cloudflare DNS records themselves are unaffected: the TXT registry uses FQDN-based ownership keys independent of CR names, so re-emitted CRs adopt the existing records cleanly without churn.
+
 ---
 
 ## Annotation Reference
