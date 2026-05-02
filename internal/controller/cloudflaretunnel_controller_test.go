@@ -3,11 +3,14 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"testing"
 	"time"
 
+	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
@@ -502,5 +505,132 @@ func TestReconcile_ConnectorConflictStormDoesNotInflateRequeue(t *testing.T) {
 	ingress := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeIngressConfigured)
 	if ingress == nil || ingress.Status != metav1.ConditionTrue {
 		t.Errorf("expected IngressConfigured=True after Reconcile; got %+v", ingress)
+	}
+}
+
+// TestCloudflareTunnelReconciler_TunnelGoneClearsStatus exercises the
+// post-reconcileTunnel failReconcile site with a Cloudflare 404.
+//
+// reconcileTunnel swallows GetTunnel errors (logs + falls through); the 404
+// must therefore come from ListTunnelsByName. We trigger the fallthrough by
+// injecting a generic getErr, then let the 404 listErr propagate to the outer
+// failReconcile where the classifier fires.
+//
+// The test verifies that ClassifyCloudflareError sees the 404, sets
+// ResetRemoteID=true, and the reconciler clears BOTH Status.TunnelID AND
+// Status.TunnelCNAME before persisting.
+func TestCloudflareTunnelReconciler_TunnelGoneClearsStatus(t *testing.T) {
+	tunnel := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "tun",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			Name:      "my-tunnel",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID:    "tun-123",
+			TunnelCNAME: "tun-123.cfargotunnel.com",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	// getErr triggers the in-flow fallthrough (reconcileTunnel logs + continues).
+	// listErr 404 then propagates to Reconcile's failReconcile site.
+	mock.getErr = errors.New("transient fetch error")
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 (immediate requeue for RemoteGone)", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareTunnel{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), updated); err != nil {
+		t.Fatalf("get updated tunnel: %v", err)
+	}
+	if updated.Status.TunnelID != "" {
+		t.Errorf("Status.TunnelID not cleared: %q", updated.Status.TunnelID)
+	}
+	if updated.Status.TunnelCNAME != "" {
+		t.Errorf("Status.TunnelCNAME not cleared: %q", updated.Status.TunnelCNAME)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonRemoteGone {
+		t.Errorf("Reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonRemoteGone)
+	}
+}
+
+// TestCloudflareTunnelReconciler_DeleteTunnelNotFound_RemovesFinalizer mirrors
+// TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer. When DeleteTunnel
+// returns 404 the operator must treat it as success (the remote object is gone,
+// which is the goal), remove the finalizer, and return with RequeueAfter == 0.
+func TestCloudflareTunnelReconciler_DeleteTunnelNotFound_RemovesFinalizer(t *testing.T) {
+	now := metav1.Now()
+	tunnel := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "tun",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			Name:      "my-tunnel",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID: "tun-already-gone",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	mock.deleteErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 (delete-404 should be success-equivalent)", res.RequeueAfter)
+	}
+
+	got := &cloudflarev1alpha1.CloudflareTunnel{}
+	getErr := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), got)
+	if getErr == nil {
+		if len(got.Finalizers) != 0 {
+			t.Errorf("Finalizer still present: %v; expected removal", got.Finalizers)
+		}
+	} else if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("unexpected error: %v", getErr)
 	}
 }
