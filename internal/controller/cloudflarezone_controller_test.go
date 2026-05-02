@@ -3,14 +3,18 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -538,5 +542,57 @@ func TestZoneReconcile_EditsZoneWhenPausedChanges(t *testing.T) {
 
 	if !mock.editCalled {
 		t.Error("expected EditZone to be called when paused differs")
+	}
+}
+
+func TestCloudflareZoneReconciler_BadRequest_SetsInvalidSpec(t *testing.T) {
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "example",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockZoneLifecycleClient()
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(zone),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != time.Hour {
+		t.Errorf("RequeueAfter = %v, want 1h", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareZone{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(zone), updated); err != nil {
+		t.Fatalf("get updated zone: %v", err)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("Ready status = %v, want False", cond.Status)
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonInvalidSpec {
+		t.Errorf("Ready reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonInvalidSpec)
 	}
 }

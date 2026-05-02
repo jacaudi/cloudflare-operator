@@ -105,8 +105,16 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
 		r.Recorder.Event(&zone, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		routing := ClassifyCloudflareError(err)
+		if routing.ResetRemoteID {
+			zone.Status.ZoneID = ""
+		}
+		requeue := routing.RequeueAfter
+		if requeue == 0 && !routing.ResetRemoteID {
+			requeue = time.Minute // preserve existing default
+		}
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
-			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+			routing.Reason, err, requeue)
 	}
 
 	// 7. Persist status only if anything materially changed.
@@ -255,8 +263,13 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 
 		if err := r.zoneLifecycleClient(apiToken).DeleteZone(ctx, zone.Status.ZoneID); err != nil {
 			logger.Error(err, "failed to delete zone from Cloudflare")
+			routing := ClassifyCloudflareError(err)
+			requeue := routing.RequeueAfter
+			if requeue == 0 && !routing.ResetRemoteID {
+				requeue = 30 * time.Second // preserve existing default
+			}
 			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
-				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
+				routing.Reason, wrapDeleteErr(err), requeue)
 		}
 		logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
 		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",
