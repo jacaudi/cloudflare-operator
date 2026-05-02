@@ -517,7 +517,7 @@ func aggregateErr(failed []groupResult) error {
 		parts = append(parts, fmt.Sprintf("%s: %s", g.groupLabel, g.reason()))
 	}
 	// Wrap the first failed group's underlying error so errors.Is/As can still
-	// classify it (e.g., IsPermissionDenied for a single 403).
+	// classify it (e.g., IsPlanTierRequired or IsPermissionDenied for a single 403).
 	return fmt.Errorf("partial apply failed for %d group(s) [%s]: %w",
 		len(failed), strings.Join(parts, ", "), failed[0].err)
 }
