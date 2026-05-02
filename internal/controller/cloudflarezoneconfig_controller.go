@@ -282,6 +282,11 @@ func (g groupResult) reason() string {
 	if g.err == nil {
 		return cloudflarev1alpha1.ReasonApplied
 	}
+	// Plan-tier check MUST come before PermissionDenied: both match HTTP 403,
+	// and a plan-tier failure carries the more actionable reason.
+	if cfclient.IsPlanTierRequired(g.err) {
+		return cloudflarev1alpha1.ReasonPlanTierRequired
+	}
 	if cfclient.IsPermissionDenied(g.err) {
 		return cloudflarev1alpha1.ReasonPermissionDenied
 	}

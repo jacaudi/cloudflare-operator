@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	cfgov6 "github.com/cloudflare/cloudflare-go/v6"
+	"github.com/cloudflare/cloudflare-go/v6/shared"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
-	cfgov6 "github.com/cloudflare/cloudflare-go/v6"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -1270,5 +1271,45 @@ func TestHashZoneConfigSpec_ChangesOnNewFields(t *testing.T) {
 	}
 	if hashZoneConfigSpec(&c) == hashZoneConfigSpec(&d) {
 		t.Errorf("hash should differ when RocketLoader flips")
+	}
+}
+
+func TestZoneConfigReconcile_BotManagement_PlanTier_Distinct(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	// 403 with code 1015 — plan-tier restriction, not a token-permission error.
+	mock.botUpdateErr = &cfgov6.Error{
+		StatusCode: http.StatusForbidden,
+		Errors:     []shared.ErrorData{{Code: 1015}},
+	}
+
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	var updated cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get updated: %v", err)
+	}
+	cond := findCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeBotManagementApplied)
+	if cond == nil {
+		t.Fatal("BotManagementApplied condition missing")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("BotManagementApplied status = %v, want False", cond.Status)
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonPlanTierRequired {
+		t.Errorf("BotManagementApplied reason = %q, want %q (plan-tier 403/1015 must classify distinctly from PermissionDenied)",
+			cond.Reason, cloudflarev1alpha1.ReasonPlanTierRequired)
 	}
 }
