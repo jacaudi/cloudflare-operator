@@ -22,7 +22,7 @@ permissions:
 jobs:
   # Lint YAML and Go code
   lint:
-    uses: jacaudi/github-actions/.github/workflows/component-lint.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-lint.yml@v0.20.3
     permissions:
       contents: read
     with:
@@ -32,7 +32,7 @@ jobs:
 
   # Run Go tests with coverage
   test:
-    uses: jacaudi/github-actions/.github/workflows/component-test.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-test.yml@v0.20.3
     permissions:
       contents: read
     with:
@@ -46,7 +46,7 @@ jobs:
   release:
     needs: [lint, test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: jacaudi/github-actions/.github/workflows/component-semantic-release.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-semantic-release.yml@v0.20.3
     permissions:
       contents: write
       issues: write
@@ -62,7 +62,7 @@ jobs:
   container:
     needs: [release]
     if: needs.release.outputs.new-release-published == 'true'
-    uses: jacaudi/github-actions/.github/workflows/component-container-build.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-container-build.yml@v0.20.3
     permissions:
       contents: read
       packages: write
@@ -80,7 +80,7 @@ jobs:
   helm:
     needs: [release, container]
     if: needs.release.outputs.new-release-published == 'true'
-    uses: jacaudi/github-actions/.github/workflows/component-helm-publish.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-helm-publish.yml@v0.20.3
     permissions:
       contents: read
       packages: write

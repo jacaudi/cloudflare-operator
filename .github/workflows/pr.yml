@@ -16,7 +16,7 @@ permissions:
 jobs:
   lint:
     name: Lint Code
-    uses: jacaudi/github-actions/.github/workflows/component-lint.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-lint.yml@v0.20.3
     with:
       yaml: true
       go: true
@@ -26,7 +26,7 @@ jobs:
 
   test:
     name: Run Tests
-    uses: jacaudi/github-actions/.github/workflows/component-test.yml@v0.20.1
+    uses: jacaudi/github-actions/.github/workflows/component-test.yml@v0.20.3
     with:
       test-framework: 'go'
       go-version: '1.26'
