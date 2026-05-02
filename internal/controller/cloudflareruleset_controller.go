@@ -114,8 +114,13 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
 		r.Recorder.Event(&ruleset, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		routing := ClassifyCloudflareError(err)
+		requeue := routing.RequeueAfter
+		if requeue == 0 && !routing.ResetRemoteID {
+			requeue = time.Minute // preserve existing default
+		}
 		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
-			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+			routing.Reason, err, requeue)
 	}
 
 	// 7. Persist status only if anything materially changed.
