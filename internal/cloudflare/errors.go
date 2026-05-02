@@ -58,7 +58,8 @@ func IsNotFound(err error) bool {
 // Workers namespace; the core API reuses 4xx-class numeric codes
 // inconsistently across product surfaces, so the operator treats 1015 on a
 // 403 as plan-tier rather than rate-limit. Add codes here as they are
-// observed in the wild on plan-restricted endpoints.
+// observed in the wild on plan-restricted endpoints. Treat this slice as
+// append-only — do not reassign it, so accumulated codes are preserved.
 var planTierErrorCodes = []int64{1015}
 
 // IsPlanTierRequired reports whether err is a Cloudflare 403 carrying an
