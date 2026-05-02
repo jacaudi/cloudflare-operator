@@ -120,12 +120,16 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	result, err := r.reconcileTunnel(ctx, &tunnel, r.tunnelClient(creds.APIToken), creds.AccountID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
-		r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "SyncFailed", err.Error())
 		routing := ClassifyCloudflareError(err)
 		if routing.ResetRemoteID {
 			tunnel.Status.TunnelID = ""
 			tunnel.Status.TunnelCNAME = ""
 		}
+		eventReason := routing.Reason
+		if eventReason == cloudflarev1alpha1.ReasonCloudflareError {
+			eventReason = "SyncFailed" // preserve historical event name for unclassified failures
+		}
+		r.Recorder.Event(&tunnel, corev1.EventTypeWarning, eventReason, err.Error())
 		requeue := routing.RequeueAfter
 		if requeue == 0 && !routing.ResetRemoteID {
 			requeue = time.Minute // preserve existing default
