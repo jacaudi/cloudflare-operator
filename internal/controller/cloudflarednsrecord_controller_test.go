@@ -2,19 +2,25 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	cfgo "github.com/cloudflare/cloudflare-go/v6"
+	"github.com/cloudflare/cloudflare-go/v6/shared"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -1692,5 +1698,234 @@ func TestDNSReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
 
 	if mock.deleteCalled {
 		t.Error("DeleteRecord should NOT be called when zone can't be resolved")
+	}
+}
+
+func TestCloudflareDNSRecordReconciler_NotFoundResetsRecordID(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+		Status: cloudflarev1alpha1.CloudflareDNSRecordStatus{
+			RecordID: "rec-stale",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+
+	mock := newMockDNSClient()
+	mock.getErr = errors.New("transient")
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+
+	r := buildReconciler(scheme, mock, dns, secret)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(dns),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != time.Duration(0) {
+		t.Errorf("RemoteGone is immediate-requeue: expected RequeueAfter=0, got %v", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareDNSRecord{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(dns), updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	if updated.Status.RecordID != "" {
+		t.Errorf("expected Status.RecordID to be cleared, got %q", updated.Status.RecordID)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonRemoteGone {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonRemoteGone, cond.Reason)
+	}
+}
+
+func TestCloudflareDNSRecordReconciler_BadRequestSetsInvalidSpec(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+	mock := newMockDNSClient()
+	mock.createErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	r := buildReconciler(scheme, mock, dns, secret)
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(dns)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != time.Hour {
+		t.Errorf("expected RequeueAfter=1h, got %v", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareDNSRecord{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(dns), updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonInvalidSpec {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonInvalidSpec, cond.Reason)
+	}
+}
+
+func TestCloudflareDNSRecordReconciler_PlanTier1015(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+	mock := newMockDNSClient()
+	mock.createErr = &cfgo.Error{
+		StatusCode: http.StatusForbidden,
+		Errors:     []shared.ErrorData{{Code: 1015}},
+	}
+
+	r := buildReconciler(scheme, mock, dns, secret)
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(dns)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != time.Hour {
+		t.Errorf("expected RequeueAfter=1h, got %v", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareDNSRecord{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(dns), updated); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonPlanTierRequired {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonPlanTierRequired, cond.Reason)
+	}
+}
+
+func TestCloudflareDNSRecordReconciler_DeleteRecordNotFound_RemovesFinalizer(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	now := metav1.Now()
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "rec",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+		Status: cloudflarev1alpha1.CloudflareDNSRecordStatus{
+			RecordID: "rec-already-gone",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+	mock := newMockDNSClient()
+	mock.deleteErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+
+	r := buildReconciler(scheme, mock, dns, secret)
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(dns)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.RequeueAfter != time.Duration(0) {
+		t.Errorf("delete-404 should be success-equivalent, no requeue loop: got %v", res.RequeueAfter)
+	}
+
+	got := &cloudflarev1alpha1.CloudflareDNSRecord{}
+	getErr := r.Get(context.Background(), client.ObjectKeyFromObject(dns), got)
+	if getErr == nil {
+		if len(got.Finalizers) != 0 {
+			t.Errorf("finalizer must be removed so deletion completes; got finalizers: %v", got.Finalizers)
+		}
+	} else if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("unexpected error: %v", getErr)
 	}
 }
