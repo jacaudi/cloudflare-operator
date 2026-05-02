@@ -262,14 +262,21 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 		}
 
 		if err := r.zoneLifecycleClient(apiToken).DeleteZone(ctx, zone.Status.ZoneID); err != nil {
-			logger.Error(err, "failed to delete zone from Cloudflare")
-			routing := ClassifyCloudflareError(err)
-			requeue := routing.RequeueAfter
-			if requeue == 0 && !routing.ResetRemoteID {
-				requeue = 30 * time.Second // preserve existing default
+			if cfclient.IsNotFound(err) {
+				logger.Info("zone already gone in Cloudflare; treating delete as success",
+					"zoneID", zone.Status.ZoneID)
+				// Fall through to finalizer removal — the remote object is the goal,
+				// and the goal is achieved.
+			} else {
+				logger.Error(err, "failed to delete zone from Cloudflare")
+				routing := ClassifyCloudflareError(err)
+				requeue := routing.RequeueAfter
+				if requeue == 0 && !routing.ResetRemoteID {
+					requeue = 30 * time.Second // preserve existing default
+				}
+				return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
+					routing.Reason, wrapDeleteErr(err), requeue)
 			}
-			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
-				routing.Reason, wrapDeleteErr(err), requeue)
 		}
 		logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
 		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",

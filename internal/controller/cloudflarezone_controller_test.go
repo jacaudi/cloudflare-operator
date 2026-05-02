@@ -14,6 +14,7 @@ import (
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -594,5 +595,61 @@ func TestCloudflareZoneReconciler_BadRequest_SetsInvalidSpec(t *testing.T) {
 	}
 	if cond.Reason != cloudflarev1alpha1.ReasonInvalidSpec {
 		t.Errorf("Ready reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonInvalidSpec)
+	}
+}
+
+func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
+	now := metav1.Now()
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "example",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			SecretRef:      cloudflarev1alpha1.SecretReference{Name: "creds"},
+			DeletionPolicy: cloudflarev1alpha1.DeletionPolicyDelete,
+		},
+		Status: cloudflarev1alpha1.CloudflareZoneStatus{
+			ZoneID: "zone-already-gone",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockZoneLifecycleClient()
+	mock.deleteErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(zone),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 (delete-404 should be success-equivalent, no requeue loop)", res.RequeueAfter)
+	}
+
+	// Zone object should be gone or have no finalizer — the fake client
+	// respects the DeletionTimestamp once finalizers are empty.
+	got := &cloudflarev1alpha1.CloudflareZone{}
+	getErr := r.Get(context.Background(), client.ObjectKeyFromObject(zone), got)
+	if getErr == nil {
+		// Object still exists — finalizer must have been removed.
+		if len(got.Finalizers) != 0 {
+			t.Errorf("Finalizer still present: %v; expected removal so deletion can complete", got.Finalizers)
+		}
+	} else if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("unexpected error fetching zone: %v", getErr)
 	}
 }
