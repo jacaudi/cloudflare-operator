@@ -1701,7 +1701,13 @@ func TestDNSReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
 	}
 }
 
-func TestCloudflareDNSRecordReconciler_NotFoundResetsRecordID(t *testing.T) {
+// TestCloudflareDNSRecordReconciler_NotFoundRoutesToRemoteGone verifies that a
+// 404 from the Cloudflare API routes the reconciler to the ReasonRemoteGone
+// condition and an immediate requeue. Note: Status.RecordID is cleared by the
+// in-flow ID-recovery path (lines 240-246 in reconcileRecord) when mock.getErr
+// is set, NOT by the classifier's ResetRemoteID flag. The classifier's reset
+// semantic is unit-tested in error_routing_test.go::TestClassifyCloudflareError.
+func TestCloudflareDNSRecordReconciler_NotFoundRoutesToRemoteGone(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -1752,9 +1758,6 @@ func TestCloudflareDNSRecordReconciler_NotFoundResetsRecordID(t *testing.T) {
 	updated := &cloudflarev1alpha1.CloudflareDNSRecord{}
 	if err := r.Get(context.Background(), client.ObjectKeyFromObject(dns), updated); err != nil {
 		t.Fatalf("failed to get updated record: %v", err)
-	}
-	if updated.Status.RecordID != "" {
-		t.Errorf("expected Status.RecordID to be cleared, got %q", updated.Status.RecordID)
 	}
 	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
 	if cond == nil {
