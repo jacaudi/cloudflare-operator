@@ -628,7 +628,23 @@ func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
 	mock := newMockZoneLifecycleClient()
 	mock.deleteErr = &cfgo.Error{StatusCode: http.StatusNotFound}
 
-	r := buildZoneReconciler(mock, zone, secret)
+	// Construct the reconciler manually so we can inspect the FakeRecorder.
+	s := testScheme(&testing.T{})
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, secret).
+		WithStatusSubresource(zone).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareZoneReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
+			return mock
+		},
+	}
 
 	res, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: client.ObjectKeyFromObject(zone),
@@ -651,5 +667,15 @@ func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
 		}
 	} else if !apierrors.IsNotFound(getErr) {
 		t.Fatalf("unexpected error fetching zone: %v", getErr)
+	}
+
+	// Drain the event recorder and verify that ZoneDeleted was NOT emitted.
+	// A 404 from Cloudflare means the zone was already gone; success was not
+	// achieved by this reconcile, so emitting ZoneDeleted would be misleading.
+	close(fakeRec.Events)
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "ZoneDeleted") {
+			t.Errorf("unexpected ZoneDeleted event after 404 fall-through: %q", ev)
+		}
 	}
 }

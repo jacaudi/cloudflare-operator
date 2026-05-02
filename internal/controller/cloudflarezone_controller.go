@@ -277,10 +277,11 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 				return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
 					routing.Reason, wrapDeleteErr(err), requeue)
 			}
+		} else {
+			logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
+			r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",
+				fmt.Sprintf("Deleted zone %s from Cloudflare", zone.Spec.Name))
 		}
-		logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
-		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",
-			fmt.Sprintf("Deleted zone %s from Cloudflare", zone.Spec.Name))
 	} else if zone.Status.ZoneID != "" {
 		logger.Info("retaining zone in Cloudflare per deletion policy", "zoneID", zone.Status.ZoneID)
 		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneRetained",
