@@ -2,6 +2,7 @@ package cloudflare
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,13 @@ import (
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	"github.com/cloudflare/cloudflare-go/v6/option"
 )
+
+// ErrSecretNotLabeled is returned by GetCredentials when the referenced
+// Secret exists in the API server but is missing the
+// cloudflare.io/managed=true label, so the operator's cache filter has
+// excluded it. Distinct from a genuine NotFound — see GetCredentials.
+var ErrSecretNotLabeled = errors.New(
+	"secret exists but is not labeled cloudflare.io/managed=true")
 
 // Secret data keys where Cloudflare credentials are expected.
 const (

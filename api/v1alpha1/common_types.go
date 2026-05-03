@@ -63,6 +63,7 @@ const (
 	ReasonReconcileError    = "ReconcileError"
 	ReasonCloudflareError   = "CloudflareAPIError"
 	ReasonSecretNotFound    = "SecretNotFound"
+	ReasonSecretNotLabeled  = "SecretNotLabeled"
 	ReasonInvalidSpec       = "InvalidSpec"
 	ReasonRemoteGone        = "RemoteGone"
 	ReasonDeletingResource  = "DeletingResource"

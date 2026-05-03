@@ -2,6 +2,8 @@ package cloudflare
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -69,5 +71,12 @@ func TestGetAPIToken_MissingKey(t *testing.T) {
 	_, err := factory.GetAPIToken(context.Background(), "cf-token", "default")
 	if err == nil {
 		t.Error("expected error for missing apiToken key")
+	}
+}
+
+func TestErrSecretNotLabeled_IsSentinel(t *testing.T) {
+	wrapped := fmt.Errorf("loading credentials: %w", ErrSecretNotLabeled)
+	if !errors.Is(wrapped, ErrSecretNotLabeled) {
+		t.Fatalf("errors.Is should match wrapped sentinel; got false")
 	}
 }
