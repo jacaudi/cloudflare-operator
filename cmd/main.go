@@ -26,6 +26,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -72,12 +73,35 @@ func main() {
 		"Log level (debug, info, warn, error). Can also be set via LOG_LEVEL.")
 	flag.StringVar(&logFormat, "log-format", lookupEnvOrString("LOG_FORMAT", "json"),
 		"Log format (json, text). Can also be set via LOG_FORMAT.")
+
+	var secretCacheLabelSelector string
+	flag.StringVar(&secretCacheLabelSelector, "secret-cache-label-selector",
+		lookupEnvOrString("SECRET_CACHE_LABEL_SELECTOR", "cloudflare.io/managed=true"),
+		"Label selector applied to corev1.Secret in the manager cache. "+
+			"Empty string disables the filter (caches every Secret in scope of RBAC). "+
+			"Default: 'cloudflare.io/managed=true'. Override via --secret-cache-label-selector "+
+			"or SECRET_CACHE_LABEL_SELECTOR.")
 	flag.Parse()
 
 	slogLogger := setupLogger(logLevel, logFormat)
 	slog.SetDefault(slogLogger)
 	ctrl.SetLogger(logr.FromSlogHandler(slogLogger.Handler()))
 	klog.SetSlogLogger(slogLogger)
+
+	var secretLabelSelectorParsed labels.Selector
+	if secretCacheLabelSelector == "" {
+		secretLabelSelectorParsed = labels.Everything()
+		setupLog.Info("Secret cache filter disabled (SECRET_CACHE_LABEL_SELECTOR=\"\"); operator will cache every Secret in scope of RBAC")
+	} else {
+		parsed, err := labels.Parse(secretCacheLabelSelector)
+		if err != nil {
+			setupLog.Error(err, "invalid secret cache label selector",
+				"selector", secretCacheLabelSelector)
+			os.Exit(1)
+		}
+		secretLabelSelectorParsed = parsed
+	}
+	_ = secretLabelSelectorParsed // Wired into the manager cache in Task 7.
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
