@@ -1088,6 +1088,7 @@ func TestCloudflareTunnel_PDBCreated(t *testing.T) {
 		"app.kubernetes.io/instance":   tun.Name,
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         tun.Name,
+		"cloudflare.io/managed":        "true",
 	}
 	if pdb.Spec.Selector == nil {
 		t.Fatal("PDB Spec.Selector is nil")
@@ -1187,12 +1188,13 @@ func TestCloudflareTunnel_PDBIdempotentUpdate(t *testing.T) {
 		t.Errorf("MinAvailable = %v, want 1", pdb.Spec.MinAvailable)
 	}
 
-	// Selector.MatchLabels must match the canonical four connectorLabels.
+	// Selector.MatchLabels must match the canonical five connectorLabels.
 	wantSelectorLabels := map[string]string{
 		"app.kubernetes.io/name":       "cloudflared",
 		"app.kubernetes.io/instance":   tun.Name,
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         tun.Name,
+		"cloudflare.io/managed":        "true",
 	}
 	if pdb.Spec.Selector == nil {
 		t.Fatal("PDB Spec.Selector is nil after update")

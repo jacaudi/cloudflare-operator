@@ -79,6 +79,7 @@ func connectorLabels(tun *cloudflarev1alpha1.CloudflareTunnel) map[string]string
 		"app.kubernetes.io/instance":   tun.Name,
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         tun.Name,
+		"cloudflare.io/managed":        "true",
 	}
 }
 

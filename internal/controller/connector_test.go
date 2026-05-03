@@ -257,6 +257,7 @@ func TestBuildConnectorDeployment_OwnerRefAndLabels(t *testing.T) {
 		"app.kubernetes.io/instance":   "home",
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         "home",
+		"cloudflare.io/managed":        "true",
 	}
 	got := dep.Labels
 	// Pattern #6: assert total map length to catch label-bleed regressions.
@@ -543,6 +544,7 @@ func TestBuildConnectorPodDisruptionBudget_AtReplicasTwo(t *testing.T) {
 		"app.kubernetes.io/instance":   tun.Name,
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         tun.Name,
+		"cloudflare.io/managed":        "true",
 	}
 	gotLabels := pdb.Labels
 	// Pattern #6: assert total map length to catch label-bleed regressions.
@@ -653,6 +655,27 @@ func TestBuildConnectorDeployment_DefaultTSC_RespectUserTSC(t *testing.T) {
 	got := dep.Spec.Template.Spec.TopologySpreadConstraints
 	if !reflect.DeepEqual(got, userTSC) {
 		t.Errorf("user TSC altered: got %+v, want %+v", got, userTSC)
+	}
+}
+
+func TestConnectorLabels_IncludesManagedKey(t *testing.T) {
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"},
+	}
+	got := connectorLabels(tun)
+	if v, ok := got["cloudflare.io/managed"]; !ok || v != "true" {
+		t.Fatalf(`expected cloudflare.io/managed=true, got %q (present=%v)`, v, ok)
+	}
+	// Pre-existing keys must still be present (regression guard).
+	for _, key := range []string{
+		"app.kubernetes.io/name",
+		"app.kubernetes.io/instance",
+		"app.kubernetes.io/managed-by",
+		"cloudflare.io/tunnel",
+	} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("expected key %s to remain in connectorLabels", key)
+		}
 	}
 }
 
