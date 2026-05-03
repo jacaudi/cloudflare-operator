@@ -3,14 +3,19 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -538,5 +543,207 @@ func TestZoneReconcile_EditsZoneWhenPausedChanges(t *testing.T) {
 
 	if !mock.editCalled {
 		t.Error("expected EditZone to be called when paused differs")
+	}
+}
+
+func TestCloudflareZoneReconciler_BadRequest_SetsInvalidSpec(t *testing.T) {
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "example",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockZoneLifecycleClient()
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(zone),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != time.Hour {
+		t.Errorf("RequeueAfter = %v, want 1h", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareZone{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(zone), updated); err != nil {
+		t.Fatalf("get updated zone: %v", err)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("Ready status = %v, want False", cond.Status)
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonInvalidSpec {
+		t.Errorf("Ready reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonInvalidSpec)
+	}
+}
+
+// TestZoneReconcile_BadRequest_EmitsInvalidSpecEvent asserts that a 400 Bad
+// Request from the Cloudflare API emits an "InvalidSpec" recorder event, NOT
+// the legacy "SyncFailed" event. A future regression that reverts to hardcoded
+// "SyncFailed" for classified errors will be caught here.
+func TestZoneReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "example",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockZoneLifecycleClient()
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	// Construct the reconciler manually so we can inspect the FakeRecorder.
+	s := testScheme(&testing.T{})
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, secret).
+		WithStatusSubresource(zone).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareZoneReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
+			return mock
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(zone),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	close(fakeRec.Events)
+	var sawInvalidSpec bool
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "InvalidSpec") {
+			sawInvalidSpec = true
+		}
+		if strings.Contains(ev, "SyncFailed") {
+			t.Errorf("unexpected SyncFailed event for classified InvalidSpec failure: %q", ev)
+		}
+	}
+	if !sawInvalidSpec {
+		t.Error("expected InvalidSpec event from classifier")
+	}
+}
+
+func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
+	now := metav1.Now()
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "example",
+			Namespace:         "default",
+			Generation:        1,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			SecretRef:      cloudflarev1alpha1.SecretReference{Name: "creds"},
+			DeletionPolicy: cloudflarev1alpha1.DeletionPolicyDelete,
+		},
+		Status: cloudflarev1alpha1.CloudflareZoneStatus{
+			ZoneID: "zone-already-gone",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockZoneLifecycleClient()
+	mock.deleteErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+
+	// Construct the reconciler manually so we can inspect the FakeRecorder.
+	s := testScheme(&testing.T{})
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, secret).
+		WithStatusSubresource(zone).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareZoneReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
+			return mock
+		},
+	}
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(zone),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 (delete-404 should be success-equivalent, no requeue loop)", res.RequeueAfter)
+	}
+
+	// Zone object should be gone or have no finalizer — the fake client
+	// respects the DeletionTimestamp once finalizers are empty.
+	got := &cloudflarev1alpha1.CloudflareZone{}
+	getErr := r.Get(context.Background(), client.ObjectKeyFromObject(zone), got)
+	if getErr == nil {
+		// Object still exists — finalizer must have been removed.
+		if len(got.Finalizers) != 0 {
+			t.Errorf("Finalizer still present: %v; expected removal so deletion can complete", got.Finalizers)
+		}
+	} else if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("unexpected error fetching zone: %v", getErr)
+	}
+
+	// Drain the event recorder and verify that ZoneDeleted was NOT emitted.
+	// A 404 from Cloudflare means the zone was already gone; success was not
+	// achieved by this reconcile, so emitting ZoneDeleted would be misleading.
+	close(fakeRec.Events)
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "ZoneDeleted") {
+			t.Errorf("unexpected ZoneDeleted event after 404 fall-through: %q", ev)
+		}
 	}
 }

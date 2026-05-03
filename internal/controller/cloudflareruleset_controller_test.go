@@ -3,13 +3,17 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
+	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
 	corev1 "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -662,5 +666,125 @@ func TestRuleLoggingEqual(t *testing.T) {
 				t.Errorf("got %v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRulesetReconcile_BadRequestSetsInvalidSpec(t *testing.T) {
+	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rs",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
+			ZoneID:    "zone-1",
+			Name:      "test",
+			Phase:     "http_request_firewall_custom",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
+				{Action: "block", Expression: `(http.host eq "example.com")`},
+			},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+	mock := newMockRulesetClient()
+	mock.upsertErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	r := buildRulesetReconciler(mock, ruleset, secret)
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(ruleset),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if res.RequeueAfter != time.Hour {
+		t.Errorf("RequeueAfter = %v, want 1h", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareRuleset{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(ruleset), updated); err != nil {
+		t.Fatalf("get updated ruleset: %v", err)
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("Ready status = %v, want False", cond.Status)
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonInvalidSpec {
+		t.Errorf("Ready reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonInvalidSpec)
+	}
+}
+
+// TestRulesetReconcile_BadRequest_EmitsInvalidSpecEvent asserts that a 400 Bad
+// Request from the Cloudflare API emits an "InvalidSpec" recorder event, NOT the
+// legacy "SyncFailed" event. A future regression that reverts to hardcoded
+// "SyncFailed" for classified errors will be caught here.
+func TestRulesetReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
+	ruleset := &cloudflarev1alpha1.CloudflareRuleset{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rs",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareRulesetSpec{
+			ZoneID:    "zone-1",
+			Name:      "test",
+			Phase:     "http_request_firewall_custom",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+			Rules: []cloudflarev1alpha1.RulesetRuleSpec{
+				{Action: "block", Expression: `(http.host eq "example.com")`},
+			},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+	mock := newMockRulesetClient()
+	mock.upsertErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	s := testScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(ruleset, secret).
+		WithStatusSubresource(ruleset).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareRulesetReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		RulesetClientFn: func(_ string) cfclient.RulesetClient {
+			return mock
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(ruleset),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	close(fakeRec.Events)
+	var sawInvalidSpec bool
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "InvalidSpec") {
+			sawInvalidSpec = true
+		}
+		if strings.Contains(ev, "SyncFailed") {
+			t.Errorf("unexpected SyncFailed event for classified InvalidSpec failure: %q", ev)
+		}
+	}
+	if !sawInvalidSpec {
+		t.Error("expected InvalidSpec event from classifier")
 	}
 }

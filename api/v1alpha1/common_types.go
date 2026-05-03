@@ -64,6 +64,7 @@ const (
 	ReasonCloudflareError   = "CloudflareAPIError"
 	ReasonSecretNotFound    = "SecretNotFound"
 	ReasonInvalidSpec       = "InvalidSpec"
+	ReasonRemoteGone        = "RemoteGone"
 	ReasonDeletingResource  = "DeletingResource"
 	ReasonIPResolutionError = "IPResolutionError"
 	ReasonZonePending       = "ZonePending"
@@ -88,6 +89,7 @@ const (
 	ReasonApplied           = "Applied"
 	ReasonNotConfigured     = "NotConfigured"
 	ReasonPermissionDenied  = "PermissionDenied"
+	ReasonPlanTierRequired  = "PlanTierRequired"
 	ReasonPartialApply      = "PartialApply"
 )
 

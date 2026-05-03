@@ -21,9 +21,11 @@ func TestReasonConstants(t *testing.T) {
 		ReasonInvalidSpec,
 		ReasonDeletingResource,
 		ReasonIPResolutionError,
+		ReasonRemoteGone,
 		ReasonApplied,
 		ReasonNotConfigured,
 		ReasonPermissionDenied,
+		ReasonPlanTierRequired,
 		ReasonPartialApply,
 	}
 	for _, r := range reasons {

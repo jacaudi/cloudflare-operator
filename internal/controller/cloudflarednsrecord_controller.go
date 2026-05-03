@@ -191,9 +191,23 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
 				cloudflarev1alpha1.ReasonTxtRegistryGap, err, result.RequeueAfter)
 		default:
-			r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, "SyncFailed", err.Error())
+			routing := ClassifyCloudflareError(err)
+			if routing.ResetRemoteID {
+				dnsRecord.Status.RecordID = ""
+			}
+			eventReason := routing.Reason
+			if eventReason == cloudflarev1alpha1.ReasonCloudflareError {
+				eventReason = "SyncFailed" // preserve historical event name for unclassified failures
+			}
+			r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, eventReason, err.Error())
+			requeue := routing.RequeueAfter
+			// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+			// or "use my default" (catch-all, with ResetRemoteID false).
+			if requeue == 0 && !routing.ResetRemoteID {
+				requeue = time.Minute
+			}
 			return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
-				cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+				routing.Reason, err, requeue)
 		}
 	}
 
@@ -385,13 +399,28 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dns
 		}
 
 		if err := r.dnsClient(apiToken).DeleteRecord(ctx, resolvedZoneID, dnsRecord.Status.RecordID); err != nil {
-			logger.Error(err, "failed to delete DNS record from Cloudflare")
-			return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,
-				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
+			if cfclient.IsNotFound(err) {
+				logger.Info("DNS record already gone in Cloudflare; treating delete as success",
+					"recordID", dnsRecord.Status.RecordID)
+				// Fall through to finalizer removal — removal of the remote object is the goal,
+				// and the goal is achieved.
+			} else {
+				logger.Error(err, "failed to delete DNS record from Cloudflare")
+				routing := ClassifyCloudflareError(err)
+				requeue := routing.RequeueAfter
+				// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+				// or "use my default" (catch-all, with ResetRemoteID false).
+				if requeue == 0 && !routing.ResetRemoteID {
+					requeue = 30 * time.Second
+				}
+				return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,
+					routing.Reason, wrapDeleteErr(err), requeue)
+			}
+		} else {
+			logger.Info("deleted DNS record from Cloudflare", "recordID", dnsRecord.Status.RecordID)
+			r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordDeleted",
+				fmt.Sprintf("Deleted DNS record %s from Cloudflare", dnsRecord.Spec.Name))
 		}
-		logger.Info("deleted DNS record from Cloudflare", "recordID", dnsRecord.Status.RecordID)
-		r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, "RecordDeleted",
-			fmt.Sprintf("Deleted DNS record %s from Cloudflare", dnsRecord.Spec.Name))
 	}
 
 	controllerutil.RemoveFinalizer(dnsRecord, cloudflarev1alpha1.FinalizerName)

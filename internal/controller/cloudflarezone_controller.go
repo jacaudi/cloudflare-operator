@@ -104,9 +104,23 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	result, err := r.reconcileZone(ctx, &zone, r.zoneLifecycleClient(creds.APIToken), creds.AccountID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
-		r.Recorder.Event(&zone, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		routing := ClassifyCloudflareError(err)
+		if routing.ResetRemoteID {
+			zone.Status.ZoneID = ""
+		}
+		eventReason := routing.Reason
+		if eventReason == cloudflarev1alpha1.ReasonCloudflareError {
+			eventReason = "SyncFailed" // preserve historical event name for unclassified failures
+		}
+		r.Recorder.Event(&zone, corev1.EventTypeWarning, eventReason, err.Error())
+		requeue := routing.RequeueAfter
+		// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+		// or "use my default" (catch-all, with ResetRemoteID false).
+		if requeue == 0 && !routing.ResetRemoteID {
+			requeue = time.Minute
+		}
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
-			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+			routing.Reason, err, requeue)
 	}
 
 	// 7. Persist status only if anything materially changed.
@@ -254,13 +268,28 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 		}
 
 		if err := r.zoneLifecycleClient(apiToken).DeleteZone(ctx, zone.Status.ZoneID); err != nil {
-			logger.Error(err, "failed to delete zone from Cloudflare")
-			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
-				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
+			if cfclient.IsNotFound(err) {
+				logger.Info("zone already gone in Cloudflare; treating delete as success",
+					"zoneID", zone.Status.ZoneID)
+				// Fall through to finalizer removal — the remote object is the goal,
+				// and the goal is achieved.
+			} else {
+				logger.Error(err, "failed to delete zone from Cloudflare")
+				routing := ClassifyCloudflareError(err)
+				requeue := routing.RequeueAfter
+				// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+				// or "use my default" (catch-all, with ResetRemoteID false).
+				if requeue == 0 && !routing.ResetRemoteID {
+					requeue = 30 * time.Second
+				}
+				return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
+					routing.Reason, wrapDeleteErr(err), requeue)
+			}
+		} else {
+			logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
+			r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",
+				fmt.Sprintf("Deleted zone %s from Cloudflare", zone.Spec.Name))
 		}
-		logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)
-		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneDeleted",
-			fmt.Sprintf("Deleted zone %s from Cloudflare", zone.Spec.Name))
 	} else if zone.Status.ZoneID != "" {
 		logger.Info("retaining zone in Cloudflare per deletion policy", "zoneID", zone.Status.ZoneID)
 		r.Recorder.Event(zone, corev1.EventTypeNormal, "ZoneRetained",

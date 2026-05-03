@@ -120,9 +120,24 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	result, err := r.reconcileTunnel(ctx, &tunnel, r.tunnelClient(creds.APIToken), creds.AccountID)
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
-		r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "SyncFailed", err.Error())
+		routing := ClassifyCloudflareError(err)
+		if routing.ResetRemoteID {
+			tunnel.Status.TunnelID = ""
+			tunnel.Status.TunnelCNAME = ""
+		}
+		eventReason := routing.Reason
+		if eventReason == cloudflarev1alpha1.ReasonCloudflareError {
+			eventReason = "SyncFailed" // preserve historical event name for unclassified failures
+		}
+		r.Recorder.Event(&tunnel, corev1.EventTypeWarning, eventReason, err.Error())
+		requeue := routing.RequeueAfter
+		// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+		// or "use my default" (catch-all, with ResetRemoteID false).
+		if requeue == 0 && !routing.ResetRemoteID {
+			requeue = time.Minute
+		}
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
-			cloudflarev1alpha1.ReasonCloudflareError, err, time.Minute)
+			routing.Reason, err, requeue)
 	}
 
 	// 7. Set Ready and ObservedGeneration in-memory. If aggregation is not
@@ -330,13 +345,28 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 		}
 
 		if err := r.tunnelClient(creds.APIToken).DeleteTunnel(ctx, creds.AccountID, tunnel.Status.TunnelID); err != nil {
-			logger.Error(err, "failed to delete tunnel from Cloudflare")
-			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
-				cloudflarev1alpha1.ReasonCloudflareError, err, 30*time.Second)
+			if cfclient.IsNotFound(err) {
+				logger.Info("tunnel already gone in Cloudflare; treating delete as success",
+					"tunnelID", tunnel.Status.TunnelID)
+				// Fall through to finalizer removal — the remote object is the goal,
+				// and the goal is achieved.
+			} else {
+				logger.Error(err, "failed to delete tunnel from Cloudflare")
+				routing := ClassifyCloudflareError(err)
+				requeue := routing.RequeueAfter
+				// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+				// or "use my default" (catch-all, with ResetRemoteID false).
+				if requeue == 0 && !routing.ResetRemoteID {
+					requeue = 30 * time.Second
+				}
+				return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
+					routing.Reason, wrapDeleteErr(err), requeue)
+			}
+		} else {
+			logger.Info("deleted tunnel from Cloudflare", "tunnelID", tunnel.Status.TunnelID)
+			r.Recorder.Event(tunnel, corev1.EventTypeNormal, "TunnelDeleted",
+				fmt.Sprintf("Deleted tunnel %s from Cloudflare", tunnel.Spec.Name))
 		}
-		logger.Info("deleted tunnel from Cloudflare", "tunnelID", tunnel.Status.TunnelID)
-		r.Recorder.Event(tunnel, corev1.EventTypeNormal, "TunnelDeleted",
-			fmt.Sprintf("Deleted tunnel %s from Cloudflare", tunnel.Spec.Name))
 	}
 
 	controllerutil.RemoveFinalizer(tunnel, cloudflarev1alpha1.FinalizerName)
