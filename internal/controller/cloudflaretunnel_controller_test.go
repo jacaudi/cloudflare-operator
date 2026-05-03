@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -577,6 +578,76 @@ func TestCloudflareTunnelReconciler_TunnelGoneClearsStatus(t *testing.T) {
 	}
 	if cond.Reason != cloudflarev1alpha1.ReasonRemoteGone {
 		t.Errorf("Reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonRemoteGone)
+	}
+}
+
+// TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent asserts that a
+// 400 Bad Request from the Cloudflare API emits an "InvalidSpec" recorder event,
+// NOT the legacy "SyncFailed" event. A future regression that reverts to hardcoded
+// "SyncFailed" for classified errors will be caught here.
+//
+// We inject the 400 via ListTunnelsByName (mock.listErr) which is reached on the
+// reconcileTunnel path when no TunnelID is stored in Status.
+func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
+	tunnel := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "tun",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			Name:      "my-tunnel",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	s := testScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tunnel, secret).
+		WithStatusSubresource(tunnel).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareTunnelReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		TunnelClientFn: func(_ string) cfclient.TunnelClient {
+			return mock
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	close(fakeRec.Events)
+	var sawInvalidSpec bool
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "InvalidSpec") {
+			sawInvalidSpec = true
+		}
+		if strings.Contains(ev, "SyncFailed") {
+			t.Errorf("unexpected SyncFailed event for classified InvalidSpec failure: %q", ev)
+		}
+	}
+	if !sawInvalidSpec {
+		t.Error("expected InvalidSpec event from classifier")
 	}
 }
 

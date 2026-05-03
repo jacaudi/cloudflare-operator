@@ -114,14 +114,19 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
 		routing := ClassifyCloudflareError(err)
+		// Note: IsNotFound and IsPlanTierRequired do not occur on this code path
+		// in practice (no remote-ID-driven GETs; no plan-tier-restricted endpoints).
+		// The classifier handles them generically if they ever surface.
 		eventReason := routing.Reason
 		if eventReason == cloudflarev1alpha1.ReasonCloudflareError {
 			eventReason = "SyncFailed" // preserve historical event name for unclassified failures
 		}
 		r.Recorder.Event(&ruleset, corev1.EventTypeWarning, eventReason, err.Error())
 		requeue := routing.RequeueAfter
+		// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+		// or "use my default" (catch-all, with ResetRemoteID false).
 		if requeue == 0 && !routing.ResetRemoteID {
-			requeue = time.Minute // preserve existing default
+			requeue = time.Minute
 		}
 		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
 			routing.Reason, err, requeue)

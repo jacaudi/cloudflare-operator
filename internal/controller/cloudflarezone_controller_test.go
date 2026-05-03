@@ -598,6 +598,74 @@ func TestCloudflareZoneReconciler_BadRequest_SetsInvalidSpec(t *testing.T) {
 	}
 }
 
+// TestZoneReconcile_BadRequest_EmitsInvalidSpecEvent asserts that a 400 Bad
+// Request from the Cloudflare API emits an "InvalidSpec" recorder event, NOT
+// the legacy "SyncFailed" event. A future regression that reverts to hardcoded
+// "SyncFailed" for classified errors will be caught here.
+func TestZoneReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "example",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "example.com",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockZoneLifecycleClient()
+	mock.listErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	// Construct the reconciler manually so we can inspect the FakeRecorder.
+	s := testScheme(&testing.T{})
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(zone, secret).
+		WithStatusSubresource(zone).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareZoneReconciler{
+		Client:        fakeClient,
+		Scheme:        s,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
+			return mock
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(zone),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	close(fakeRec.Events)
+	var sawInvalidSpec bool
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "InvalidSpec") {
+			sawInvalidSpec = true
+		}
+		if strings.Contains(ev, "SyncFailed") {
+			t.Errorf("unexpected SyncFailed event for classified InvalidSpec failure: %q", ev)
+		}
+	}
+	if !sawInvalidSpec {
+		t.Error("expected InvalidSpec event from classifier")
+	}
+}
+
 func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
 	now := metav1.Now()
 	zone := &cloudflarev1alpha1.CloudflareZone{

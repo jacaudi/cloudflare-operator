@@ -1877,6 +1877,77 @@ func TestCloudflareDNSRecordReconciler_PlanTier1015(t *testing.T) {
 	}
 }
 
+// TestCloudflareDNSRecordReconciler_BadRequest_EmitsInvalidSpecEvent asserts that
+// a 400 Bad Request from the Cloudflare API emits an "InvalidSpec" recorder event,
+// NOT the legacy "SyncFailed" event. A future regression that reverts to hardcoded
+// "SyncFailed" for classified errors will be caught here.
+func TestCloudflareDNSRecordReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+	mock := newMockDNSClient()
+	mock.createErr = &cfgo.Error{StatusCode: http.StatusBadRequest}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(dns, secret).
+		WithStatusSubresource(dns).
+		Build()
+	fakeRec := record.NewFakeRecorder(10)
+	r := &CloudflareDNSRecordReconciler{
+		Client:        fakeClient,
+		Scheme:        scheme,
+		Recorder:      fakeRec,
+		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		DNSClientFn: func(_ string) cfclient.DNSClient {
+			return mock
+		},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKeyFromObject(dns)})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	close(fakeRec.Events)
+	var sawInvalidSpec bool
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "InvalidSpec") {
+			sawInvalidSpec = true
+		}
+		if strings.Contains(ev, "SyncFailed") {
+			t.Errorf("unexpected SyncFailed event for classified InvalidSpec failure: %q", ev)
+		}
+	}
+	if !sawInvalidSpec {
+		t.Error("expected InvalidSpec event from classifier")
+	}
+}
+
 func TestCloudflareDNSRecordReconciler_DeleteRecordNotFound_RemovesFinalizer(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {

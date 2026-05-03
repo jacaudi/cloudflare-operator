@@ -41,8 +41,9 @@ type ErrorRouting struct {
 // the plan-tier check MUST come first so plan-restricted failures get the
 // distinct PlanTierRequired reason rather than the catch-all PermissionDenied.
 //
-// nil err returns the zero ErrorRouting{}; callers should not normally see
-// this case.
+// nil err returns the zero ErrorRouting{}; callers MUST gate on err != nil
+// before calling. The zero value's empty Reason would write an invalid
+// "" into the Ready condition if persisted.
 func ClassifyCloudflareError(err error) ErrorRouting {
 	switch {
 	case err == nil:

@@ -114,8 +114,10 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		r.Recorder.Event(&zone, corev1.EventTypeWarning, eventReason, err.Error())
 		requeue := routing.RequeueAfter
+		// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+		// or "use my default" (catch-all, with ResetRemoteID false).
 		if requeue == 0 && !routing.ResetRemoteID {
-			requeue = time.Minute // preserve existing default
+			requeue = time.Minute
 		}
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
 			routing.Reason, err, requeue)
@@ -275,8 +277,10 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 				logger.Error(err, "failed to delete zone from Cloudflare")
 				routing := ClassifyCloudflareError(err)
 				requeue := routing.RequeueAfter
+				// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+				// or "use my default" (catch-all, with ResetRemoteID false).
 				if requeue == 0 && !routing.ResetRemoteID {
-					requeue = 30 * time.Second // preserve existing default
+					requeue = 30 * time.Second
 				}
 				return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
 					routing.Reason, wrapDeleteErr(err), requeue)

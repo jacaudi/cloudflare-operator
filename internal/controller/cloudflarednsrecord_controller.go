@@ -201,8 +201,10 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			}
 			r.Recorder.Event(&dnsRecord, corev1.EventTypeWarning, eventReason, err.Error())
 			requeue := routing.RequeueAfter
+			// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+			// or "use my default" (catch-all, with ResetRemoteID false).
 			if requeue == 0 && !routing.ResetRemoteID {
-				requeue = time.Minute // preserve existing default
+				requeue = time.Minute
 			}
 			return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
 				routing.Reason, err, requeue)
@@ -406,6 +408,8 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dns
 				logger.Error(err, "failed to delete DNS record from Cloudflare")
 				routing := ClassifyCloudflareError(err)
 				requeue := routing.RequeueAfter
+				// requeue==0 means either: immediate (RemoteGone, with ResetRemoteID true)
+				// or "use my default" (catch-all, with ResetRemoteID false).
 				if requeue == 0 && !routing.ResetRemoteID {
 					requeue = 30 * time.Second
 				}
