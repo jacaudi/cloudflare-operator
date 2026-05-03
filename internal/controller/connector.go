@@ -73,14 +73,33 @@ func ConnectorNames(tun *cloudflarev1alpha1.CloudflareTunnel) ConnectorResourceN
 	}
 }
 
-func connectorLabels(tun *cloudflarev1alpha1.CloudflareTunnel) map[string]string {
+// connectorSelectorLabels returns the label set used as
+// Spec.Selector.MatchLabels on Deployment and PDB. Selectors are
+// immutable on apps/v1 Deployment and policy/v1 PDB, so this set must
+// stay stable across upgrades — adding a key here on an existing
+// cluster fails every reconcile with "field is immutable."
+//
+// Use connectorLabels for everything else (ObjectMeta.Labels, pod
+// template Labels): it is a superset of connectorSelectorLabels and
+// MAY grow over time.
+func connectorSelectorLabels(tun *cloudflarev1alpha1.CloudflareTunnel) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       "cloudflared",
 		"app.kubernetes.io/instance":   tun.Name,
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         tun.Name,
-		"cloudflare.io/managed":        "true",
 	}
+}
+
+// connectorLabels returns the full label set applied to ObjectMeta and
+// pod template. It is a superset of connectorSelectorLabels — additions
+// here are safe because metadata labels are mutable. Includes
+// cloudflare.io/managed=true so operator-owned Secrets pass the
+// label-gated cache filter.
+func connectorLabels(tun *cloudflarev1alpha1.CloudflareTunnel) map[string]string {
+	l := connectorSelectorLabels(tun)
+	l["cloudflare.io/managed"] = "true"
+	return l
 }
 
 func connectorOwnerRef(tun *cloudflarev1alpha1.CloudflareTunnel) []metav1.OwnerReference {
@@ -182,7 +201,7 @@ func BuildConnectorPodDisruptionBudget(tun *cloudflarev1alpha1.CloudflareTunnel)
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MinAvailable: &minAvail,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: connectorLabels(tun),
+				MatchLabels: connectorSelectorLabels(tun),
 			},
 		},
 	}
@@ -378,7 +397,7 @@ func BuildConnectorDeployment(tun *cloudflarev1alpha1.CloudflareTunnel, configHa
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Selector: &metav1.LabelSelector{MatchLabels: connectorSelectorLabels(tun)},
 			// 10s grace before kubelet flips the new replica to Ready. cloudflared
 			// reports /ready as soon as the first edge connection is registered,
 			// but the tunnel only becomes truly redundant after multiple
