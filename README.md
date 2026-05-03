@@ -69,9 +69,15 @@ kubectl create secret generic cloudflare-api-token \
   --namespace cloudflare-operator \
   --from-literal=apiToken=<your-cloudflare-api-token> \
   --from-literal=accountID=<your-cloudflare-account-id>
+
+kubectl label secret cloudflare-api-token \
+  --namespace cloudflare-operator \
+  cloudflare.io/managed=true
 ```
 
 Every CR references this Secret via `secretRef.name`. Place the Secret in the same namespace as the CRs that use it. `accountID` is required for `CloudflareZone` and `CloudflareTunnel`; other CRs only read `apiToken`.
+
+The `cloudflare.io/managed=true` label is required: the operator's manager cache filters Secrets by this label so it only loads Secrets you've explicitly opted in. A Secret without the label produces `Ready=False` with `Reason=SecretNotLabeled` on any CR that references it. To stage a migration across many existing Secrets, set the chart value `secretCacheLabelSelector: ""` (or the env `SECRET_CACHE_LABEL_SELECTOR=""`) to disable the filter, label your Secrets, then restore the default. The operator-owned tunnel credentials Secret is auto-labeled.
 
 ### 3. Onboard your zone
 
