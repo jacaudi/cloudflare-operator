@@ -691,6 +691,64 @@ func TestEnsureCredentialsSecret_AppliesManagedLabel(t *testing.T) {
 	}
 }
 
+// TestEnsureCredentialsSecret_PreservesExternalLabels locks in the merge-form
+// contract: an external label applied to the credentials Secret (e.g. by a
+// platform GitOps tool) must coexist with the operator-managed keys after a
+// reconcile. A wholesale Labels-map replacement would regress this.
+func TestEnsureCredentialsSecret_PreservesExternalLabels(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels: map[string]string{
+				"team":                  "infra",
+				"cloudflare.io/managed": "false", // operator must overwrite this
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
+		t.Fatalf("ensureCredentialsSecret: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+
+	if v := got.Labels["team"]; v != "infra" {
+		t.Errorf("external label team=infra clobbered, got %q", v)
+	}
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf("operator key cloudflare.io/managed should overwrite external value, got %q", v)
+	}
+	if v := got.Labels["app.kubernetes.io/managed-by"]; v != "cloudflare-operator" {
+		t.Errorf("operator key app.kubernetes.io/managed-by missing, got %q", v)
+	}
+}
+
 // TestCloudflareTunnelReconciler_DeleteTunnelNotFound_RemovesFinalizer mirrors
 // TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer. When DeleteTunnel
 // returns 404 the operator must treat it as success (the remote object is gone,
