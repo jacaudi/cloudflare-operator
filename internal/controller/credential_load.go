@@ -65,6 +65,10 @@ type CredentialFactory interface {
 //     event with the actionable label-the-Secret guidance, requeue.
 //   - apierrors.IsNotFound (wrapped) → ReasonSecretNotFound, requeue.
 //   - any other error → ReasonReconcileError, requeue.
+//
+// recorder may be nil; the helper silently skips event emission in that
+// case. In production every reconciler MUST provide a non-nil recorder
+// — the guard exists for tests and out-of-tree callers.
 func LoadCredentials(
 	ctx context.Context,
 	c client.Client,

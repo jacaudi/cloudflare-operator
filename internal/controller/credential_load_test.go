@@ -9,6 +9,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,7 +98,7 @@ func TestLoadCredentials_NotLabeled_SetsReasonAndHalts(t *testing.T) {
 	}
 	select {
 	case got := <-rec.Events:
-		if !containsSubstr(got, "SecretNotLabeled") {
+		if !strings.Contains(got, "SecretNotLabeled") {
 			t.Errorf("expected event mentioning SecretNotLabeled, got %q", got)
 		}
 	default:
@@ -131,14 +132,3 @@ func TestLoadCredentials_NotFound_SetsReasonSecretNotFound(t *testing.T) {
 	}
 }
 
-// containsSubstr is a tiny substring helper local to this test file (the
-// package already has a slice-based `contains` defined elsewhere, so we use
-// a distinct name to avoid the collision).
-func containsSubstr(haystack, needle string) bool {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return true
-		}
-	}
-	return false
-}
