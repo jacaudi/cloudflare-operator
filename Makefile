@@ -40,8 +40,8 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet ## Run tests.
-	go test ./... -coverprofile cover.out
+test: manifests generate fmt vet envtest ## Run tests.
+	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test ./... -coverprofile cover.out
 
 .PHONY: lint
 lint: custom-gcl ## Run golangci-lint linter
@@ -115,10 +115,12 @@ $(LOCALBIN):
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 CUSTOM_GCL = $(LOCALBIN)/custom-gcl
+ENVTEST ?= $(LOCALBIN)/setup-envtest
 
 ## Tool Versions
 CONTROLLER_TOOLS_VERSION ?= v0.20.1
 GOLANGCI_LINT_VERSION ?= v2.12.1
+ENVTEST_K8S_VERSION ?= 1.30.0
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
@@ -134,3 +136,8 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 custom-gcl: golangci-lint $(CUSTOM_GCL) ## Build custom golangci-lint with module plugins.
 $(CUSTOM_GCL): .custom-gcl.yml $(LOCALBIN)
 	$(GOLANGCI_LINT) custom && mv custom-gcl $(CUSTOM_GCL)
+
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
