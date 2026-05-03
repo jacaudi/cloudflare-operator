@@ -389,6 +389,56 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 	}
 }
 
+// TestTunnelReconcile_SecretNotLabeled verifies that a credentials Secret
+// existing in the API server but lacking the cloudflare.io/managed=true
+// label surfaces ReasonSecretNotLabeled (not SecretNotFound) and emits a
+// recorder event.
+func TestTunnelReconcile_SecretNotLabeled(t *testing.T) {
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	mock := newMockTunnelClient()
+
+	r := buildTunnelReconciler(t, mock, tunnel)
+	rec := record.NewFakeRecorder(8)
+	r.Recorder = rec
+	r.ClientFactory = &fakeCredFactory{err: cfclient.ErrSecretNotLabeled}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	var got cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("failed to get updated tunnel: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonSecretNotLabeled {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotLabeled, cond.Reason)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %s", cond.Status)
+	}
+
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, cloudflarev1alpha1.ReasonSecretNotLabeled) {
+			t.Errorf("expected event mentioning %s, got %q", cloudflarev1alpha1.ReasonSecretNotLabeled, ev)
+		}
+	default:
+		t.Error("expected at least one recorder event for SecretNotLabeled")
+	}
+}
+
 // buildInterceptedTunnelReconciler is the same as buildTunnelReconciler
 // but wraps the fake client with the given interceptor.Funcs so individual
 // API calls can be intercepted (e.g. to inject conflict storms).

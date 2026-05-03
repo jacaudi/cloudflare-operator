@@ -474,6 +474,56 @@ func TestZoneReconcile_SecretNotFound(t *testing.T) {
 	t.Error("expected Ready condition with SecretNotFound reason")
 }
 
+// TestZoneReconcile_SecretNotLabeled verifies that a credentials Secret
+// existing in the API server but lacking the cloudflare.io/managed=true
+// label surfaces ReasonSecretNotLabeled (not SecretNotFound) and emits a
+// recorder event.
+func TestZoneReconcile_SecretNotLabeled(t *testing.T) {
+	zone := newTestCloudflareZone("test-zone", "default")
+	zone.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	mock := newMockZoneLifecycleClient()
+
+	r := buildZoneReconciler(mock, zone)
+	rec := record.NewFakeRecorder(8)
+	r.Recorder = rec
+	r.ClientFactory = &fakeCredFactory{err: cfclient.ErrSecretNotLabeled}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	var got cloudflarev1alpha1.CloudflareZone
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("failed to get updated zone: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonSecretNotLabeled {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotLabeled, cond.Reason)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %s", cond.Status)
+	}
+
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, cloudflarev1alpha1.ReasonSecretNotLabeled) {
+			t.Errorf("expected event mentioning %s, got %q", cloudflarev1alpha1.ReasonSecretNotLabeled, ev)
+		}
+	default:
+		t.Error("expected at least one recorder event for SecretNotLabeled")
+	}
+}
+
 func TestZoneReconcile_CloudflareAPIError(t *testing.T) {
 	zone := newTestCloudflareZone("test-zone", "default")
 	zone.Finalizers = []string{cloudflarev1alpha1.FinalizerName}

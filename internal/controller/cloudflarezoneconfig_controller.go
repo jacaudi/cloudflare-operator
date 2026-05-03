@@ -47,7 +47,7 @@ type CloudflareZoneConfigReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme
 	Recorder      record.EventRecorder
-	ClientFactory *cfclient.ClientFactory
+	ClientFactory CredentialFactory
 	ZoneClientFn  func(apiToken string) cfclient.ZoneClient
 }
 
@@ -106,12 +106,19 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 
 	// 4. Get API token
 	secretNs := secretRefNamespace(zoneConfig.Spec.SecretRef, zoneConfig.Namespace)
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, zoneConfig.Spec.SecretRef.Name, secretNs)
-	if err != nil {
-		logger.Error(err, "failed to get API token")
-		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+	creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+		zoneConfig.Spec.SecretRef.Name, secretNs,
+		r.Recorder, &zoneConfig, &zoneConfig.Status.Conditions, 30*time.Second)
+	if halt != nil {
+		if err == nil {
+			logger.V(1).Info("credential load failed; halting reconcile",
+				"secret", zoneConfig.Spec.SecretRef.Name, "namespace", secretNs)
+		} else {
+			logger.Error(err, "credential load failed")
+		}
+		return *halt, err
 	}
+	apiToken := creds.APIToken
 
 	// 5. Reconcile the zone config.
 	// Per-group conditions set inside reconcileZoneConfig (via status.SetCondition)

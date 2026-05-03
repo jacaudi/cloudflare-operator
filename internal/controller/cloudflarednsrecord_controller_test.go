@@ -424,6 +424,59 @@ func TestReconcile_SecretNotFound(t *testing.T) {
 	}
 }
 
+// TestReconcile_SecretNotLabeled verifies that a credentials Secret which
+// exists in the API server but lacks the cloudflare.io/managed=true label
+// surfaces ReasonSecretNotLabeled (not the legacy ReasonSecretNotFound) on
+// the Ready condition and emits a recorder event with actionable guidance.
+func TestReconcile_SecretNotLabeled(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecord("test-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	mock := newMockDNSClient()
+
+	r := buildReconciler(s, mock, dnsRecord)
+	// Replace the real factory with a stub that signals SecretNotLabeled.
+	rec := record.NewFakeRecorder(8)
+	r.Recorder = rec
+	r.ClientFactory = &fakeCredFactory{err: cfclient.ErrSecretNotLabeled}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	// Re-fetch via the client to confirm Status().Update round-tripped.
+	var got cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-rec", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("failed to get updated record: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonSecretNotLabeled {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotLabeled, cond.Reason)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %s", cond.Status)
+	}
+
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, cloudflarev1alpha1.ReasonSecretNotLabeled) {
+			t.Errorf("expected event mentioning %s, got %q", cloudflarev1alpha1.ReasonSecretNotLabeled, ev)
+		}
+	default:
+		t.Error("expected at least one recorder event for SecretNotLabeled")
+	}
+}
+
 // TestReconcile_SecretRefCrossNamespace is a regression test for issue #70.
 // When the CloudflareDNSRecord lives in one namespace ("apps") but the
 // credentials Secret lives in another ("zones") — typical when an HTTPRoute or

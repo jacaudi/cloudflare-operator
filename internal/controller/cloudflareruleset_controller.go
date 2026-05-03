@@ -44,7 +44,7 @@ type CloudflareRulesetReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	Recorder        record.EventRecorder
-	ClientFactory   *cfclient.ClientFactory
+	ClientFactory   CredentialFactory
 	RulesetClientFn func(apiToken string) cfclient.RulesetClient
 }
 
@@ -102,12 +102,19 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// 4. Get API token
 	secretNs := secretRefNamespace(ruleset.Spec.SecretRef, ruleset.Namespace)
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, ruleset.Spec.SecretRef.Name, secretNs)
-	if err != nil {
-		logger.Error(err, "failed to get API token")
-		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+	creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+		ruleset.Spec.SecretRef.Name, secretNs,
+		r.Recorder, &ruleset, &ruleset.Status.Conditions, 30*time.Second)
+	if halt != nil {
+		if err == nil {
+			logger.V(1).Info("credential load failed; halting reconcile",
+				"secret", ruleset.Spec.SecretRef.Name, "namespace", secretNs)
+		} else {
+			logger.Error(err, "credential load failed")
+		}
+		return *halt, err
 	}
+	apiToken := creds.APIToken
 
 	// 5. Reconcile the ruleset
 	result, err := r.reconcileRuleset(ctx, &ruleset, r.rulesetClient(apiToken), resolvedZoneID)
