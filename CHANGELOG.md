@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.11.0...v0.12.0) (2026-05-03)
+
+### Features
+
+* distinguish Cloudflare API failures via error classification predicates ([#86](https://github.com/jacaudi/cloudflare-operator/issues/86)) ([80519e3](https://github.com/jacaudi/cloudflare-operator/commit/80519e32460dc11502eb30e992e4a1bc9fb0327b)), closes [#4](https://github.com/jacaudi/cloudflare-operator/issues/4) [#6](https://github.com/jacaudi/cloudflare-operator/issues/6) [#7](https://github.com/jacaudi/cloudflare-operator/issues/7)
+
 ## [0.11.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.10.2...v0.11.0) (2026-05-01)
 
 ### Bug Fixes
