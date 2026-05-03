@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -93,5 +94,85 @@ func TestNewClientFactory_AcceptsAPIReader(t *testing.T) {
 	factory := NewClientFactory(cached, apiReader)
 	if factory == nil {
 		t.Fatal("expected non-nil factory")
+	}
+}
+
+func TestGetCredentials_UnlabeledSecret_ReturnsErrSecretNotLabeled(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	// Cached client: empty (simulates the label-filtered cache excluding the Secret).
+	cached := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	// API reader: has the Secret, with the API token but no managed label.
+	unlabeled := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cf-token",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"apiToken": []byte("test-token"),
+		},
+	}
+	apiReader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(unlabeled).Build()
+
+	factory := NewClientFactory(cached, apiReader)
+	_, err := factory.GetCredentials(context.Background(), "cf-token", "default")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrSecretNotLabeled) {
+		t.Fatalf("expected ErrSecretNotLabeled, got %v", err)
+	}
+}
+
+func TestGetCredentials_BothMiss_ReturnsNotFound(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	cached := fake.NewClientBuilder().WithScheme(scheme).Build()
+	apiReader := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	factory := NewClientFactory(cached, apiReader)
+	_, err := factory.GetCredentials(context.Background(), "missing", "default")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if errors.Is(err, ErrSecretNotLabeled) {
+		t.Fatalf("expected NotFound-flavored error, got ErrSecretNotLabeled")
+	}
+	if !apierrors.IsNotFound(err) {
+		// The wrapped error must satisfy IsNotFound for downstream callers
+		// (existing ReasonSecretNotFound path).
+		t.Fatalf("expected IsNotFound to match, got %v", err)
+	}
+}
+
+func TestGetCredentials_CacheHit_DoesNotCallAPIReader(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	labeled := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cf-token",
+			Namespace: "default",
+			Labels:    map[string]string{"cloudflare.io/managed": "true"},
+		},
+		Data: map[string][]byte{
+			"apiToken": []byte("steady-state-token"),
+		},
+	}
+	cached := fake.NewClientBuilder().WithScheme(scheme).WithObjects(labeled).Build()
+	// API reader empty: if the helper accidentally calls it on the steady-state
+	// path, it would return a misleading NotFound and the test would fail.
+	apiReader := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	factory := NewClientFactory(cached, apiReader)
+	creds, err := factory.GetCredentials(context.Background(), "cf-token", "default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if creds.APIToken != "steady-state-token" {
+		t.Errorf("expected steady-state-token, got %s", creds.APIToken)
 	}
 }

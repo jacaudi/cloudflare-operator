@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -63,15 +64,43 @@ func (f *ClientFactory) GetAPIToken(ctx context.Context, secretName, namespace s
 
 // GetCredentials reads the Cloudflare API token (required) and Account ID
 // (optional, empty string if not set) from a single Kubernetes Secret.
-// Controllers that need both call this to avoid two Secret reads.
+//
+// On cache miss (k8sClient returns IsNotFound), GetCredentials does a
+// single uncached read via apiReader to disambiguate:
+//   - apiReader also returns IsNotFound → the original cache error is
+//     returned (downstream surfaces ReasonSecretNotFound as today).
+//   - apiReader returns the Secret → the Secret exists in the API server
+//     but the cache filter has excluded it; ErrSecretNotLabeled is
+//     returned so reconcilers can surface the actionable
+//     ReasonSecretNotLabeled message.
+//   - apiReader returns any other error → that error is returned (rare,
+//     e.g. transient API server unavailability on the slow path).
+//
+// The fallback runs only on the cache-miss path. Steady-state credential
+// reads remain fully cached.
 func (f *ClientFactory) GetCredentials(ctx context.Context, secretName, namespace string) (Credentials, error) {
+	key := types.NamespacedName{Name: secretName, Namespace: namespace}
+
 	secret := &corev1.Secret{}
-	err := f.k8sClient.Get(ctx, types.NamespacedName{
-		Name:      secretName,
-		Namespace: namespace,
-	}, secret)
+	err := f.k8sClient.Get(ctx, key, secret)
 	if err != nil {
-		return Credentials{}, fmt.Errorf("failed to get secret %s/%s: %w", namespace, secretName, err)
+		if !apierrors.IsNotFound(err) {
+			return Credentials{}, fmt.Errorf("failed to get secret %s/%s: %w", namespace, secretName, err)
+		}
+		// Cache miss — disambiguate via the uncached API reader.
+		probe := &corev1.Secret{}
+		probeErr := f.apiReader.Get(ctx, key, probe)
+		switch {
+		case probeErr == nil:
+			// Secret exists in the API server but the cache filter excluded it.
+			return Credentials{}, fmt.Errorf("secret %s/%s: %w", namespace, secretName, ErrSecretNotLabeled)
+		case apierrors.IsNotFound(probeErr):
+			// Genuinely missing — surface the original cache error so
+			// callers' apierrors.IsNotFound checks continue to match.
+			return Credentials{}, fmt.Errorf("failed to get secret %s/%s: %w", namespace, secretName, err)
+		default:
+			return Credentials{}, fmt.Errorf("failed to get secret %s/%s via api reader: %w", namespace, secretName, probeErr)
+		}
 	}
 
 	token, ok := secret.Data[SecretKeyAPIToken]
