@@ -138,7 +138,7 @@ func buildZoneConfigReconciler(mock *mockZoneClient, objs ...client.Object) *Clo
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		ZoneClientFn: func(_ string) cfclient.ZoneClient {
 			return mock
 		},

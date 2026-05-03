@@ -153,7 +153,7 @@ func buildZoneReconciler(mock *mockZoneLifecycleClient, objs ...client.Object) *
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
 			return mock
 		},
@@ -638,7 +638,7 @@ func TestZoneReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
 			return mock
 		},
@@ -708,7 +708,7 @@ func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		ZoneLifecycleClientFn: func(_ string) cfclient.ZoneLifecycleClient {
 			return mock
 		},

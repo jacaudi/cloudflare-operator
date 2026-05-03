@@ -192,7 +192,7 @@ func buildReconciler(s *runtime.Scheme, mock *mockDNSClient, objs ...client.Obje
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		DNSClientFn: func(_ string) cfclient.DNSClient {
 			return mock
 		},
@@ -831,7 +831,7 @@ func buildReconcilerWithRegistry(s *runtime.Scheme, dnsClient cfclient.DNSClient
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		Registry:      reg,
 		DNSClientFn: func(_ string) cfclient.DNSClient {
 			return dnsClient
@@ -1922,7 +1922,7 @@ func TestCloudflareDNSRecordReconciler_BadRequest_EmitsInvalidSpecEvent(t *testi
 		Client:        fakeClient,
 		Scheme:        scheme,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		DNSClientFn: func(_ string) cfclient.DNSClient {
 			return mock
 		},

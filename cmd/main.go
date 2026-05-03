@@ -93,7 +93,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	clientFactory := cfclient.NewClientFactory(mgr.GetClient())
+	clientFactory := cfclient.NewClientFactory(mgr.GetClient(), mgr.GetAPIReader())
 	ipResolver := ipresolver.NewResolver()
 
 	// setupCtx is a background context used for startup-time API calls

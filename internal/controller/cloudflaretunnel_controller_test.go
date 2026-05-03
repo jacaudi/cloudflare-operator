@@ -136,7 +136,7 @@ func buildTunnelReconciler(t *testing.T, mock *mockTunnelClient, objs ...client.
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		TunnelClientFn: func(_ string) cfclient.TunnelClient {
 			return mock
 		},
@@ -414,7 +414,7 @@ func buildInterceptedTunnelReconciler(t *testing.T, mock *mockTunnelClient, func
 		Client:         wrapped,
 		Scheme:         s,
 		Recorder:       record.NewFakeRecorder(10),
-		ClientFactory:  cfclient.NewClientFactory(wrapped),
+		ClientFactory:  cfclient.NewClientFactory(wrapped, wrapped),
 		TunnelClientFn: func(_ string) cfclient.TunnelClient { return mock },
 	}
 }
@@ -623,7 +623,7 @@ func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		TunnelClientFn: func(_ string) cfclient.TunnelClient {
 			return mock
 		},

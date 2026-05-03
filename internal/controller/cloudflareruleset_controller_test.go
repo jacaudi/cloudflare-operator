@@ -148,7 +148,7 @@ func buildRulesetReconciler(mock *mockRulesetClient, objs ...client.Object) *Clo
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},
@@ -439,7 +439,7 @@ func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},
@@ -528,7 +528,7 @@ func TestRulesetReconcile_ZoneRefNotReady(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},
@@ -761,7 +761,7 @@ func TestRulesetReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},

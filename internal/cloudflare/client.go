@@ -27,13 +27,22 @@ const (
 )
 
 // ClientFactory creates Cloudflare API clients from Kubernetes Secrets.
+//
+// k8sClient is the cached client used for steady-state Secret reads.
+// apiReader is the manager's uncached API reader, used only to
+// disambiguate the cache-miss path (label-filtered vs. truly missing).
+// In tests where the cache and API server are not distinguished,
+// the same reader may be passed for both fields.
 type ClientFactory struct {
 	k8sClient client.Client
+	apiReader client.Reader
 }
 
-// NewClientFactory creates a new ClientFactory.
-func NewClientFactory(k8sClient client.Client) *ClientFactory {
-	return &ClientFactory{k8sClient: k8sClient}
+// NewClientFactory creates a new ClientFactory. apiReader must be the
+// manager's non-caching API reader (mgr.GetAPIReader()) so the
+// disambiguation path bypasses the (label-filtered) cache.
+func NewClientFactory(k8sClient client.Client, apiReader client.Reader) *ClientFactory {
+	return &ClientFactory{k8sClient: k8sClient, apiReader: apiReader}
 }
 
 // Credentials holds the Cloudflare API token and, optionally, the Account ID

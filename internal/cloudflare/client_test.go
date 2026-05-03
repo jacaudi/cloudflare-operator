@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -27,7 +28,7 @@ func TestGetAPIToken_Success(t *testing.T) {
 	}
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-	factory := NewClientFactory(k8sClient)
+	factory := NewClientFactory(k8sClient, k8sClient)
 
 	token, err := factory.GetAPIToken(context.Background(), "cf-token", "default")
 	if err != nil {
@@ -43,7 +44,7 @@ func TestGetAPIToken_SecretNotFound(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).Build()
-	factory := NewClientFactory(k8sClient)
+	factory := NewClientFactory(k8sClient, k8sClient)
 
 	_, err := factory.GetAPIToken(context.Background(), "missing", "default")
 	if err == nil {
@@ -66,7 +67,7 @@ func TestGetAPIToken_MissingKey(t *testing.T) {
 	}
 
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
-	factory := NewClientFactory(k8sClient)
+	factory := NewClientFactory(k8sClient, k8sClient)
 
 	_, err := factory.GetAPIToken(context.Background(), "cf-token", "default")
 	if err == nil {
@@ -78,5 +79,19 @@ func TestErrSecretNotLabeled_IsSentinel(t *testing.T) {
 	wrapped := fmt.Errorf("loading credentials: %w", ErrSecretNotLabeled)
 	if !errors.Is(wrapped, ErrSecretNotLabeled) {
 		t.Fatalf("errors.Is should match wrapped sentinel; got false")
+	}
+}
+
+func TestNewClientFactory_AcceptsAPIReader(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	cached := fake.NewClientBuilder().WithScheme(scheme).Build()
+	// API reader is conventionally a separate non-caching reader; the fake
+	// client implements client.Reader so we reuse it here for type-fit only.
+	var apiReader client.Reader = cached
+
+	factory := NewClientFactory(cached, apiReader)
+	if factory == nil {
+		t.Fatal("expected non-nil factory")
 	}
 }
