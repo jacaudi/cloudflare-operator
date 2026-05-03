@@ -64,6 +64,7 @@ controllers:
           {{- if .Values.registry.txtWildcardReplacement }}
           TXT_WILDCARD_REPLACEMENT: {{ .Values.registry.txtWildcardReplacement | quote }}
           {{- end }}
+          SECRET_CACHE_LABEL_SELECTOR: {{ .Values.secretCacheLabelSelector | quote }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
         securityContext:
