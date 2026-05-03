@@ -26,12 +26,17 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -101,8 +106,6 @@ func main() {
 		}
 		secretLabelSelectorParsed = parsed
 	}
-	_ = secretLabelSelectorParsed // Wired into the manager cache in Task 7.
-
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
@@ -111,6 +114,31 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "b74fd608.io",
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				// Secret is the only type with a label filter; all others are
+				// enumerated explicitly so that any addition to the watched
+				// surface is a documented decision rather than an implicit default.
+				&corev1.Secret{}: {Label: secretLabelSelectorParsed},
+
+				// Owned / watched CRDs.
+				&cloudflarev1alpha1.CloudflareZone{}:       {},
+				&cloudflarev1alpha1.CloudflareDNSRecord{}:  {},
+				&cloudflarev1alpha1.CloudflareTunnel{}:     {},
+				&cloudflarev1alpha1.CloudflareTunnelRule{}: {},
+				&cloudflarev1alpha1.CloudflareZoneConfig{}: {},
+				&cloudflarev1alpha1.CloudflareRuleset{}:    {},
+
+				// Connector-owned core types and watched source types.
+				&corev1.Service{}:               {},
+				&corev1.ConfigMap{}:             {},
+				&corev1.ServiceAccount{}:        {},
+				&appsv1.Deployment{}:            {},
+				&policyv1.PodDisruptionBudget{}: {},
+				&gwv1.HTTPRoute{}:               {},
+				&gwv1.Gateway{}:                 {},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
