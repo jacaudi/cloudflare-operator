@@ -268,6 +268,12 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 		if err := controllerutil.SetControllerReference(tunnel, credSecret, r.Scheme); err != nil {
 			return err
 		}
+		if credSecret.Labels == nil {
+			credSecret.Labels = map[string]string{}
+		}
+		for k, v := range connectorLabels(tunnel) {
+			credSecret.Labels[k] = v
+		}
 		if credSecret.Data == nil {
 			credSecret.Data = make(map[string][]byte)
 		}

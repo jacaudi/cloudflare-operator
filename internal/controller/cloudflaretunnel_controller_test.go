@@ -651,6 +651,46 @@ func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.
 	}
 }
 
+func TestEnsureCredentialsSecret_AppliesManagedLabel(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
+		t.Fatalf("ensureCredentialsSecret: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if v, ok := got.Labels["cloudflare.io/managed"]; !ok || v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true on secret, got %q (present=%v)`, v, ok)
+	}
+	if got.Labels["app.kubernetes.io/managed-by"] != "cloudflare-operator" {
+		t.Errorf("expected app.kubernetes.io/managed-by=cloudflare-operator, got %q",
+			got.Labels["app.kubernetes.io/managed-by"])
+	}
+}
+
 // TestCloudflareTunnelReconciler_DeleteTunnelNotFound_RemovesFinalizer mirrors
 // TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer. When DeleteTunnel
 // returns 404 the operator must treat it as success (the remote object is gone,
