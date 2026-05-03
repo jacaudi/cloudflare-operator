@@ -677,6 +677,9 @@ func TestConnectorLabels_IncludesManagedKey(t *testing.T) {
 			t.Errorf("expected key %s to remain in connectorLabels", key)
 		}
 	}
+	if want := 5; len(got) != want {
+		t.Errorf("connectorLabels returned %d keys, want %d (got %v)", len(got), want, got)
+	}
 }
 
 // TestBuildConnectorDeployment_ArgsExact pins the cloudflared Args. The
