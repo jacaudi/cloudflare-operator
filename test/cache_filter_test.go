@@ -128,7 +128,13 @@ func TestSecretLabelFilter_CacheVsAPIReader(t *testing.T) {
 		t.Fatalf("create unlabeled: %v", err)
 	}
 
-	// Give the cache a beat to observe the labeled write.
+	// Give the cache a beat to observe the labeled write. Polling on the
+	// labeled Secret is sufficient to serialize against the unlabeled
+	// observation too: both writes share the same client, so the apiserver
+	// assigns monotonically-increasing resourceVersions and the informer
+	// observes them in order. Once the labeled Secret is visible, the
+	// earlier unlabeled write has already been processed (and filtered out)
+	// by the same informer.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var probe corev1.Secret
