@@ -151,6 +151,10 @@ kubectl apply -f cloudflare-operator/crds/
 
 Check [`CHANGELOG.md`](CHANGELOG.md) for breaking changes before upgrading.
 
+### Stuck-deleting CRs
+
+If a CR is stuck deleting because the credentials Secret it references is missing or unlabeled, the operator's `Ready` condition will surface `Reason=SecretNotFound` or `Reason=SecretNotLabeled`. The `Condition.Message` no longer carries the manual-finalizer guidance for credential-load failures during delete (it does on remote-API delete failures); check the operator logs for `"Remove the finalizer manually to force deletion"`. To unstick, label the Secret (or set the chart's `secretCacheLabelSelector: ""` to disable the filter) so the credential load succeeds, then let the finalizer drain. As a last resort, `kubectl patch` to remove the finalizer manually.
+
 ## Uninstall
 
 ```sh
