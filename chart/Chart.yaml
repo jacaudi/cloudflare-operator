@@ -20,4 +20,4 @@ maintainers:
 dependencies:
   - name: common
     repository: https://bjw-s-labs.github.io/helm-charts
-    version: 4.6.2
+    version: 5.0.0
