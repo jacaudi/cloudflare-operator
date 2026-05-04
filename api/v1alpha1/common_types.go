@@ -96,3 +96,36 @@ const (
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.
 const FinalizerName = "cloudflare.io/finalizer"
+
+// Phase is a coarse, human-friendly summary of a CR's reconciliation
+// state. It is set atomically with the Ready condition by the
+// internal/status package; reconcilers do not set Phase directly.
+//
+// +kubebuilder:validation:Enum=Pending;Reconciling;Ready;Deleting;Error
+type Phase string
+
+const (
+	PhasePending     Phase = "Pending"
+	PhaseReconciling Phase = "Reconciling"
+	PhaseReady       Phase = "Ready"
+	PhaseDeleting    Phase = "Deleting"
+	PhaseError       Phase = "Error"
+)
+
+// InProgressReasons enumerates the Reason* constants that represent
+// "work is happening or waiting on a precondition" rather than "this CR
+// has failed and the user must intervene." derivePhase (in
+// internal/status) checks membership via slices.Contains.
+//
+// If you add a Ready=False reason that represents waiting on a
+// precondition, add it here. Anything not listed is mapped to
+// PhaseError by derivePhase, including v0.12.0 (Part 1) classification
+// reasons (InvalidSpec, RemoteGone, PermissionDenied, PlanTierRequired)
+// and Part 2's SecretNotLabeled.
+var InProgressReasons = []string{
+	ReasonReconciling,
+	ReasonZoneRefNotReady,
+	ReasonZonePending,
+	ReasonGatewayAddressNotReady,
+	ReasonTunnelNotReady,
+}
