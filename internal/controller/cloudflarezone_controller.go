@@ -44,7 +44,7 @@ type CloudflareZoneReconciler struct {
 	client.Client
 	Scheme                *runtime.Scheme
 	Recorder              record.EventRecorder
-	ClientFactory         *cfclient.ClientFactory
+	ClientFactory         CredentialFactory
 	ZoneLifecycleClientFn func(apiToken string) cfclient.ZoneLifecycleClient
 }
 
@@ -86,11 +86,17 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// 4. Get Cloudflare credentials (API token + Account ID)
 	secretNs := secretRefNamespace(zone.Spec.SecretRef, zone.Namespace)
-	creds, err := r.ClientFactory.GetCredentials(ctx, zone.Spec.SecretRef.Name, secretNs)
-	if err != nil {
-		logger.Error(err, "failed to get credentials")
-		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+	creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+		zone.Spec.SecretRef.Name, secretNs,
+		r.Recorder, &zone, &zone.Status.Conditions, 30*time.Second)
+	if halt != nil {
+		if err == nil {
+			logger.V(1).Info("credential load failed; halting reconcile",
+				"secret", zone.Spec.SecretRef.Name, "namespace", secretNs)
+		} else {
+			logger.Error(err, "credential load failed")
+		}
+		return *halt, err
 	}
 	if creds.AccountID == "" {
 		err := fmt.Errorf("secret %s/%s does not contain %q key",
@@ -254,12 +260,19 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 
 	if zone.Spec.DeletionPolicy == cloudflarev1alpha1.DeletionPolicyDelete && zone.Status.ZoneID != "" {
 		secretNs := secretRefNamespace(zone.Spec.SecretRef, zone.Namespace)
-		apiToken, err := r.ClientFactory.GetAPIToken(ctx, zone.Spec.SecretRef.Name, secretNs)
-		if err != nil {
-			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
-			return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
-				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
+		creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+			zone.Spec.SecretRef.Name, secretNs,
+			r.Recorder, zone, &zone.Status.Conditions, 30*time.Second)
+		if halt != nil {
+			if err == nil {
+				logger.V(1).Info("credential load failed during deletion; halting reconcile; remove the finalizer manually to force deletion",
+					"secret", zone.Spec.SecretRef.Name, "namespace", secretNs)
+			} else {
+				logger.Error(err, "credential load failed during deletion, will retry; remove the finalizer manually to force deletion")
+			}
+			return *halt, err
 		}
+		apiToken := creds.APIToken
 
 		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonDeletingResource, "Deleting zone from Cloudflare", zone.Generation)

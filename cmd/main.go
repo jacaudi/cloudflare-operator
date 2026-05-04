@@ -26,11 +26,17 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -72,6 +78,14 @@ func main() {
 		"Log level (debug, info, warn, error). Can also be set via LOG_LEVEL.")
 	flag.StringVar(&logFormat, "log-format", lookupEnvOrString("LOG_FORMAT", "json"),
 		"Log format (json, text). Can also be set via LOG_FORMAT.")
+
+	var secretCacheLabelSelector string
+	flag.StringVar(&secretCacheLabelSelector, "secret-cache-label-selector",
+		lookupEnvOrString("SECRET_CACHE_LABEL_SELECTOR", "cloudflare.io/managed=true"),
+		"Label selector applied to corev1.Secret in the manager cache. "+
+			"Empty string disables the filter (caches every Secret in scope of RBAC). "+
+			"Default: 'cloudflare.io/managed=true'. Override via --secret-cache-label-selector "+
+			"or SECRET_CACHE_LABEL_SELECTOR.")
 	flag.Parse()
 
 	slogLogger := setupLogger(logLevel, logFormat)
@@ -79,6 +93,19 @@ func main() {
 	ctrl.SetLogger(logr.FromSlogHandler(slogLogger.Handler()))
 	klog.SetSlogLogger(slogLogger)
 
+	var secretLabelSelectorParsed labels.Selector
+	if secretCacheLabelSelector == "" {
+		secretLabelSelectorParsed = labels.Everything()
+		setupLog.Info("Secret cache filter disabled (SECRET_CACHE_LABEL_SELECTOR=\"\"); operator will cache every Secret in scope of RBAC")
+	} else {
+		parsed, err := labels.Parse(secretCacheLabelSelector)
+		if err != nil {
+			setupLog.Error(err, "invalid secret cache label selector",
+				"selector", secretCacheLabelSelector)
+			os.Exit(1)
+		}
+		secretLabelSelectorParsed = parsed
+	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
@@ -87,13 +114,38 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "b74fd608.io",
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				// Secret is the only type with a label filter; all others are
+				// enumerated explicitly so that any addition to the watched
+				// surface is a documented decision rather than an implicit default.
+				&corev1.Secret{}: {Label: secretLabelSelectorParsed},
+
+				// Owned / watched CRDs.
+				&cloudflarev1alpha1.CloudflareZone{}:       {},
+				&cloudflarev1alpha1.CloudflareDNSRecord{}:  {},
+				&cloudflarev1alpha1.CloudflareTunnel{}:     {},
+				&cloudflarev1alpha1.CloudflareTunnelRule{}: {},
+				&cloudflarev1alpha1.CloudflareZoneConfig{}: {},
+				&cloudflarev1alpha1.CloudflareRuleset{}:    {},
+
+				// Connector-owned core types and watched source types.
+				&corev1.Service{}:               {},
+				&corev1.ConfigMap{}:             {},
+				&corev1.ServiceAccount{}:        {},
+				&appsv1.Deployment{}:            {},
+				&policyv1.PodDisruptionBudget{}: {},
+				&gwv1.HTTPRoute{}:               {},
+				&gwv1.Gateway{}:                 {},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to start manager")
 		os.Exit(1)
 	}
 
-	clientFactory := cfclient.NewClientFactory(mgr.GetClient())
+	clientFactory := cfclient.NewClientFactory(mgr.GetClient(), mgr.GetAPIReader())
 	ipResolver := ipresolver.NewResolver()
 
 	// setupCtx is a background context used for startup-time API calls

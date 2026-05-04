@@ -49,7 +49,7 @@ type CloudflareTunnelReconciler struct {
 	client.Client
 	Scheme         *runtime.Scheme
 	Recorder       record.EventRecorder
-	ClientFactory  *cfclient.ClientFactory
+	ClientFactory  CredentialFactory
 	TunnelClientFn func(apiToken string) cfclient.TunnelClient
 }
 
@@ -102,11 +102,17 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// 4. Get Cloudflare credentials (API token + Account ID)
 	secretNs := secretRefNamespace(tunnel.Spec.SecretRef, tunnel.Namespace)
-	creds, err := r.ClientFactory.GetCredentials(ctx, tunnel.Spec.SecretRef.Name, secretNs)
-	if err != nil {
-		logger.Error(err, "failed to get credentials")
-		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+	creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+		tunnel.Spec.SecretRef.Name, secretNs,
+		r.Recorder, &tunnel, &tunnel.Status.Conditions, 30*time.Second)
+	if halt != nil {
+		if err == nil {
+			logger.V(1).Info("credential load failed; halting reconcile",
+				"secret", tunnel.Spec.SecretRef.Name, "namespace", secretNs)
+		} else {
+			logger.Error(err, "credential load failed")
+		}
+		return *halt, err
 	}
 	if creds.AccountID == "" {
 		err := fmt.Errorf("secret %s/%s does not contain %q key",
@@ -268,6 +274,12 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 		if err := controllerutil.SetControllerReference(tunnel, credSecret, r.Scheme); err != nil {
 			return err
 		}
+		if credSecret.Labels == nil {
+			credSecret.Labels = map[string]string{}
+		}
+		for k, v := range connectorLabels(tunnel) {
+			credSecret.Labels[k] = v
+		}
 		if credSecret.Data == nil {
 			credSecret.Data = make(map[string][]byte)
 		}
@@ -330,11 +342,17 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 
 	if tunnel.Status.TunnelID != "" {
 		secretNs := secretRefNamespace(tunnel.Spec.SecretRef, tunnel.Namespace)
-		creds, err := r.ClientFactory.GetCredentials(ctx, tunnel.Spec.SecretRef.Name, secretNs)
-		if err != nil {
-			logger.Error(err, "failed to get credentials during deletion, will retry; remove the finalizer manually to force deletion")
-			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
-				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
+		creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+			tunnel.Spec.SecretRef.Name, secretNs,
+			r.Recorder, tunnel, &tunnel.Status.Conditions, 30*time.Second)
+		if halt != nil {
+			if err == nil {
+				logger.V(1).Info("credential load failed during deletion; halting reconcile; remove the finalizer manually to force deletion",
+					"secret", tunnel.Spec.SecretRef.Name, "namespace", secretNs)
+			} else {
+				logger.Error(err, "credential load failed during deletion, will retry; remove the finalizer manually to force deletion")
+			}
+			return *halt, err
 		}
 		if creds.AccountID == "" {
 			err := fmt.Errorf("secret %s/%s does not contain %q key",

@@ -148,7 +148,7 @@ func buildRulesetReconciler(mock *mockRulesetClient, objs ...client.Object) *Clo
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},
@@ -384,6 +384,56 @@ func TestRulesetReconcile_SecretNotFound(t *testing.T) {
 	}
 }
 
+// TestRulesetReconcile_SecretNotLabeled verifies that a credentials Secret
+// existing in the API server but lacking the cloudflare.io/managed=true
+// label surfaces ReasonSecretNotLabeled (not SecretNotFound) and emits a
+// recorder event with actionable guidance.
+func TestRulesetReconcile_SecretNotLabeled(t *testing.T) {
+	ruleset := newTestRuleset("test-ruleset", "default")
+	ruleset.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	mock := newMockRulesetClient()
+
+	r := buildRulesetReconciler(mock, ruleset)
+	rec := record.NewFakeRecorder(8)
+	r.Recorder = rec
+	r.ClientFactory = &fakeCredFactory{err: cfclient.ErrSecretNotLabeled}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	var got cloudflarev1alpha1.CloudflareRuleset
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("failed to get updated ruleset: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonSecretNotLabeled {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotLabeled, cond.Reason)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %s", cond.Status)
+	}
+
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, cloudflarev1alpha1.ReasonSecretNotLabeled) {
+			t.Errorf("expected event mentioning %s, got %q", cloudflarev1alpha1.ReasonSecretNotLabeled, ev)
+		}
+	default:
+		t.Error("expected at least one recorder event for SecretNotLabeled")
+	}
+}
+
 func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 	s := testScheme(t)
 	mock := newMockRulesetClient()
@@ -439,7 +489,7 @@ func TestRulesetReconcile_ZoneRefResolvesFromCloudflareZone(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},
@@ -528,7 +578,7 @@ func TestRulesetReconcile_ZoneRefNotReady(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},
@@ -761,7 +811,7 @@ func TestRulesetReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		RulesetClientFn: func(_ string) cfclient.RulesetClient {
 			return mock
 		},

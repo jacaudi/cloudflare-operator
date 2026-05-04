@@ -94,6 +94,14 @@ registry:
   # config when migrating.
   txtWildcardReplacement: ""
 
+# -- Secret cache filter (security + memory).
+# Label selector applied to corev1.Secret in the manager cache. The
+# operator's tunnel credentials Secret is auto-labeled; user-supplied
+# credential Secrets MUST carry this label or the operator cannot read
+# them. Empty string disables the filter (caches every Secret in scope
+# of RBAC) — useful for staged migrations.
+secretCacheLabelSelector: "cloudflare.io/managed=true"
+
 # -- Metrics and monitoring configuration
 metrics:
   serviceMonitor:

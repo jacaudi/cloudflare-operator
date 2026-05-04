@@ -108,7 +108,7 @@ type CloudflareDNSRecordReconciler struct {
 	client.Client
 	Scheme        *runtime.Scheme
 	Recorder      record.EventRecorder
-	ClientFactory *cfclient.ClientFactory
+	ClientFactory CredentialFactory
 	IPResolver    *ipresolver.Resolver
 	DNSClientFn   func(apiToken string) cfclient.DNSClient
 	// Registry holds optional TXT-registry configuration. The zero value
@@ -170,12 +170,19 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	// 4. Get API token
 	secretNs := secretRefNamespace(dnsRecord.Spec.SecretRef, dnsRecord.Namespace)
-	apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, secretNs)
-	if err != nil {
-		logger.Error(err, "failed to get API token")
-		return failReconcile(ctx, r.Client, &dnsRecord, &dnsRecord.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+	creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+		dnsRecord.Spec.SecretRef.Name, secretNs,
+		r.Recorder, &dnsRecord, &dnsRecord.Status.Conditions, 30*time.Second)
+	if halt != nil {
+		if err == nil {
+			logger.V(1).Info("credential load failed; halting reconcile",
+				"secret", dnsRecord.Spec.SecretRef.Name, "namespace", secretNs)
+		} else {
+			logger.Error(err, "credential load failed")
+		}
+		return *halt, err
 	}
+	apiToken := creds.APIToken
 
 	// 5. Reconcile the DNS record
 	result, err := r.reconcileRecord(ctx, &dnsRecord, r.dnsClient(apiToken), resolvedZoneID)
@@ -391,12 +398,19 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, dns
 		}
 
 		secretNs := secretRefNamespace(dnsRecord.Spec.SecretRef, dnsRecord.Namespace)
-		apiToken, err := r.ClientFactory.GetAPIToken(ctx, dnsRecord.Spec.SecretRef.Name, secretNs)
-		if err != nil {
-			logger.Error(err, "failed to get API token during deletion, will retry; remove the finalizer manually to force deletion")
-			return failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions,
-				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
+		creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
+			dnsRecord.Spec.SecretRef.Name, secretNs,
+			r.Recorder, dnsRecord, &dnsRecord.Status.Conditions, 30*time.Second)
+		if halt != nil {
+			if err == nil {
+				logger.V(1).Info("credential load failed during deletion; halting reconcile; remove the finalizer manually to force deletion",
+					"secret", dnsRecord.Spec.SecretRef.Name, "namespace", secretNs)
+			} else {
+				logger.Error(err, "credential load failed during deletion, will retry; remove the finalizer manually to force deletion")
+			}
+			return *halt, err
 		}
+		apiToken := creds.APIToken
 
 		if err := r.dnsClient(apiToken).DeleteRecord(ctx, resolvedZoneID, dnsRecord.Status.RecordID); err != nil {
 			if cfclient.IsNotFound(err) {

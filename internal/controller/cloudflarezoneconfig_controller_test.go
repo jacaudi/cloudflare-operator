@@ -14,6 +14,7 @@ import (
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -138,7 +139,7 @@ func buildZoneConfigReconciler(mock *mockZoneClient, objs ...client.Object) *Clo
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		ZoneClientFn: func(_ string) cfclient.ZoneClient {
 			return mock
 		},
@@ -436,6 +437,56 @@ func TestZoneConfigReconcile_SecretNotFound(t *testing.T) {
 	}
 	if !foundCondition {
 		t.Error("expected Ready condition to be set")
+	}
+}
+
+// TestZoneConfigReconcile_SecretNotLabeled verifies that a credentials
+// Secret existing in the API server but lacking the
+// cloudflare.io/managed=true label surfaces ReasonSecretNotLabeled (not
+// SecretNotFound) and emits a recorder event.
+func TestZoneConfigReconcile_SecretNotLabeled(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	mock := newMockZoneClient()
+
+	r := buildZoneConfigReconciler(mock, zoneConfig)
+	rec := record.NewFakeRecorder(8)
+	r.Recorder = rec
+	r.ClientFactory = &fakeCredFactory{err: cfclient.ErrSecretNotLabeled}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	var got cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("failed to get updated zone config: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonSecretNotLabeled {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotLabeled, cond.Reason)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %s", cond.Status)
+	}
+
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, cloudflarev1alpha1.ReasonSecretNotLabeled) {
+			t.Errorf("expected event mentioning %s, got %q", cloudflarev1alpha1.ReasonSecretNotLabeled, ev)
+		}
+	default:
+		t.Error("expected at least one recorder event for SecretNotLabeled")
 	}
 }
 

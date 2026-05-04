@@ -136,7 +136,7 @@ func buildTunnelReconciler(t *testing.T, mock *mockTunnelClient, objs ...client.
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		TunnelClientFn: func(_ string) cfclient.TunnelClient {
 			return mock
 		},
@@ -389,6 +389,56 @@ func TestTunnelReconcile_SecretNotFound(t *testing.T) {
 	}
 }
 
+// TestTunnelReconcile_SecretNotLabeled verifies that a credentials Secret
+// existing in the API server but lacking the cloudflare.io/managed=true
+// label surfaces ReasonSecretNotLabeled (not SecretNotFound) and emits a
+// recorder event.
+func TestTunnelReconcile_SecretNotLabeled(t *testing.T) {
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	mock := newMockTunnelClient()
+
+	r := buildTunnelReconciler(t, mock, tunnel)
+	rec := record.NewFakeRecorder(8)
+	r.Recorder = rec
+	r.ClientFactory = &fakeCredFactory{err: cfclient.ErrSecretNotLabeled}
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter != 30*time.Second {
+		t.Errorf("expected RequeueAfter=30s, got %v", result.RequeueAfter)
+	}
+
+	var got cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("failed to get updated tunnel: %v", err)
+	}
+
+	cond := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("expected Ready condition to be set")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonSecretNotLabeled {
+		t.Errorf("expected reason=%s, got %s", cloudflarev1alpha1.ReasonSecretNotLabeled, cond.Reason)
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected Ready=False, got %s", cond.Status)
+	}
+
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, cloudflarev1alpha1.ReasonSecretNotLabeled) {
+			t.Errorf("expected event mentioning %s, got %q", cloudflarev1alpha1.ReasonSecretNotLabeled, ev)
+		}
+	default:
+		t.Error("expected at least one recorder event for SecretNotLabeled")
+	}
+}
+
 // buildInterceptedTunnelReconciler is the same as buildTunnelReconciler
 // but wraps the fake client with the given interceptor.Funcs so individual
 // API calls can be intercepted (e.g. to inject conflict storms).
@@ -414,7 +464,7 @@ func buildInterceptedTunnelReconciler(t *testing.T, mock *mockTunnelClient, func
 		Client:         wrapped,
 		Scheme:         s,
 		Recorder:       record.NewFakeRecorder(10),
-		ClientFactory:  cfclient.NewClientFactory(wrapped),
+		ClientFactory:  cfclient.NewClientFactory(wrapped, wrapped),
 		TunnelClientFn: func(_ string) cfclient.TunnelClient { return mock },
 	}
 }
@@ -623,7 +673,7 @@ func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.
 		Client:        fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
-		ClientFactory: cfclient.NewClientFactory(fakeClient),
+		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
 		TunnelClientFn: func(_ string) cfclient.TunnelClient {
 			return mock
 		},
@@ -648,6 +698,104 @@ func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.
 	}
 	if !sawInvalidSpec {
 		t.Error("expected InvalidSpec event from classifier")
+	}
+}
+
+func TestEnsureCredentialsSecret_AppliesManagedLabel(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
+		t.Fatalf("ensureCredentialsSecret: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+	if v, ok := got.Labels["cloudflare.io/managed"]; !ok || v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true on secret, got %q (present=%v)`, v, ok)
+	}
+	if got.Labels["app.kubernetes.io/managed-by"] != "cloudflare-operator" {
+		t.Errorf("expected app.kubernetes.io/managed-by=cloudflare-operator, got %q",
+			got.Labels["app.kubernetes.io/managed-by"])
+	}
+}
+
+// TestEnsureCredentialsSecret_PreservesExternalLabels locks in the merge-form
+// contract: an external label applied to the credentials Secret (e.g. by a
+// platform GitOps tool) must coexist with the operator-managed keys after a
+// reconcile. A wholesale Labels-map replacement would regress this.
+func TestEnsureCredentialsSecret_PreservesExternalLabels(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels: map[string]string{
+				"team":                  "infra",
+				"cloudflare.io/managed": "false", // operator must overwrite this
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:   c,
+		Scheme:   s,
+		Recorder: record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
+		t.Fatalf("ensureCredentialsSecret: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get secret: %v", err)
+	}
+
+	if v := got.Labels["team"]; v != "infra" {
+		t.Errorf("external label team=infra clobbered, got %q", v)
+	}
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf("operator key cloudflare.io/managed should overwrite external value, got %q", v)
+	}
+	if v := got.Labels["app.kubernetes.io/managed-by"]; v != "cloudflare-operator" {
+		t.Errorf("operator key app.kubernetes.io/managed-by missing, got %q", v)
 	}
 }
 

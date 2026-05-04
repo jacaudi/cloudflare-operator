@@ -257,6 +257,7 @@ func TestBuildConnectorDeployment_OwnerRefAndLabels(t *testing.T) {
 		"app.kubernetes.io/instance":   "home",
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         "home",
+		"cloudflare.io/managed":        "true",
 	}
 	got := dep.Labels
 	// Pattern #6: assert total map length to catch label-bleed regressions.
@@ -534,7 +535,9 @@ func TestBuildConnectorPodDisruptionBudget_AtReplicasTwo(t *testing.T) {
 	if pdb.Spec.MaxUnavailable != nil {
 		t.Errorf("MaxUnavailable = %v, want nil (we set MinAvailable)", pdb.Spec.MaxUnavailable)
 	}
-	wantSelector := connectorLabels(tun)
+	// PDB Spec.Selector is immutable, so it uses the 4-key
+	// connectorSelectorLabels (NOT the full connectorLabels superset).
+	wantSelector := connectorSelectorLabels(tun)
 	if !reflect.DeepEqual(pdb.Spec.Selector.MatchLabels, wantSelector) {
 		t.Errorf("Selector.MatchLabels = %v, want %v", pdb.Spec.Selector.MatchLabels, wantSelector)
 	}
@@ -543,6 +546,7 @@ func TestBuildConnectorPodDisruptionBudget_AtReplicasTwo(t *testing.T) {
 		"app.kubernetes.io/instance":   tun.Name,
 		"app.kubernetes.io/managed-by": "cloudflare-operator",
 		"cloudflare.io/tunnel":         tun.Name,
+		"cloudflare.io/managed":        "true",
 	}
 	gotLabels := pdb.Labels
 	// Pattern #6: assert total map length to catch label-bleed regressions.
@@ -653,6 +657,81 @@ func TestBuildConnectorDeployment_DefaultTSC_RespectUserTSC(t *testing.T) {
 	got := dep.Spec.Template.Spec.TopologySpreadConstraints
 	if !reflect.DeepEqual(got, userTSC) {
 		t.Errorf("user TSC altered: got %+v, want %+v", got, userTSC)
+	}
+}
+
+// TestConnectorSelectorLabels_IsImmutableSubset pins the selector label set
+// to the four pre-existing keys. Deployment.Spec.Selector and PDB.Spec.Selector
+// are immutable on apps/v1 / policy/v1, so adding a key here would break
+// every reconcile on cluster upgrade with "field is immutable." This test is
+// the canary: if you ever need to add a key to selectors, you must also
+// rename / migrate the Deployment, which is far beyond a label tweak.
+func TestConnectorSelectorLabels_IsImmutableSubset(t *testing.T) {
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"},
+	}
+	got := connectorSelectorLabels(tun)
+	want := map[string]string{
+		"app.kubernetes.io/name":       "cloudflared",
+		"app.kubernetes.io/instance":   "demo",
+		"app.kubernetes.io/managed-by": "cloudflare-operator",
+		"cloudflare.io/tunnel":         "demo",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("connectorSelectorLabels = %v, want %v", got, want)
+	}
+	// Selector must NOT contain cloudflare.io/managed.
+	if _, ok := got["cloudflare.io/managed"]; ok {
+		t.Error("selector unexpectedly contains cloudflare.io/managed; selectors are immutable, this would break upgrades")
+	}
+	// connectorLabels MUST be a strict superset.
+	full := connectorLabels(tun)
+	for k, v := range got {
+		if full[k] != v {
+			t.Errorf("connectorLabels missing or differs at key %q: got %q, want %q", k, full[k], v)
+		}
+	}
+	if len(full) <= len(got) {
+		t.Errorf("connectorLabels (%d keys) must be a strict superset of connectorSelectorLabels (%d keys)", len(full), len(got))
+	}
+}
+
+// TestBuildConnectorDeployment_SelectorImmutability pins Deployment.Spec.Selector
+// to the 4-key selector set. Spec.Selector is immutable; a regression here
+// fails reconciliation forever on cluster upgrade.
+func TestBuildConnectorDeployment_SelectorImmutability(t *testing.T) {
+	tun := tunnelFixture(true)
+	dep := BuildConnectorDeployment(tun, "h")
+	if dep.Spec.Selector == nil {
+		t.Fatal("Spec.Selector is nil")
+	}
+	want := connectorSelectorLabels(tun)
+	if !reflect.DeepEqual(dep.Spec.Selector.MatchLabels, want) {
+		t.Errorf("Deployment Spec.Selector.MatchLabels = %v, want %v (4-key immutable subset)", dep.Spec.Selector.MatchLabels, want)
+	}
+}
+
+func TestConnectorLabels_IncludesManagedKey(t *testing.T) {
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"},
+	}
+	got := connectorLabels(tun)
+	if v, ok := got["cloudflare.io/managed"]; !ok || v != "true" {
+		t.Fatalf(`expected cloudflare.io/managed=true, got %q (present=%v)`, v, ok)
+	}
+	// Pre-existing keys must still be present (regression guard).
+	for _, key := range []string{
+		"app.kubernetes.io/name",
+		"app.kubernetes.io/instance",
+		"app.kubernetes.io/managed-by",
+		"cloudflare.io/tunnel",
+	} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("expected key %s to remain in connectorLabels", key)
+		}
+	}
+	if want := 5; len(got) != want {
+		t.Errorf("connectorLabels returned %d keys, want %d (got %v)", len(got), want, got)
 	}
 }
 

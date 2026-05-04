@@ -1083,6 +1083,10 @@ func TestCloudflareTunnel_PDBCreated(t *testing.T) {
 	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
 		t.Errorf("OwnerReferences[0].BlockOwnerDeletion = %v, want true", ref.BlockOwnerDeletion)
 	}
+	// Selectors must NOT include cloudflare.io/managed=true: Deployment and PDB
+	// Spec.Selector are immutable on apps/v1 / policy/v1, so the selector set
+	// is fixed at the original four keys. Pod-template labels carry the full
+	// connectorLabels superset.
 	wantSelectorLabels := map[string]string{
 		"app.kubernetes.io/name":       "cloudflared",
 		"app.kubernetes.io/instance":   tun.Name,
@@ -1187,7 +1191,11 @@ func TestCloudflareTunnel_PDBIdempotentUpdate(t *testing.T) {
 		t.Errorf("MinAvailable = %v, want 1", pdb.Spec.MinAvailable)
 	}
 
-	// Selector.MatchLabels must match the canonical four connectorLabels.
+	// Selector.MatchLabels must match the canonical five connectorLabels.
+	// Selectors must NOT include cloudflare.io/managed=true: Deployment and PDB
+	// Spec.Selector are immutable on apps/v1 / policy/v1, so the selector set
+	// is fixed at the original four keys. Pod-template labels carry the full
+	// connectorLabels superset.
 	wantSelectorLabels := map[string]string{
 		"app.kubernetes.io/name":       "cloudflared",
 		"app.kubernetes.io/instance":   tun.Name,

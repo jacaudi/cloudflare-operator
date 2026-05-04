@@ -69,9 +69,15 @@ kubectl create secret generic cloudflare-api-token \
   --namespace cloudflare-operator \
   --from-literal=apiToken=<your-cloudflare-api-token> \
   --from-literal=accountID=<your-cloudflare-account-id>
+
+kubectl label secret cloudflare-api-token \
+  --namespace cloudflare-operator \
+  cloudflare.io/managed=true
 ```
 
 Every CR references this Secret via `secretRef.name`. Place the Secret in the same namespace as the CRs that use it. `accountID` is required for `CloudflareZone` and `CloudflareTunnel`; other CRs only read `apiToken`.
+
+The `cloudflare.io/managed=true` label is required: the operator's manager cache filters Secrets by this label so it only loads Secrets you've explicitly opted in. A Secret without the label produces `Ready=False` with `Reason=SecretNotLabeled` on any CR that references it. To stage a migration across many existing Secrets, set the chart value `secretCacheLabelSelector: ""` (or the env `SECRET_CACHE_LABEL_SELECTOR=""`) to disable the filter, label your Secrets, then restore the default. The operator-owned tunnel credentials Secret is auto-labeled.
 
 ### 3. Onboard your zone
 
@@ -144,6 +150,10 @@ kubectl apply -f cloudflare-operator/crds/
 ```
 
 Check [`CHANGELOG.md`](CHANGELOG.md) for breaking changes before upgrading.
+
+### Stuck-deleting CRs
+
+If a CR is stuck deleting because the credentials Secret it references is missing or unlabeled, the operator's `Ready` condition will surface `Reason=SecretNotFound` or `Reason=SecretNotLabeled`. The `Condition.Message` no longer carries the manual-finalizer guidance for credential-load failures during delete (it does on remote-API delete failures); check the operator logs for `"Remove the finalizer manually to force deletion"`. To unstick, label the Secret (or set the chart's `secretCacheLabelSelector: ""` to disable the filter) so the credential load succeeds, then let the finalizer drain. As a last resort, `kubectl patch` to remove the finalizer manually.
 
 ## Uninstall
 
