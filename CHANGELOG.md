@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.13.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.12.0...v0.13.0) (2026-05-04)
+
+### Features
+
+* label-gated Secret cache filter and SecretNotLabeled disambiguation ([#87](https://github.com/jacaudi/cloudflare-operator/issues/87)) ([22eb749](https://github.com/jacaudi/cloudflare-operator/commit/22eb7496c2b32045789584977b00488f3688d85c))
+
+
+### BREAKING CHANGES
+
+* User-supplied credential Secrets referenced via
+secretRef must carry the new label cloudflare.io/managed=true or the
+operator surfaces Ready=False with Reason=SecretNotLabeled. Migration:
+
+  kubectl label secret -n <namespace> <name> cloudflare.io/managed=true
+
+Operators with many Secrets to label can stage the migration by setting
+the chart value secretCacheLabelSelector="" (or env
+SECRET_CACHE_LABEL_SELECTOR="") to disable the filter, label their
+Secrets, then restore the default.
+
+In addition: on the delete-reconcile path, credential-load failures no
+longer carry the wrapDeleteErr 'remove the finalizer manually to force
+deletion' guidance in Condition.Message; the guidance is preserved in
+operator logs. Reason classification on credential-load is now finer-
+grained (adds ReasonSecretNotLabeled). New Warning recorder events fire
+on credential-load failure during delete only when the failure is
+ErrSecretNotLabeled.
+
+* fix(connector): keep cloudflare.io/managed off Deployment+PDB selectors
+
+CRITICAL upgrade hazard caught by independent comprehensive review:
+adding cloudflare.io/managed=true to connectorLabels() inadvertently
+flowed into Deployment.Spec.Selector and PodDisruptionBudgetSpec.Selector.
+Both Spec.Selector fields are immutable — every reconcile on an existing
+cluster upgrading from v0.12.0 would have failed with 'field is immutable.'
+
+Fix: split into connectorSelectorLabels (4-key immutable subset) used at
+the two Spec.Selector sites, and connectorLabels (5-key superset, includes
+cloudflare.io/managed=true) used everywhere else (ObjectMeta.Labels, pod
+template Labels, TSC LabelSelector). Pod-template labels carry the full
+superset, so Selector matches via subset-of-pod-labels — works on both
+old and new pods during a rolling restart.
+
+Adds two regression tests pinning the 4-key selector subset; updates two
+pre-existing PDB tests that asserted the 5-key set on Spec.Selector.
+
+* docs(readme): troubleshoot stuck-deleting CRs with SecretNotLabeled
+
+Reviewer feedback on the secret-cache-scoping arc — explicitly point
+operators at the operator-log 'Remove the finalizer manually' guidance
+when credential-load fails on the delete reconcile path. The Condition
+message no longer carries the guidance (failReconcile path doesn't wrap
+with wrapDeleteErr), only the operator log does.
+
 ## [0.12.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.11.0...v0.12.0) (2026-05-03)
 
 ### Features
