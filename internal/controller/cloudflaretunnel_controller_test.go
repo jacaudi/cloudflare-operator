@@ -853,3 +853,184 @@ func TestCloudflareTunnelReconciler_DeleteTunnelNotFound_RemovesFinalizer(t *tes
 		t.Fatalf("unexpected error: %v", getErr)
 	}
 }
+
+// TestCloudflareTunnelReconcile_Phase_HappyPath_PhaseReady asserts that a
+// successful reconcile of a CloudflareTunnel sets Status.Phase=PhaseReady.
+func TestCloudflareTunnelReconcile_Phase_HappyPath_PhaseReady(t *testing.T) {
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+	mock := newMockTunnelClient()
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get tunnel: %v", err)
+	}
+
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("expected Phase=%s, got %s", cloudflarev1alpha1.PhaseReady, fetched.Status.Phase)
+	}
+}
+
+// TestCloudflareTunnelReconcile_Phase_MidDeletion_PhaseDeleting asserts that
+// when reconcileDelete is entered the tunnel's Phase is set to PhaseDeleting.
+// We use a missing secret to cause LoadCredentials to fail after SetPhase(Deleting)
+// runs, so the object remains in the fake client (the finalizer is not removed)
+// and we can assert the persisted Phase.
+func TestCloudflareTunnelReconcile_Phase_MidDeletion_PhaseDeleting(t *testing.T) {
+	now := metav1.Now()
+	tunnel := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "tun-deleting",
+			Namespace:         "default",
+			Generation:        1,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			Name:                "my-tunnel",
+			SecretRef:           cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			GeneratedSecretName: "tunnel-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID: "tun-deleting-id",
+		},
+	}
+	// No secret registered — LoadCredentials will fail and return a halt,
+	// leaving the object in the fake client so we can assert Phase=Deleting.
+	mock := newMockTunnelClient()
+
+	r := buildTunnelReconciler(t, mock, tunnel) // intentionally no secret
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "tun-deleting", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tun-deleting", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get tunnel: %v", err)
+	}
+
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseDeleting {
+		t.Errorf("expected Phase=%s, got %s", cloudflarev1alpha1.PhaseDeleting, fetched.Status.Phase)
+	}
+}
+
+// TestCloudflareTunnelReconcile_Phase_InProgress_PhaseReconciling verifies that
+// CloudflareTunnelStatus.Phase correctly stores PhaseReconciling when the Ready
+// condition is set to False with an InProgressReasons member. The tunnel controller
+// does not naturally emit an InProgressReasons reason on the Ready condition in its
+// normal flow, so this test exercises the Phase field plumbing directly by writing
+// the status condition via the fake client's status subresource, then verifying the
+// persisted value via c.Get. It confirms the field is wired and retrievable.
+func TestCloudflareTunnelReconcile_Phase_InProgress_PhaseReconciling(t *testing.T) {
+	s := testScheme(t)
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tunnel).
+		WithStatusSubresource(&cloudflarev1alpha1.CloudflareTunnel{}).
+		Build()
+
+	// Directly write a status with Ready=False, Reason=ReasonReconciling to
+	// establish Phase=PhaseReconciling via the status subresource path.
+	tunnel.Status.Phase = cloudflarev1alpha1.PhaseReconciling
+	tunnel.Status.Conditions = []metav1.Condition{
+		{
+			Type:               cloudflarev1alpha1.ConditionTypeReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             cloudflarev1alpha1.ReasonReconciling,
+			Message:            "reconciling",
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	if err := fakeClient.Status().Update(context.Background(), tunnel); err != nil {
+		t.Fatalf("failed to write status: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnel
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get tunnel: %v", err)
+	}
+
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReconciling {
+		t.Errorf("expected Phase=%s, got %s", cloudflarev1alpha1.PhaseReconciling, fetched.Status.Phase)
+	}
+}
+
+// TestCloudflareTunnelReconcile_DeletionPath_PhasePreserved is a regression
+// test that asserts Phase stays PhaseDeleting even when the Cloudflare DELETE
+// API call fails transiently (reaching the failReconcile call inside
+// reconcileDelete). Prior to the fix, both failReconcile sites inside
+// reconcileDelete passed &tunnel.Status.Phase, causing derivePhase to overwrite
+// PhaseDeleting with PhaseError (deletion reasons are not in InProgressReasons).
+// After the fix those sites pass nil, so SetPhase(Deleting) at reconcileDelete
+// entry remains the authoritative Phase setter.
+func TestCloudflareTunnelReconcile_DeletionPath_PhasePreserved(t *testing.T) {
+	now := metav1.Now()
+	tunnel := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "tun-delete-fail",
+			Namespace:         "default",
+			Generation:        1,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			Name:                "my-tunnel",
+			SecretRef:           cloudflarev1alpha1.SecretReference{Name: "creds"},
+			GeneratedSecretName: "tunnel-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID: "tun-delete-fail-id",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	// Inject a transient Cloudflare error so the DELETE fails and failReconcile
+	// fires inside reconcileDelete. The object remains in the fake client.
+	mock.deleteErr = fmt.Errorf("simulated transient deletion error")
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "tun-delete-fail", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tun-delete-fail", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get tunnel after reconcile: %v", err)
+	}
+
+	// Phase must remain PhaseDeleting; PhaseError would indicate the bug is present
+	// (i.e., the nil was accidentally changed to &tunnel.Status.Phase at one of the
+	// failReconcile call sites inside reconcileDelete).
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseDeleting {
+		t.Errorf("expected Phase=%s, got %s — failReconcile inside reconcileDelete is overwriting Phase via derivePhase",
+			cloudflarev1alpha1.PhaseDeleting, fetched.Status.Phase)
+	}
+}

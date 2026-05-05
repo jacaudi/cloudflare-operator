@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.tunnelCNAME
       name: CNAME
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -1504,6 +1507,18 @@ spec:
                 description: ObservedGeneration is the most recently observed generation.
                 format: int64
                 type: integer
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state. See
+                  cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Pending
+                - Reconciling
+                - Ready
+                - Deleting
+                - Error
+                type: string
               tunnelCNAME:
                 description: TunnelCNAME is the CNAME for the tunnel (tunnelID.cfargotunnel.com).
                 type: string

@@ -119,7 +119,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			secretNs, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 		logger.Error(err, "missing Account ID")
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
-			nil, cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+			&tunnel.Status.Phase, cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
 	// 5. Reconcile the tunnel
@@ -143,7 +143,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			requeue = time.Minute
 		}
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
-			nil, routing.Reason, err, requeue)
+			&tunnel.Status.Phase, routing.Reason, err, requeue)
 	}
 
 	// 7. Set Ready and ObservedGeneration in-memory. If aggregation is not
@@ -151,7 +151,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// (called inside ReconcileConnectorAndRules) perform the single terminal write
 	// so there is only one Status().Update per successful reconcile.
 	tunnel.Status.ObservedGeneration = tunnel.Generation
-	status.SetReady(&tunnel.Status.Conditions, nil, metav1.ConditionTrue,
+	status.SetReady(&tunnel.Status.Conditions, &tunnel.Status.Phase, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Tunnel synced", tunnel.Generation)
 
 	// 8. Aggregate rules and reconcile connector — only once the tunnel has a
@@ -340,6 +340,12 @@ func generateTunnelSecret() (string, error) {
 func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	status.SetPhase(&tunnel.Status.Phase, cloudflarev1alpha1.PhaseDeleting)
+	if err := r.Status().Update(ctx, tunnel); err != nil {
+		logger.Error(err, "failed to update status to Deleting")
+		// Continue — don't block deletion on a status-write failure.
+	}
+
 	if tunnel.Status.TunnelID != "" {
 		secretNs := secretRefNamespace(tunnel.Spec.SecretRef, tunnel.Namespace)
 		creds, halt, err := LoadCredentials(ctx, r.Client, r.ClientFactory,
@@ -358,6 +364,9 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 			err := fmt.Errorf("secret %s/%s does not contain %q key",
 				secretNs, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 			logger.Error(err, "missing Account ID during deletion, will retry; remove the finalizer manually to force deletion")
+			// Phase intentionally nil: SetPhase(Deleting) at reconcileDelete entry is the
+			// source of truth during deletion; derivePhase would route the deletion reason
+			// to PhaseError.
 			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
 				nil, cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
@@ -377,6 +386,9 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 				if requeue == 0 && !routing.ResetRemoteID {
 					requeue = 30 * time.Second
 				}
+				// Phase intentionally nil: SetPhase(Deleting) at reconcileDelete entry is the
+				// source of truth during deletion; derivePhase would route the deletion reason
+				// to PhaseError.
 				return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
 					nil, routing.Reason, wrapDeleteErr(err), requeue)
 			}
