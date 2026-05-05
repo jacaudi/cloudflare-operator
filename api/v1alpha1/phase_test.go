@@ -18,6 +18,10 @@ func TestInProgressReasons_KnownInProgressMembers(t *testing.T) {
 			t.Errorf("InProgressReasons missing in-progress reason %q", r)
 		}
 	}
+	if len(InProgressReasons) != len(wantIn) {
+		t.Errorf("InProgressReasons length = %d, want %d; slice may contain unexpected entries",
+			len(InProgressReasons), len(wantIn))
+	}
 }
 
 func TestInProgressReasons_ErrorReasonsAreNotMembers(t *testing.T) {
@@ -30,6 +34,8 @@ func TestInProgressReasons_ErrorReasonsAreNotMembers(t *testing.T) {
 		ReasonReconcileError,
 		ReasonCloudflareError,
 		ReasonSecretNotFound,
+		ReasonZoneNotActive,
+		ReasonIPResolutionError,
 	}
 	for _, r := range wantOut {
 		if slices.Contains(InProgressReasons, r) {
