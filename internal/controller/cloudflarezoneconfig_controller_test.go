@@ -1444,3 +1444,39 @@ func TestZoneConfigReconcile_BotManagement_PlanTier_Distinct(t *testing.T) {
 			cond.Reason, cloudflarev1alpha1.ReasonPlanTierRequired)
 	}
 }
+
+// TestZoneConfigReconcile_PartialApply_SetsPhaseError verifies that when
+// reconcileZoneConfig returns an error (e.g. a BotManagement 403 causing
+// ReasonPartialApply on the aggregate Ready condition), derivePhase maps
+// the non-in-progress reason to PhaseError.
+// ReasonPartialApply is intentionally absent from InProgressReasons.
+func TestZoneConfigReconcile_PartialApply_SetsPhaseError(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	// Inject a 403 on bot management — causes ReasonPartialApply on Ready,
+	// which is not in InProgressReasons, so derivePhase must return PhaseError.
+	mock.botUpdateErr = &cfgov6.Error{StatusCode: http.StatusForbidden}
+
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get updated zone config: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("expected Phase=%q, got %q", cloudflarev1alpha1.PhaseError, fetched.Status.Phase)
+	}
+}
