@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.status
       name: Status
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -198,6 +201,18 @@ spec:
                 type: array
               originalRegistrar:
                 description: OriginalRegistrar is the registrar at the time of onboarding.
+                type: string
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state. See
+                  cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Pending
+                - Reconciling
+                - Ready
+                - Deleting
+                - Error
                 type: string
               status:
                 description: Status is the zone status in Cloudflare (initializing,

@@ -716,6 +716,125 @@ func TestZoneReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
 	}
 }
 
+// --- Phase field tests (Task 7) ---
+
+func TestZoneReconcile_Phase_ActiveZone_PhaseReady(t *testing.T) {
+	zone := newTestCloudflareZone("test-zone", "default")
+	zone.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	zone.Status.ZoneID = "zone-active-phase"
+	secret := newTestSecret("default")
+
+	mock := newMockZoneLifecycleClient()
+	mock.zones["zone-active-phase"] = &cfclient.Zone{
+		ID:          "zone-active-phase",
+		Name:        "example.com",
+		Status:      "active",
+		Type:        "full",
+		NameServers: []string{"ns1.cloudflare.com", "ns2.cloudflare.com"},
+	}
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZone
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get zone: %v", err)
+	}
+
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("expected Phase=%s, got %s", cloudflarev1alpha1.PhaseReady, fetched.Status.Phase)
+	}
+}
+
+func TestZoneReconcile_Phase_PendingZone_PhaseReconciling(t *testing.T) {
+	zone := newTestCloudflareZone("test-zone", "default")
+	zone.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	zone.Status.ZoneID = "zone-pending-phase"
+	secret := newTestSecret("default")
+
+	mock := newMockZoneLifecycleClient()
+	mock.zones["zone-pending-phase"] = &cfclient.Zone{
+		ID:          "zone-pending-phase",
+		Name:        "example.com",
+		Status:      "pending",
+		Type:        "full",
+		NameServers: []string{"ns1.cloudflare.com", "ns2.cloudflare.com"},
+	}
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZone
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get zone: %v", err)
+	}
+
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReconciling {
+		t.Errorf("expected Phase=%s, got %s", cloudflarev1alpha1.PhaseReconciling, fetched.Status.Phase)
+	}
+}
+
+func TestZoneReconcile_Phase_MidDeletion_PhaseDeleting(t *testing.T) {
+	// Use DeletionPolicy=Delete with ZoneID set but no secret so that
+	// LoadCredentials fails, returns a halt, and reconcileDelete exits early
+	// WITHOUT removing the finalizer. This keeps the object in the fake client
+	// so we can assert Phase=Deleting after the reconcile.
+	now := metav1.Now()
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-zone",
+			Namespace:         "default",
+			Generation:        1,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: cloudflarev1alpha1.DeletionPolicyDelete,
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name: "cf-secret",
+			},
+		},
+		Status: cloudflarev1alpha1.CloudflareZoneStatus{
+			ZoneID: "zone-deleting",
+		},
+	}
+	// No secret registered — LoadCredentials will fail, halt will be returned
+	// before finalizer removal, leaving the object accessible for assertion.
+	mock := newMockZoneLifecycleClient()
+
+	r := buildZoneReconciler(mock, zone) // intentionally no secret
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZone
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get zone: %v", err)
+	}
+
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseDeleting {
+		t.Errorf("expected Phase=%s, got %s", cloudflarev1alpha1.PhaseDeleting, fetched.Status.Phase)
+	}
+}
+
 func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
 	now := metav1.Now()
 	zone := &cloudflarev1alpha1.CloudflareZone{
