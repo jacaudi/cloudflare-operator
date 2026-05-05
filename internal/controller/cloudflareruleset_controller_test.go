@@ -838,3 +838,57 @@ func TestRulesetReconcile_BadRequest_EmitsInvalidSpecEvent(t *testing.T) {
 		t.Error("expected InvalidSpec event from classifier")
 	}
 }
+
+// TestRulesetReconcile_HappyPath_PhaseReady verifies that a successful reconcile
+// sets Status.Phase to PhaseReady on the persisted object.
+func TestRulesetReconcile_HappyPath_PhaseReady(t *testing.T) {
+	ruleset := newTestRuleset("test-ruleset", "default")
+	ruleset.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestRulesetSecret("default")
+	mock := newMockRulesetClient()
+
+	r := buildRulesetReconciler(mock, ruleset, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareRuleset
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get ruleset after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("expected Status.Phase=%q, got %q", cloudflarev1alpha1.PhaseReady, fetched.Status.Phase)
+	}
+}
+
+// TestRulesetReconcile_CloudflareAPIError_PhaseError verifies that a Cloudflare
+// API error during reconciliation sets Status.Phase to PhaseError.
+func TestRulesetReconcile_CloudflareAPIError_PhaseError(t *testing.T) {
+	ruleset := newTestRuleset("test-ruleset", "default")
+	ruleset.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestRulesetSecret("default")
+
+	mock := newMockRulesetClient()
+	mock.upsertErr = fmt.Errorf("cloudflare API unavailable")
+
+	r := buildRulesetReconciler(mock, ruleset, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-ruleset", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareRuleset
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-ruleset", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get ruleset after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("expected Status.Phase=%q, got %q", cloudflarev1alpha1.PhaseError, fetched.Status.Phase)
+	}
+}

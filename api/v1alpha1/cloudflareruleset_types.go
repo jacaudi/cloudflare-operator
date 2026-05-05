@@ -137,13 +137,20 @@ type CloudflareRulesetStatus struct {
 	// ObservedGeneration is the most recently observed generation of the CR.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Phase is a coarse summary of the reconciliation state. See
+	// cloudflarev1alpha1.Phase for the enum values.
+	// +optional
+	// +kubebuilder:default=Pending
+	Phase Phase `json:"phase,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ruleset Name",type=string,JSONPath=`.spec.name`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.spec.phase`
+// +kubebuilder:printcolumn:name="Ruleset Phase",type=string,JSONPath=`.spec.phase`
 // +kubebuilder:printcolumn:name="Rules",type=integer,JSONPath=`.status.ruleCount`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
