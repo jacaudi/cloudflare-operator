@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.14.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.13.0...v0.14.0) (2026-05-05)
+
+### Features
+
+* add Status.Phase enum field to all six CRDs ([#89](https://github.com/jacaudi/cloudflare-operator/issues/89)) ([028cfd2](https://github.com/jacaudi/cloudflare-operator/commit/028cfd2a497bca2c0eadb381b445d4bca6b69820))
+
 ## [0.13.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.12.0...v0.13.0) (2026-05-04)
 
 ### Features
