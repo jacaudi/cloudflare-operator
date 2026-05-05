@@ -325,8 +325,14 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 // ensureCredentialsSecretExists ensures a credentials Secret exists for an
 // adopted tunnel. Cloudflare doesn't return the original TunnelSecret on
 // adoption, so the Secret is created with an empty TunnelSecret and the user
-// must fill it in manually. If a Secret already exists with a matching TunnelID
-// it is preserved; otherwise it is (over)written with the empty template.
+// must fill it in manually.
+//
+// Decision tree:
+//  1. NotFound → create with empty TunnelSecret template.
+//  2. Already operator-owned AND secretMatchesTunnel → no-op (steady-state).
+//  3. Owned by a different controller → actionable error (wrapped AlreadyOwnedError).
+//  4. Unowned/not operator-labeled → adopt (label-merge + OwnerRef, no Data touch),
+//     then either return nil (data matches) or overwrite with empty template (stale data).
 func (r *CloudflareTunnelReconciler) ensureCredentialsSecretExists(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel, accountID string) error {
 	logger := log.FromContext(ctx)
 
@@ -340,16 +346,85 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecretExists(ctx context.C
 	case errors.IsNotFound(err):
 		logger.Info("creating credentials Secret for adopted tunnel with empty TunnelSecret; user must provide TunnelSecret manually",
 			"secretName", tunnel.Spec.GeneratedSecretName)
+		return r.ensureCredentialsSecret(ctx, tunnel, accountID, "")
 	case err != nil:
 		return fmt.Errorf("get credentials secret: %w", err)
-	case secretMatchesTunnel(&existing, tunnel.Status.TunnelID):
-		return nil
-	default:
-		logger.Info("credentials Secret does not match adopted tunnel; overwriting with empty TunnelSecret, user must refill",
-			"secretName", tunnel.Spec.GeneratedSecretName, "tunnelID", tunnel.Status.TunnelID)
 	}
 
+	// Existing Secret found. Three branches:
+	//   1. Already operator-owned and matches the tunnel    → no-op.
+	//   2. Owned by a different controller                  → actionable error.
+	//   3. Unowned (or only operator-owned mismatch)        → adopt, then
+	//      either return (data matches) or fall through to overwrite.
+	if controlledByThisTunnel(&existing, tunnel) && secretMatchesTunnel(&existing, tunnel.Status.TunnelID) {
+		return nil
+	}
+	if otherCtrl := controlledByOther(&existing, tunnel); otherCtrl != nil {
+		return fmt.Errorf(
+			"credentials Secret %q is already owned by %s/%s (UID %s); "+
+				"rename spec.generatedSecretName or remove the conflicting owner to allow adoption: %w",
+			tunnel.Spec.GeneratedSecretName, otherCtrl.Kind, otherCtrl.Name, otherCtrl.UID,
+			&controllerutil.AlreadyOwnedError{Object: &existing, Owner: *otherCtrl},
+		)
+	}
+
+	if err := r.adoptCredentialsSecret(ctx, tunnel, &existing); err != nil {
+		return err
+	}
+
+	if secretMatchesTunnel(&existing, tunnel.Status.TunnelID) {
+		logger.Info("adopted pre-existing credentials Secret; data preserved",
+			"secretName", tunnel.Spec.GeneratedSecretName, "tunnelID", tunnel.Status.TunnelID)
+		return nil
+	}
+	logger.Info("adopted pre-existing credentials Secret but data does not match adopted tunnel; overwriting with empty TunnelSecret, user must refill",
+		"secretName", tunnel.Spec.GeneratedSecretName, "tunnelID", tunnel.Status.TunnelID)
 	return r.ensureCredentialsSecret(ctx, tunnel, accountID, "")
+}
+
+// adoptCredentialsSecret takes ownership of an existing Secret without
+// modifying its Data. Sets controller OwnerReference and merges
+// connectorLabels into existing labels. Used for the adoption path of
+// pre-existing unlabeled Secrets (see issue #90).
+func (r *CloudflareTunnelReconciler) adoptCredentialsSecret(ctx context.Context, tunnel *cloudflarev1alpha1.CloudflareTunnel, existing *corev1.Secret) error {
+	if err := controllerutil.SetControllerReference(tunnel, existing, r.Scheme); err != nil {
+		return fmt.Errorf("set controller reference on credentials secret: %w", err)
+	}
+	if existing.Labels == nil {
+		existing.Labels = map[string]string{}
+	}
+	for k, v := range connectorLabels(tunnel) {
+		existing.Labels[k] = v
+	}
+	if err := r.Update(ctx, existing); err != nil {
+		return fmt.Errorf("adopt credentials secret: %w", err)
+	}
+	return nil
+}
+
+// controlledByThisTunnel reports whether s has a controller
+// OwnerReference whose UID matches tun.
+func controlledByThisTunnel(s *corev1.Secret, tun *cloudflarev1alpha1.CloudflareTunnel) bool {
+	for _, ref := range s.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller && ref.UID == tun.UID {
+			return true
+		}
+	}
+	return false
+}
+
+// controlledByOther returns the controller OwnerReference if s has a
+// controller other than tun. Returns nil if s has no controller or the
+// existing controller is tun itself.
+func controlledByOther(s *corev1.Secret, tun *cloudflarev1alpha1.CloudflareTunnel) *metav1.OwnerReference {
+	refs := s.GetOwnerReferences()
+	for i := range refs {
+		ref := &refs[i]
+		if ref.Controller != nil && *ref.Controller && ref.UID != tun.UID {
+			return ref
+		}
+	}
+	return nil
 }
 
 // secretMatchesTunnel reports whether secret's credentials.json is parseable
