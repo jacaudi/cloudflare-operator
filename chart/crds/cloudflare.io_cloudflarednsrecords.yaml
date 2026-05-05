@@ -27,6 +27,9 @@ spec:
     - jsonPath: .spec.proxied
       name: Proxied
       type: boolean
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -265,6 +268,18 @@ spec:
                   of the CR.
                 format: int64
                 type: integer
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state. See
+                  cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Pending
+                - Reconciling
+                - Ready
+                - Deleting
+                - Error
+                type: string
               recordID:
                 description: RecordID is the Cloudflare DNS record ID.
                 type: string

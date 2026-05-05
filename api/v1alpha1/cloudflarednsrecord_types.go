@@ -122,6 +122,12 @@ type CloudflareDNSRecordStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// Phase is a coarse summary of the reconciliation state. See
+	// cloudflarev1alpha1.Phase for the enum values.
+	// +optional
+	// +kubebuilder:default=Pending
+	Phase Phase `json:"phase,omitempty"`
+
 	// RecordID is the Cloudflare DNS record ID.
 	// +optional
 	RecordID string `json:"recordID,omitempty"`
@@ -145,6 +151,7 @@ type CloudflareDNSRecordStatus struct {
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Content",type=string,JSONPath=`.status.currentContent`
 // +kubebuilder:printcolumn:name="Proxied",type=boolean,JSONPath=`.spec.proxied`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
