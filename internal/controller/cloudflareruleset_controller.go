@@ -97,7 +97,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			logger.Error(err, "failed to resolve zone ID")
 		}
 		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
-			cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
+			nil, cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
 
 	// 4. Get API token
@@ -136,12 +136,12 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			requeue = time.Minute
 		}
 		return failReconcile(ctx, r.Client, &ruleset, &ruleset.Status.Conditions,
-			routing.Reason, err, requeue)
+			nil, routing.Reason, err, requeue)
 	}
 
 	// 7. Persist status only if anything materially changed.
 	ruleset.Status.ObservedGeneration = ruleset.Generation
-	status.SetReady(&ruleset.Status.Conditions, metav1.ConditionTrue,
+	status.SetReady(&ruleset.Status.Conditions, nil, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Ruleset synced", ruleset.Generation)
 	if !reflect.DeepEqual(preStatus, &ruleset.Status) {
 		now := metav1.Now()

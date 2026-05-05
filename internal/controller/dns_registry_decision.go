@@ -142,13 +142,13 @@ func (r *CloudflareDNSRecordReconciler) applyRegistryDecision(
 	case RegistryActionRefuseForeignOwner:
 		refuseErr := fmt.Errorf("%w: %s", ErrForeignTXTOwner, dnsRecord.Spec.Name)
 		failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions, //nolint:errcheck
-			cloudflarev1alpha1.ReasonRecordOwnershipConflict, refuseErr, 5*time.Minute)
+			nil, cloudflarev1alpha1.ReasonRecordOwnershipConflict, refuseErr, 5*time.Minute)
 		return true, verdict, ctrl.Result{RequeueAfter: 5 * time.Minute}, refuseErr
 
 	case RegistryActionRefuseNoTXT:
 		refuseErr := fmt.Errorf("%w: %s", ErrTXTRegistryGap, dnsRecord.Spec.Name)
 		failReconcile(ctx, r.Client, dnsRecord, &dnsRecord.Status.Conditions, //nolint:errcheck
-			cloudflarev1alpha1.ReasonTxtRegistryGap, refuseErr, 5*time.Minute)
+			nil, cloudflarev1alpha1.ReasonTxtRegistryGap, refuseErr, 5*time.Minute)
 		return true, verdict, ctrl.Result{RequeueAfter: 5 * time.Minute}, refuseErr
 
 	case RegistryActionAdopt, RegistryActionAdoptOrphan:

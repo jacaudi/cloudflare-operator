@@ -94,17 +94,17 @@ func LoadCredentials(
 				namespace, secretName)
 		}
 		halt, herr := failReconcile(ctx, c, obj, conditions,
-			cloudflarev1alpha1.ReasonSecretNotLabeled, err, requeue)
+			nil, cloudflarev1alpha1.ReasonSecretNotLabeled, err, requeue)
 		return cfclient.Credentials{}, &halt, herr
 
 	case apierrors.IsNotFound(err):
 		halt, herr := failReconcile(ctx, c, obj, conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, requeue)
+			nil, cloudflarev1alpha1.ReasonSecretNotFound, err, requeue)
 		return cfclient.Credentials{}, &halt, herr
 
 	default:
 		halt, herr := failReconcile(ctx, c, obj, conditions,
-			cloudflarev1alpha1.ReasonReconcileError,
+			nil, cloudflarev1alpha1.ReasonReconcileError,
 			fmt.Errorf("load credentials: %w", err), requeue)
 		return cfclient.Credentials{}, &halt, herr
 	}

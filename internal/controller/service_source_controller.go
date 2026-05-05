@@ -298,11 +298,11 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 			OwnerReferences: ownerRefs,
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
-			Name:      hostname,
-			Type:      recordType,
-			Content:   strPtr(content),
-			Proxied:   boolPtr(proxied),
-			TTL:       ttl,
+			Name:    hostname,
+			Type:    recordType,
+			Content: strPtr(content),
+			Proxied: boolPtr(proxied),
+			TTL:     ttl,
 			SecretRef: cloudflarev1alpha1.SecretReference{
 				Name:      zone.Spec.SecretRef.Name,
 				Namespace: zone.Namespace,
@@ -336,10 +336,10 @@ func (r *ServiceSourceReconciler) emitDNSPair(
 			OwnerReferences: ownerRefs,
 		},
 		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
-			Name:      txtFQDN,
-			Type:      "TXT",
-			Content:   strPtr(txtContent),
-			TTL:       120,
+			Name:    txtFQDN,
+			Type:    "TXT",
+			Content: strPtr(txtContent),
+			TTL:     120,
 			SecretRef: cloudflarev1alpha1.SecretReference{
 				Name:      zone.Spec.SecretRef.Name,
 				Namespace: zone.Namespace,

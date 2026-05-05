@@ -119,7 +119,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			secretNs, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 		logger.Error(err, "missing Account ID")
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+			nil, cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
 	// 5. Reconcile the tunnel
@@ -143,7 +143,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			requeue = time.Minute
 		}
 		return failReconcile(ctx, r.Client, &tunnel, &tunnel.Status.Conditions,
-			routing.Reason, err, requeue)
+			nil, routing.Reason, err, requeue)
 	}
 
 	// 7. Set Ready and ObservedGeneration in-memory. If aggregation is not
@@ -151,7 +151,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// (called inside ReconcileConnectorAndRules) perform the single terminal write
 	// so there is only one Status().Update per successful reconcile.
 	tunnel.Status.ObservedGeneration = tunnel.Generation
-	status.SetReady(&tunnel.Status.Conditions, metav1.ConditionTrue,
+	status.SetReady(&tunnel.Status.Conditions, nil, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Tunnel synced", tunnel.Generation)
 
 	// 8. Aggregate rules and reconcile connector — only once the tunnel has a
@@ -359,7 +359,7 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 				secretNs, tunnel.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 			logger.Error(err, "missing Account ID during deletion, will retry; remove the finalizer manually to force deletion")
 			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
-				cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
+				nil, cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
 
 		if err := r.tunnelClient(creds.APIToken).DeleteTunnel(ctx, creds.AccountID, tunnel.Status.TunnelID); err != nil {
@@ -378,7 +378,7 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 					requeue = 30 * time.Second
 				}
 				return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
-					routing.Reason, wrapDeleteErr(err), requeue)
+					nil, routing.Reason, wrapDeleteErr(err), requeue)
 			}
 		} else {
 			logger.Info("deleted tunnel from Cloudflare", "tunnelID", tunnel.Status.TunnelID)

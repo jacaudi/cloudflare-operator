@@ -22,8 +22,23 @@ func SetCondition(conditions *[]metav1.Condition, conditionType string, status m
 	meta.SetStatusCondition(conditions, condition)
 }
 
-func SetReady(conditions *[]metav1.Condition, status metav1.ConditionStatus, reason, message string, generation int64) {
-	SetCondition(conditions, cloudflarev1alpha1.ConditionTypeReady, status, reason, message, generation)
+// SetReady sets the Ready condition AND derives Phase from the
+// (status, reason) pair when phase is non-nil. Callers that don't yet
+// have a Status.Phase field pass nil — the function is a strict
+// superset of the previous SetReady.
+func SetReady(
+	conditions *[]metav1.Condition,
+	phase *cloudflarev1alpha1.Phase,
+	status metav1.ConditionStatus,
+	reason, message string,
+	generation int64,
+) {
+	SetCondition(conditions, cloudflarev1alpha1.ConditionTypeReady,
+		status, reason, message, generation)
+	if phase == nil {
+		return
+	}
+	*phase = derivePhase(status, reason)
 }
 
 // SetPhase sets *phase to p. A nil phase pointer is a no-op (used by

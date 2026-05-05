@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
@@ -55,7 +56,7 @@ func TestSetCondition_UpdatesExisting(t *testing.T) {
 
 func TestSetReady(t *testing.T) {
 	var conditions []metav1.Condition
-	SetReady(&conditions, metav1.ConditionTrue, "Success", "synced", 1)
+	SetReady(&conditions, nil, metav1.ConditionTrue, "Success", "synced", 1)
 
 	if len(conditions) != 1 {
 		t.Fatalf("expected 1 condition, got %d", len(conditions))
@@ -138,5 +139,56 @@ func TestSetPhase_OverwritesExisting(t *testing.T) {
 	SetPhase(&p, cloudflarev1alpha1.PhaseDeleting)
 	if p != cloudflarev1alpha1.PhaseDeleting {
 		t.Errorf("SetPhase did not overwrite: got %q", p)
+	}
+}
+
+func TestSetReady_NilPhasePointer_OnlyWritesCondition(t *testing.T) {
+	conds := []metav1.Condition{}
+	SetReady(&conds, nil, metav1.ConditionTrue,
+		cloudflarev1alpha1.ReasonReconcileSuccess, "ok", 1)
+	got := meta.FindStatusCondition(conds, cloudflarev1alpha1.ConditionTypeReady)
+	if got == nil || got.Status != metav1.ConditionTrue {
+		t.Fatalf("Ready condition not set correctly")
+	}
+	// No panic and no observable phase write — phase is nil.
+}
+
+func TestSetReady_NonNilPhase_DerivesPhase(t *testing.T) {
+	conds := []metav1.Condition{}
+	var p cloudflarev1alpha1.Phase
+	SetReady(&conds, &p, metav1.ConditionTrue,
+		cloudflarev1alpha1.ReasonReconcileSuccess, "ok", 1)
+	if p != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("phase = %q, want %q", p, cloudflarev1alpha1.PhaseReady)
+	}
+}
+
+func TestSetReady_NonNilPhase_FalseInProgress_SetsReconciling(t *testing.T) {
+	conds := []metav1.Condition{}
+	var p cloudflarev1alpha1.Phase
+	SetReady(&conds, &p, metav1.ConditionFalse,
+		cloudflarev1alpha1.ReasonZoneRefNotReady, "waiting", 2)
+	if p != cloudflarev1alpha1.PhaseReconciling {
+		t.Errorf("phase = %q, want %q", p, cloudflarev1alpha1.PhaseReconciling)
+	}
+}
+
+func TestSetReady_NonNilPhase_FalseError_SetsError(t *testing.T) {
+	conds := []metav1.Condition{}
+	var p cloudflarev1alpha1.Phase
+	SetReady(&conds, &p, metav1.ConditionFalse,
+		cloudflarev1alpha1.ReasonInvalidSpec, "bad spec", 3)
+	if p != cloudflarev1alpha1.PhaseError {
+		t.Errorf("phase = %q, want %q", p, cloudflarev1alpha1.PhaseError)
+	}
+}
+
+func TestSetReady_NonNilPhase_Unknown_SetsPending(t *testing.T) {
+	conds := []metav1.Condition{}
+	p := cloudflarev1alpha1.PhaseReady // pre-existing
+	SetReady(&conds, &p, metav1.ConditionUnknown,
+		cloudflarev1alpha1.ReasonReconciling, "starting", 0)
+	if p != cloudflarev1alpha1.PhasePending {
+		t.Errorf("phase = %q, want %q", p, cloudflarev1alpha1.PhasePending)
 	}
 }
