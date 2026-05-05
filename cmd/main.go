@@ -194,8 +194,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.CloudflareTunnelReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor( //nolint:staticcheck // TODO: migrate to events.EventRecorder
 			"cloudflaretunnel-controller"),
 		ClientFactory: clientFactory,

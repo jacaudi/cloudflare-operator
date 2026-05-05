@@ -134,6 +134,7 @@ func buildTunnelReconciler(t *testing.T, mock *mockTunnelClient, objs ...client.
 
 	return &CloudflareTunnelReconciler{
 		Client:        fakeClient,
+		APIReader:     fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
 		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
@@ -462,6 +463,7 @@ func buildInterceptedTunnelReconciler(t *testing.T, mock *mockTunnelClient, func
 
 	return &CloudflareTunnelReconciler{
 		Client:         wrapped,
+		APIReader:      wrapped,
 		Scheme:         s,
 		Recorder:       record.NewFakeRecorder(10),
 		ClientFactory:  cfclient.NewClientFactory(wrapped, wrapped),
@@ -671,6 +673,7 @@ func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.
 	fakeRec := record.NewFakeRecorder(10)
 	r := &CloudflareTunnelReconciler{
 		Client:        fakeClient,
+		APIReader:     fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
 		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
@@ -718,9 +721,10 @@ func TestEnsureCredentialsSecret_AppliesManagedLabel(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun).Build()
 	r := &CloudflareTunnelReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(8),
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
 	}
 
 	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
@@ -773,9 +777,10 @@ func TestEnsureCredentialsSecret_PreservesExternalLabels(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
 	r := &CloudflareTunnelReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(8),
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
 	}
 
 	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {

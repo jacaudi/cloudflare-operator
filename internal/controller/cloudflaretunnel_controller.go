@@ -47,6 +47,12 @@ import (
 // CloudflareTunnelReconciler reconciles a CloudflareTunnel object
 type CloudflareTunnelReconciler struct {
 	client.Client
+	// APIReader bypasses the manager's label-filtered cache for reads
+	// that need to see the actual API-server state regardless of the
+	// cloudflare.io/managed=true label gate (introduced in PR #87).
+	// Used by ensureCredentialsSecretExists to detect pre-existing
+	// unlabeled Secrets that the cache would otherwise hide.
+	APIReader      client.Reader
 	Scheme         *runtime.Scheme
 	Recorder       record.EventRecorder
 	ClientFactory  CredentialFactory
