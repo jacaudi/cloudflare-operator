@@ -1,6 +1,7 @@
 package status
 
 import (
+	"slices"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -23,4 +24,20 @@ func SetCondition(conditions *[]metav1.Condition, conditionType string, status m
 
 func SetReady(conditions *[]metav1.Condition, status metav1.ConditionStatus, reason, message string, generation int64) {
 	SetCondition(conditions, cloudflarev1alpha1.ConditionTypeReady, status, reason, message, generation)
+}
+
+func derivePhase(status metav1.ConditionStatus, reason string) cloudflarev1alpha1.Phase {
+	switch status {
+	case metav1.ConditionTrue:
+		return cloudflarev1alpha1.PhaseReady
+	case metav1.ConditionFalse:
+		if slices.Contains(cloudflarev1alpha1.InProgressReasons, reason) {
+			return cloudflarev1alpha1.PhaseReconciling
+		}
+		return cloudflarev1alpha1.PhaseError
+	case metav1.ConditionUnknown:
+		return cloudflarev1alpha1.PhasePending
+	default:
+		return cloudflarev1alpha1.PhasePending
+	}
 }
