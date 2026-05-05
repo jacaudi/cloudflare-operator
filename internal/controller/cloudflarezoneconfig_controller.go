@@ -100,7 +100,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 			logger.Error(err, "failed to resolve zone ID")
 		}
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
-			nil, cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
+			&zoneConfig.Status.Phase, cloudflarev1alpha1.ReasonZoneRefNotReady, err, 30*time.Second)
 	}
 	zoneConfig.Status.ZoneID = resolvedZoneID
 
@@ -128,12 +128,12 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	if err != nil {
 		logger.Error(err, "reconciliation failed")
 		return failReconcile(ctx, r.Client, &zoneConfig, &zoneConfig.Status.Conditions,
-			nil, cloudflarev1alpha1.ReasonPartialApply, err, time.Minute)
+			&zoneConfig.Status.Phase, cloudflarev1alpha1.ReasonPartialApply, err, time.Minute)
 	}
 
 	// 7. Persist status only if anything materially changed.
 	zoneConfig.Status.ObservedGeneration = zoneConfig.Generation
-	status.SetReady(&zoneConfig.Status.Conditions, nil, metav1.ConditionTrue,
+	status.SetReady(&zoneConfig.Status.Conditions, &zoneConfig.Status.Phase, metav1.ConditionTrue,
 		cloudflarev1alpha1.ReasonReconcileSuccess, "Zone config synced", zoneConfig.Generation)
 	if !reflect.DeepEqual(preStatus, &zoneConfig.Status) {
 		now := metav1.Now()
