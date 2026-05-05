@@ -21,6 +21,12 @@ spec:
     - jsonPath: .spec.hostnames
       name: Hostnames
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
     - jsonPath: .status.conditions[?(@.type=="TunnelAccepted")].status
       name: Accepted
       type: string
@@ -240,6 +246,18 @@ spec:
                 description: ObservedGeneration is the most recently observed generation.
                 format: int64
                 type: integer
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state. See
+                  cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Pending
+                - Reconciling
+                - Ready
+                - Deleting
+                - Error
+                type: string
               resolvedBackend:
                 description: |-
                   ResolvedBackend is the URL cloudflared was configured with for this

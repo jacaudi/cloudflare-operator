@@ -149,6 +149,12 @@ type CloudflareTunnelRuleStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// Phase is a coarse summary of the reconciliation state. See
+	// cloudflarev1alpha1.Phase for the enum values.
+	// +optional
+	// +kubebuilder:default=Pending
+	Phase Phase `json:"phase,omitempty"`
+
 	// ResolvedBackend is the URL cloudflared was configured with for this
 	// rule. Populated after the tunnel controller renders a config.
 	// +optional
@@ -168,6 +174,8 @@ type CloudflareTunnelRuleStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Tunnel",type=string,JSONPath=`.spec.tunnelRef.name`
 // +kubebuilder:printcolumn:name="Hostnames",type=string,JSONPath=`.spec.hostnames`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Accepted",type=string,JSONPath=`.status.conditions[?(@.type=="TunnelAccepted")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.backend.serviceRef) ? 1 : 0) + (has(self.spec.backend.url) ? 1 : 0) + (has(self.spec.backend.httpStatus) ? 1 : 0) == 1",message="exactly one of backend.serviceRef, backend.url, backend.httpStatus must be set"

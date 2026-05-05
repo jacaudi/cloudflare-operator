@@ -804,6 +804,98 @@ func TestReconcileAggregation_AppliedToConfigHash_EmptyForNonIncluded(t *testing
 	}
 }
 
+// ---- writeRuleStatus Phase mapping tests ------------------------------------
+
+// TestWriteRuleStatus_RuleIncluded_SetsPhaseReady verifies that a RuleIncluded
+// decision causes Status.Phase=PhaseReady on the CloudflareTunnelRule.
+func TestWriteRuleStatus_RuleIncluded_SetsPhaseReady(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false)
+	rule := newRuleForTunnel("r-included", "network", "home", "network")
+	c := buildAggFakeClient(tun, rule)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnelRule
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: rule.Namespace, Name: rule.Name}, &fetched); err != nil {
+		t.Fatalf("get rule after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("Status.Phase = %q, want %q (RuleIncluded)", fetched.Status.Phase, cloudflarev1alpha1.PhaseReady)
+	}
+}
+
+// TestWriteRuleStatus_RuleDuplicateHostname_SetsPhaseError verifies that a
+// RuleDuplicateHostname decision causes Status.Phase=PhaseError.
+func TestWriteRuleStatus_RuleDuplicateHostname_SetsPhaseError(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false)
+	goodURL := strPtr("http://svc:8080")
+	// r1 wins with higher priority.
+	r1 := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r1-dup", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{"dup.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  200,
+		},
+	}
+	// r2 loses: same hostname, lower priority → DuplicateHostname.
+	r2 := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r2-dup", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{"dup.example.com"},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  100,
+		},
+	}
+	c := buildAggFakeClient(tun, r1, r2)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnelRule
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "network", Name: "r2-dup"}, &fetched); err != nil {
+		t.Fatalf("get r2-dup after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("Status.Phase = %q, want %q (RuleDuplicateHostname)", fetched.Status.Phase, cloudflarev1alpha1.PhaseError)
+	}
+}
+
+// TestWriteRuleStatus_RuleInvalid_SetsPhaseError verifies that a RuleInvalid
+// decision causes Status.Phase=PhaseError.
+func TestWriteRuleStatus_RuleInvalid_SetsPhaseError(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false)
+	goodURL := strPtr("http://svc:8080")
+	// A rule with no hostnames → Invalid.
+	r := &cloudflarev1alpha1.CloudflareTunnelRule{
+		ObjectMeta: metav1.ObjectMeta{Name: "r-invalid", Namespace: "network", Generation: 1},
+		Spec: cloudflarev1alpha1.CloudflareTunnelRuleSpec{
+			TunnelRef: cloudflarev1alpha1.TunnelReference{Name: "home", Namespace: "network"},
+			Hostnames: []string{},
+			Backend:   cloudflarev1alpha1.TunnelRuleBackend{URL: goodURL},
+			Priority:  100,
+		},
+	}
+	c := buildAggFakeClient(tun, r)
+
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, nil); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareTunnelRule
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "network", Name: "r-invalid"}, &fetched); err != nil {
+		t.Fatalf("get r-invalid after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("Status.Phase = %q, want %q (RuleInvalid)", fetched.Status.Phase, cloudflarev1alpha1.PhaseError)
+	}
+}
+
 // ---- assertion helpers ------------------------------------------------------
 
 func assertCondition(t *testing.T, conds []metav1.Condition, condType string, wantStatus metav1.ConditionStatus) {
