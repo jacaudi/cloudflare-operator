@@ -18,6 +18,9 @@ spec:
     - jsonPath: .status.zoneID
       name: Zone ID
       type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -449,6 +452,18 @@ spec:
                   of the CR.
                 format: int64
                 type: integer
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state. See
+                  cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Pending
+                - Reconciling
+                - Ready
+                - Deleting
+                - Error
+                type: string
               zoneID:
                 description: |-
                   ZoneID is the resolved Cloudflare Zone ID, populated regardless of

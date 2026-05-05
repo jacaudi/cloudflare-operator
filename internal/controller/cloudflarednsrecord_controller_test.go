@@ -2056,3 +2056,124 @@ func TestCloudflareDNSRecordReconciler_DeleteRecordNotFound_RemovesFinalizer(t *
 		t.Fatalf("unexpected error: %v", getErr)
 	}
 }
+
+// TestCloudflareDNSRecord_PhaseReady verifies that after a successful reconcile
+// the Phase field is persisted as PhaseReady via c.Status().Update.
+func TestCloudflareDNSRecord_PhaseReady(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecord("phase-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+	mock := newMockDNSClient()
+
+	r := buildReconciler(s, mock, dnsRecord, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "phase-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "phase-rec", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("get after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("Phase = %q, want %q", fetched.Status.Phase, cloudflarev1alpha1.PhaseReady)
+	}
+}
+
+// TestCloudflareDNSRecord_PhaseError verifies that a Cloudflare API failure
+// sets Phase to PhaseError via c.Status().Update.
+func TestCloudflareDNSRecord_PhaseError(t *testing.T) {
+	s := testScheme(t)
+	dnsRecord := newTestDNSRecord("phase-err-rec", "default")
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+	mock := newMockDNSClient()
+	// Inject a generic Cloudflare error on create — routes through
+	// ClassifyCloudflareError → ReasonCloudflareError → derivePhase → PhaseError.
+	mock.createErr = fmt.Errorf("simulated cloudflare error")
+
+	r := buildReconciler(s, mock, dnsRecord, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "phase-err-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter <= 0 {
+		t.Errorf("expected RequeueAfter > 0 for failReconcile path, got %v", result.RequeueAfter)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "phase-err-rec", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("get after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("Phase = %q, want %q", fetched.Status.Phase, cloudflarev1alpha1.PhaseError)
+	}
+}
+
+// TestCloudflareDNSRecord_PhaseReconciling verifies that when a dependency
+// (zone ref) is not ready, Phase is set to PhaseReconciling via c.Status().Update.
+func TestCloudflareDNSRecord_PhaseReconciling(t *testing.T) {
+	s := testScheme(t)
+	mock := newMockDNSClient()
+
+	// Zone exists but has no resolved ZoneID (pending)
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pending-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "pending.com",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	content := testDNSContent
+	proxied := false
+	dnsRecord := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "phase-wait-rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneRef:   &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"},
+			Name:      "test.example.com",
+			Type:      "A",
+			Content:   &content,
+			TTL:       1,
+			Proxied:   &proxied,
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+			Interval:  &metav1.Duration{Duration: 5 * time.Minute},
+		},
+	}
+
+	secret := newTestSecret("default")
+	r := buildReconciler(s, mock, zone, dnsRecord, secret)
+
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "phase-wait-rec", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter <= 0 {
+		t.Errorf("expected RequeueAfter > 0 for failReconcile path, got %v", result.RequeueAfter)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "phase-wait-rec", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("get after reconcile: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReconciling {
+		t.Errorf("Phase = %q, want %q", fetched.Status.Phase, cloudflarev1alpha1.PhaseReconciling)
+	}
+}

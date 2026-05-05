@@ -303,6 +303,12 @@ type CloudflareZoneConfigStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// Phase is a coarse summary of the reconciliation state. See
+	// cloudflarev1alpha1.Phase for the enum values.
+	// +optional
+	// +kubebuilder:default=Pending
+	Phase Phase `json:"phase,omitempty"`
+
 	// ZoneID is the resolved Cloudflare Zone ID, populated regardless of
 	// whether the spec used zoneID or zoneRef.
 	// +optional
@@ -326,6 +332,7 @@ type CloudflareZoneConfigStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Zone ID",type=string,JSONPath=`.status.zoneID`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Last Synced",type=date,JSONPath=`.status.lastSyncedAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

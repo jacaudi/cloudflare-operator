@@ -143,6 +143,12 @@ type CloudflareTunnelStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// Phase is a coarse summary of the reconciliation state. See
+	// cloudflarev1alpha1.Phase for the enum values.
+	// +optional
+	// +kubebuilder:default=Pending
+	Phase Phase `json:"phase,omitempty"`
+
 	// TunnelID is the Cloudflare Tunnel ID.
 	// +optional
 	TunnelID string `json:"tunnelID,omitempty"`
@@ -193,6 +199,7 @@ type ConnectorStatus struct {
 // +kubebuilder:printcolumn:name="Tunnel Name",type=string,JSONPath=`.spec.name`
 // +kubebuilder:printcolumn:name="Tunnel ID",type=string,JSONPath=`.status.tunnelID`
 // +kubebuilder:printcolumn:name="CNAME",type=string,JSONPath=`.status.tunnelCNAME`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.routing) || !has(self.spec.routing.defaultBackend) || (has(self.spec.routing.defaultBackend.serviceRef) ? 1 : 0) + (has(self.spec.routing.defaultBackend.url) ? 1 : 0) + (has(self.spec.routing.defaultBackend.httpStatus) ? 1 : 0) == 1",message="routing.defaultBackend: exactly one of serviceRef, url, httpStatus must be set"

@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/status"
 )
 
@@ -36,20 +37,20 @@ func wrapDeleteErr(err error) error {
 	return fmt.Errorf("cannot delete Cloudflare resource: %w. Remove the finalizer manually to force deletion", err)
 }
 
-// failReconcile marks obj's Ready condition False with the given reason and error,
-// persists status (logging but not surfacing status-write errors), and returns a
-// timed requeue. Centralizes the repeated "set-status, log, requeue" tail found
-// across every controller's error paths.
+// failReconcile marks obj's Ready condition False with the given reason and
+// error, derives Phase (when phase is non-nil), persists status (logging but
+// not surfacing status-write errors), and returns a timed requeue.
 func failReconcile(
 	ctx context.Context,
 	c client.Client,
 	obj client.Object,
 	conditions *[]metav1.Condition,
+	phase *cloudflarev1alpha1.Phase,
 	reason string,
 	err error,
 	requeue time.Duration,
 ) (ctrl.Result, error) {
-	status.SetReady(conditions, metav1.ConditionFalse, reason, err.Error(), obj.GetGeneration())
+	status.SetReady(conditions, phase, metav1.ConditionFalse, reason, err.Error(), obj.GetGeneration())
 	if statusErr := c.Status().Update(ctx, obj); statusErr != nil {
 		log.FromContext(ctx).Error(statusErr, "failed to update status")
 	}

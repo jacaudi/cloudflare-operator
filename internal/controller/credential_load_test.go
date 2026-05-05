@@ -131,4 +131,3 @@ func TestLoadCredentials_NotFound_SetsReasonSecretNotFound(t *testing.T) {
 		t.Errorf("expected ReasonSecretNotFound, got %+v", conditions)
 	}
 }
-

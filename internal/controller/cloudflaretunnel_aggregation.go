@@ -266,6 +266,7 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 			metav1.ConditionTrue, cloudflarev1alpha1.ReasonReconcileSuccess, "rule included in tunnel config", r.Generation)
 		status.SetCondition(&conds, cloudflarev1alpha1.ConditionTypeConflict,
 			metav1.ConditionFalse, cloudflarev1alpha1.ReasonReconcileSuccess, "no conflict", r.Generation)
+		r.Status.Phase = cloudflarev1alpha1.PhaseReady
 
 	case RuleDuplicateHostname:
 		// Valid=True, TunnelAccepted=False, Conflict=True.
@@ -275,6 +276,7 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 			metav1.ConditionFalse, cloudflarev1alpha1.ReasonDuplicateHostname, decision.Message, r.Generation)
 		status.SetCondition(&conds, cloudflarev1alpha1.ConditionTypeConflict,
 			metav1.ConditionTrue, cloudflarev1alpha1.ReasonDuplicateHostname, decision.Message, r.Generation)
+		r.Status.Phase = cloudflarev1alpha1.PhaseError
 
 	case RuleInvalid:
 		// Valid=False, TunnelAccepted=False, Conflict=False.
@@ -284,6 +286,12 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 			metav1.ConditionFalse, cloudflarev1alpha1.ReasonInvalidSpec, decision.Message, r.Generation)
 		status.SetCondition(&conds, cloudflarev1alpha1.ConditionTypeConflict,
 			metav1.ConditionFalse, cloudflarev1alpha1.ReasonReconcileSuccess, "no conflict", r.Generation)
+		r.Status.Phase = cloudflarev1alpha1.PhaseError
+
+	// Fail loud on unknown RuleDecision.Status — adding a new value
+	// without updating this switch would otherwise leave Phase stale.
+	default:
+		r.Status.Phase = cloudflarev1alpha1.PhaseError
 	}
 
 	r.Status.Conditions = conds

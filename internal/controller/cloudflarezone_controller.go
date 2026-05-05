@@ -103,7 +103,7 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			secretNs, zone.Spec.SecretRef.Name, cfclient.SecretKeyAccountID)
 		logger.Error(err, "missing Account ID")
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
-			cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
+			&zone.Status.Phase, cloudflarev1alpha1.ReasonSecretNotFound, err, 30*time.Second)
 	}
 
 	// 5. Reconcile the zone
@@ -126,7 +126,7 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			requeue = time.Minute
 		}
 		return failReconcile(ctx, r.Client, &zone, &zone.Status.Conditions,
-			routing.Reason, err, requeue)
+			&zone.Status.Phase, routing.Reason, err, requeue)
 	}
 
 	// 7. Persist status only if anything materially changed.
@@ -227,7 +227,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 
 	switch existing.Status {
 	case cloudflarev1alpha1.ZoneStatusActive:
-		status.SetReady(&zone.Status.Conditions, metav1.ConditionTrue,
+		status.SetReady(&zone.Status.Conditions, &zone.Status.Phase, metav1.ConditionTrue,
 			cloudflarev1alpha1.ReasonReconcileSuccess, "Zone is active", zone.Generation)
 
 	case cloudflarev1alpha1.ZoneStatusPending:
@@ -238,7 +238,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 
 		nsMsg := fmt.Sprintf("Zone pending activation. Update your registrar NS records to: %s",
 			strings.Join(existing.NameServers, ", "))
-		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
+		status.SetReady(&zone.Status.Conditions, &zone.Status.Phase, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonZonePending, nsMsg, zone.Generation)
 
 		// Shorter requeue when pending for faster activation detection
@@ -247,7 +247,7 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 		}
 
 	default:
-		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
+		status.SetReady(&zone.Status.Conditions, &zone.Status.Phase, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonZoneNotActive,
 			fmt.Sprintf("Zone status is %q", existing.Status), zone.Generation)
 	}
@@ -257,6 +257,12 @@ func (r *CloudflareZoneReconciler) reconcileZone(ctx context.Context, zone *clou
 
 func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cloudflarev1alpha1.CloudflareZone) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+
+	status.SetPhase(&zone.Status.Phase, cloudflarev1alpha1.PhaseDeleting)
+	if err := r.Status().Update(ctx, zone); err != nil {
+		logger.Error(err, "failed to update status to Deleting")
+		// Continue — don't block deletion on a status-write failure.
+	}
 
 	if zone.Spec.DeletionPolicy == cloudflarev1alpha1.DeletionPolicyDelete && zone.Status.ZoneID != "" {
 		secretNs := secretRefNamespace(zone.Spec.SecretRef, zone.Namespace)
@@ -274,7 +280,10 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 		}
 		apiToken := creds.APIToken
 
-		status.SetReady(&zone.Status.Conditions, metav1.ConditionFalse,
+		// Phase intentionally nil here: SetPhase(Deleting) at reconcileDelete entry is
+		// the source of truth during deletion; derivePhase would route
+		// ReasonDeletingResource to PhaseError.
+		status.SetReady(&zone.Status.Conditions, nil, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonDeletingResource, "Deleting zone from Cloudflare", zone.Generation)
 		if statusErr := r.Status().Update(ctx, zone); statusErr != nil {
 			logger.Error(statusErr, "failed to update status before deletion")
@@ -295,8 +304,10 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 				if requeue == 0 && !routing.ResetRemoteID {
 					requeue = 30 * time.Second
 				}
+				// Phase intentionally nil: see comment above; reconcileDelete's Phase is owned
+				// by SetPhase(Deleting) at entry.
 				return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
-					routing.Reason, wrapDeleteErr(err), requeue)
+					nil, routing.Reason, wrapDeleteErr(err), requeue)
 			}
 		} else {
 			logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)

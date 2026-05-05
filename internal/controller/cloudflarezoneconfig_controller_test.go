@@ -1325,6 +1325,86 @@ func TestHashZoneConfigSpec_ChangesOnNewFields(t *testing.T) {
 	}
 }
 
+func TestZoneConfigReconcile_FullSuccess_SetsPhaseReady(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get updated zone config: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReady {
+		t.Errorf("expected Phase=%q, got %q", cloudflarev1alpha1.PhaseReady, fetched.Status.Phase)
+	}
+}
+
+func TestZoneConfigReconcile_ZoneRefNotReady_SetsPhaseReconciling(t *testing.T) {
+	mock := newMockZoneClient()
+
+	// CloudflareZone with no status.zoneID set.
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pending-zone",
+			Namespace: "default",
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:      "pending.com",
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-secret"},
+		},
+	}
+
+	sslMode := testSSLModeFull
+	zoneConfig := &cloudflarev1alpha1.CloudflareZoneConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-zone-config",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneConfigSpec{
+			ZoneRef: &cloudflarev1alpha1.ZoneReference{Name: "pending-zone"},
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name: "cf-secret",
+			},
+			Interval: &metav1.Duration{Duration: 30 * time.Minute},
+			SSL: &cloudflarev1alpha1.SSLSettings{
+				Mode: &sslMode,
+			},
+		},
+	}
+
+	secret := newTestZoneConfigSecret("default")
+	r := buildZoneConfigReconciler(mock, zone, zoneConfig, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get updated zone config: %v", err)
+	}
+	// ZoneRefNotReady maps to PhaseReconciling via derivePhase.
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReconciling {
+		t.Errorf("expected Phase=%q, got %q", cloudflarev1alpha1.PhaseReconciling, fetched.Status.Phase)
+	}
+}
+
 func TestZoneConfigReconcile_BotManagement_PlanTier_Distinct(t *testing.T) {
 	zoneConfig := newTestZoneConfig("test-zone-config", "default")
 	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
@@ -1362,5 +1442,41 @@ func TestZoneConfigReconcile_BotManagement_PlanTier_Distinct(t *testing.T) {
 	if cond.Reason != cloudflarev1alpha1.ReasonPlanTierRequired {
 		t.Errorf("BotManagementApplied reason = %q, want %q (plan-tier 403/1015 must classify distinctly from PermissionDenied)",
 			cond.Reason, cloudflarev1alpha1.ReasonPlanTierRequired)
+	}
+}
+
+// TestZoneConfigReconcile_PartialApply_SetsPhaseError verifies that when
+// reconcileZoneConfig returns an error (e.g. a BotManagement 403 causing
+// ReasonPartialApply on the aggregate Ready condition), derivePhase maps
+// the non-in-progress reason to PhaseError.
+// ReasonPartialApply is intentionally absent from InProgressReasons.
+func TestZoneConfigReconcile_PartialApply_SetsPhaseError(t *testing.T) {
+	zoneConfig := newTestZoneConfig("test-zone-config", "default")
+	zoneConfig.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+
+	sslMode := testSSLModeFull
+	zoneConfig.Spec.SSL = &cloudflarev1alpha1.SSLSettings{Mode: &sslMode}
+	enableJS := true
+	zoneConfig.Spec.BotManagement = &cloudflarev1alpha1.BotManagementSettings{EnableJS: &enableJS}
+
+	secret := newTestZoneConfigSecret("default")
+	mock := newMockZoneClient()
+	// Inject a 403 on bot management — causes ReasonPartialApply on Ready,
+	// which is not in InProgressReasons, so derivePhase must return PhaseError.
+	mock.botUpdateErr = &cfgov6.Error{StatusCode: http.StatusForbidden}
+
+	r := buildZoneConfigReconciler(mock, zoneConfig, secret)
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone-config", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZoneConfig
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone-config", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get updated zone config: %v", err)
+	}
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("expected Phase=%q, got %q", cloudflarev1alpha1.PhaseError, fetched.Status.Phase)
 	}
 }
