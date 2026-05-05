@@ -280,7 +280,10 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 		}
 		apiToken := creds.APIToken
 
-		status.SetReady(&zone.Status.Conditions, &zone.Status.Phase, metav1.ConditionFalse,
+		// Phase intentionally nil here: SetPhase(Deleting) at reconcileDelete entry is
+		// the source of truth during deletion; derivePhase would route
+		// ReasonDeletingResource to PhaseError.
+		status.SetReady(&zone.Status.Conditions, nil, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonDeletingResource, "Deleting zone from Cloudflare", zone.Generation)
 		if statusErr := r.Status().Update(ctx, zone); statusErr != nil {
 			logger.Error(statusErr, "failed to update status before deletion")
@@ -301,8 +304,10 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, zone *cl
 				if requeue == 0 && !routing.ResetRemoteID {
 					requeue = 30 * time.Second
 				}
+				// Phase intentionally nil: see comment above; reconcileDelete's Phase is owned
+				// by SetPhase(Deleting) at entry.
 				return failReconcile(ctx, r.Client, zone, &zone.Status.Conditions,
-					&zone.Status.Phase, routing.Reason, wrapDeleteErr(err), requeue)
+					nil, routing.Reason, wrapDeleteErr(err), requeue)
 			}
 		} else {
 			logger.Info("deleted zone from Cloudflare", "zoneID", zone.Status.ZoneID)

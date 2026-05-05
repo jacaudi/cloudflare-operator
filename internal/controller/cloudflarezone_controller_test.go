@@ -835,6 +835,64 @@ func TestZoneReconcile_Phase_MidDeletion_PhaseDeleting(t *testing.T) {
 	}
 }
 
+// TestZoneReconcile_Phase_HappyDeletion_PhaseDeletingPreservedThroughAPICall asserts
+// that Phase stays PhaseDeleting even when the Cloudflare DELETE API call fails
+// transiently. Prior to the fix, SetReady(DeletingResource) and failReconcile both
+// threaded &zone.Status.Phase, causing derivePhase to overwrite PhaseDeleting with
+// PhaseError (DeletingResource is not in InProgressReasons). After the fix both sites
+// pass nil for phase, so SetPhase(Deleting) at reconcileDelete entry remains the
+// authoritative Phase setter.
+func TestZoneReconcile_Phase_HappyDeletion_PhaseDeletingPreservedThroughAPICall(t *testing.T) {
+	now := metav1.Now()
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-zone",
+			Namespace:         "default",
+			Generation:        1,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: cloudflarev1alpha1.DeletionPolicyDelete,
+			SecretRef: cloudflarev1alpha1.SecretReference{
+				Name: "cf-secret",
+			},
+		},
+		Status: cloudflarev1alpha1.CloudflareZoneStatus{
+			ZoneID: "zone-deleting-transient",
+		},
+	}
+
+	secret := newTestSecret("default")
+
+	// Simulate a transient Cloudflare API error so failReconcile fires (line 304-305)
+	// and the object remains in the fake client for assertion.
+	mock := newMockZoneLifecycleClient()
+	mock.deleteErr = fmt.Errorf("simulated transient deletion error")
+
+	r := buildZoneReconciler(mock, zone, secret)
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-zone", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var fetched cloudflarev1alpha1.CloudflareZone
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "test-zone", Namespace: "default"}, &fetched); err != nil {
+		t.Fatalf("failed to get zone after reconcile: %v", err)
+	}
+
+	// Phase must remain PhaseDeleting; PhaseError would indicate the bug is present.
+	if fetched.Status.Phase != cloudflarev1alpha1.PhaseDeleting {
+		t.Errorf("expected Phase=%s, got %s — SetReady(DeletingResource) or failReconcile is overwriting Phase via derivePhase",
+			cloudflarev1alpha1.PhaseDeleting, fetched.Status.Phase)
+	}
+}
+
 func TestZoneReconcile_DeleteZoneNotFound_RemovesFinalizer(t *testing.T) {
 	now := metav1.Now()
 	zone := &cloudflarev1alpha1.CloudflareZone{
