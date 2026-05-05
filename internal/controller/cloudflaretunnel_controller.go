@@ -314,7 +314,7 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 		return fmt.Errorf("recover credentials secret after IsAlreadyExists: %w", getErr)
 	}
 	if mErr := mutate(&fresh); mErr != nil {
-		return mErr
+		return fmt.Errorf("mutate credentials secret after IsAlreadyExists recovery: %w", mErr)
 	}
 	if updErr := r.Update(ctx, &fresh); updErr != nil {
 		return fmt.Errorf("update credentials secret after IsAlreadyExists recovery: %w", updErr)
