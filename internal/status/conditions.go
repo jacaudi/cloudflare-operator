@@ -26,6 +26,16 @@ func SetReady(conditions *[]metav1.Condition, status metav1.ConditionStatus, rea
 	SetCondition(conditions, cloudflarev1alpha1.ConditionTypeReady, status, reason, message, generation)
 }
 
+// SetPhase sets *phase to p. A nil phase pointer is a no-op (used by
+// callers that do not yet have a Status.Phase field, and by tests that
+// don't care about Phase).
+func SetPhase(phase *cloudflarev1alpha1.Phase, p cloudflarev1alpha1.Phase) {
+	if phase == nil {
+		return
+	}
+	*phase = p
+}
+
 func derivePhase(status metav1.ConditionStatus, reason string) cloudflarev1alpha1.Phase {
 	switch status {
 	case metav1.ConditionTrue:

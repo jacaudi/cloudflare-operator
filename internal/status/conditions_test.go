@@ -115,3 +115,28 @@ func TestDerivePhase(t *testing.T) {
 		})
 	}
 }
+
+func TestSetPhase_NilPointer_DoesNotPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("SetPhase(nil, ...) panicked: %v", r)
+		}
+	}()
+	SetPhase(nil, cloudflarev1alpha1.PhaseDeleting)
+}
+
+func TestSetPhase_SetsPointerValue(t *testing.T) {
+	var p cloudflarev1alpha1.Phase
+	SetPhase(&p, cloudflarev1alpha1.PhaseDeleting)
+	if p != cloudflarev1alpha1.PhaseDeleting {
+		t.Errorf("SetPhase: got %q, want %q", p, cloudflarev1alpha1.PhaseDeleting)
+	}
+}
+
+func TestSetPhase_OverwritesExisting(t *testing.T) {
+	p := cloudflarev1alpha1.PhaseReady
+	SetPhase(&p, cloudflarev1alpha1.PhaseDeleting)
+	if p != cloudflarev1alpha1.PhaseDeleting {
+		t.Errorf("SetPhase did not overwrite: got %q", p)
+	}
+}
