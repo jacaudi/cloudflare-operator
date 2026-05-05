@@ -175,7 +175,6 @@ type CloudflareTunnelRuleStatus struct {
 // +kubebuilder:printcolumn:name="Tunnel",type=string,JSONPath=`.spec.tunnelRef.name`
 // +kubebuilder:printcolumn:name="Hostnames",type=string,JSONPath=`.spec.hostnames`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Accepted",type=string,JSONPath=`.status.conditions[?(@.type=="TunnelAccepted")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="(has(self.spec.backend.serviceRef) ? 1 : 0) + (has(self.spec.backend.url) ? 1 : 0) + (has(self.spec.backend.httpStatus) ? 1 : 0) == 1",message="exactly one of backend.serviceRef, backend.url, backend.httpStatus must be set"

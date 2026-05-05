@@ -24,9 +24,6 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.conditions[?(@.type=="Ready")].status
-      name: Ready
-      type: string
     - jsonPath: .status.conditions[?(@.type=="TunnelAccepted")].status
       name: Accepted
       type: string
