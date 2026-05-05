@@ -269,6 +269,23 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 
+	mutate := func(s *corev1.Secret) error {
+		if err := controllerutil.SetControllerReference(tunnel, s, r.Scheme); err != nil {
+			return err
+		}
+		if s.Labels == nil {
+			s.Labels = map[string]string{}
+		}
+		for k, v := range connectorLabels(tunnel) {
+			s.Labels[k] = v
+		}
+		if s.Data == nil {
+			s.Data = make(map[string][]byte)
+		}
+		s.Data["credentials.json"] = credsJSON
+		return nil
+	}
+
 	credSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tunnel.Spec.GeneratedSecretName,
@@ -277,22 +294,32 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecret(ctx context.Context
 	}
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, credSecret, func() error {
-		if err := controllerutil.SetControllerReference(tunnel, credSecret, r.Scheme); err != nil {
-			return err
-		}
-		if credSecret.Labels == nil {
-			credSecret.Labels = map[string]string{}
-		}
-		for k, v := range connectorLabels(tunnel) {
-			credSecret.Labels[k] = v
-		}
-		if credSecret.Data == nil {
-			credSecret.Data = make(map[string][]byte)
-		}
-		credSecret.Data["credentials.json"] = credsJSON
-		return nil
+		return mutate(credSecret)
 	})
-	return err
+	if err == nil {
+		return nil
+	}
+
+	// Recovery: the cached client missed a pre-existing Secret (label-
+	// filtered out by the manager cache, see PR #87) and the underlying
+	// Create surfaced IsAlreadyExists from the API server. Re-read via
+	// APIReader (uncached), re-apply the mutation, and persist via
+	// Update on the cached client.
+	if !errors.IsAlreadyExists(err) {
+		return err
+	}
+	key := client.ObjectKey{Name: tunnel.Spec.GeneratedSecretName, Namespace: tunnel.Namespace}
+	var fresh corev1.Secret
+	if getErr := r.APIReader.Get(ctx, key, &fresh); getErr != nil {
+		return fmt.Errorf("recover credentials secret after IsAlreadyExists: %w", getErr)
+	}
+	if mErr := mutate(&fresh); mErr != nil {
+		return mErr
+	}
+	if updErr := r.Update(ctx, &fresh); updErr != nil {
+		return fmt.Errorf("update credentials secret after IsAlreadyExists recovery: %w", updErr)
+	}
+	return nil
 }
 
 // ensureCredentialsSecretExists ensures a credentials Secret exists for an
@@ -304,7 +331,11 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecretExists(ctx context.C
 	logger := log.FromContext(ctx)
 
 	var existing corev1.Secret
-	err := r.Get(ctx, client.ObjectKey{Name: tunnel.Spec.GeneratedSecretName, Namespace: tunnel.Namespace}, &existing)
+	// Use APIReader (uncached) because the manager cache filters
+	// Secrets by cloudflare.io/managed=true. A pre-existing unlabeled
+	// Secret would otherwise return NotFound here even though it is
+	// present on the API server.
+	err := r.APIReader.Get(ctx, client.ObjectKey{Name: tunnel.Spec.GeneratedSecretName, Namespace: tunnel.Namespace}, &existing)
 	switch {
 	case errors.IsNotFound(err):
 		logger.Info("creating credentials Secret for adopted tunnel with empty TunnelSecret; user must provide TunnelSecret manually",

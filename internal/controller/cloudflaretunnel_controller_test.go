@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1037,5 +1038,107 @@ func TestCloudflareTunnelReconcile_DeletionPath_PhasePreserved(t *testing.T) {
 	if fetched.Status.Phase != cloudflarev1alpha1.PhaseDeleting {
 		t.Errorf("expected Phase=%s, got %s — failReconcile inside reconcileDelete is overwriting Phase via derivePhase",
 			cloudflarev1alpha1.PhaseDeleting, fetched.Status.Phase)
+	}
+}
+
+// cacheFilteredClient simulates a label-filtered manager cache: Get on
+// a Secret named "demo-creds" returns NotFound (as if the cache filter
+// excluded it), while Create returns IsAlreadyExists (the API server
+// has it). Update falls through to the inner client (which holds the
+// Secret so writes succeed), modelling the real behaviour where the
+// cached client's Update talks to the same API server as APIReader.
+type cacheFilteredClient struct {
+	client.Client
+	getCount    int
+	createCount int
+}
+
+func (c *cacheFilteredClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Secret); ok && key.Name == "demo-creds" && c.getCount == 0 {
+		c.getCount++
+		return apierrors.NewNotFound(corev1.Resource("secrets"), key.Name)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *cacheFilteredClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if sec, ok := obj.(*corev1.Secret); ok && sec.Name == "demo-creds" && c.createCount == 0 {
+		c.createCount++
+		return apierrors.NewAlreadyExists(corev1.Resource("secrets"), sec.Name)
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+// TestEnsureCredentialsSecret_RecoversFromAlreadyExists verifies that
+// when the cached client misses a pre-existing unlabeled Secret (due to
+// the label-filter gate from PR #87) and the API server rejects the
+// Create with IsAlreadyExists, the recovery branch loads the actual
+// state via APIReader and persists the desired mutation via Update.
+func TestEnsureCredentialsSecret_RecoversFromAlreadyExists(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels:    map[string]string{"team": "infra"},
+		},
+		Data: map[string][]byte{
+			"credentials.json": []byte(`{"AccountTag":"acct-1","TunnelSecret":"user-secret","TunnelID":"tid-1"}`),
+		},
+	}
+
+	// The inner fake has both tun and the pre-existing Secret so that
+	// r.Client.Update (the recovery write) succeeds. The cacheFilteredClient
+	// wrapper intercepts Get to return NotFound on the first call (simulating
+	// the label-filter cache miss) and intercepts Create to return
+	// IsAlreadyExists (simulating the API-server conflict).
+	inner := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	cached := &cacheFilteredClient{Client: inner}
+	// APIReader shares the same fake store as the inner client, matching
+	// production where both talk to the same API server.
+	apiReader := inner
+
+	r := &CloudflareTunnelReconciler{
+		Client:    cached,
+		APIReader: apiReader,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "user-secret"); err != nil {
+		t.Fatalf("ensureCredentialsSecret: %v", err)
+	}
+
+	// After recovery the operator updated the Secret. Read post-state
+	// from the shared store via APIReader.
+	var got corev1.Secret
+	if err := apiReader.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get secret post-recovery: %v", err)
+	}
+
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true after recovery, got %q`, v)
+	}
+	if v := got.Labels["team"]; v != "infra" {
+		t.Errorf(`pre-existing label team=infra clobbered, got %q`, v)
+	}
+	wantData := []byte(`{"AccountTag":"acct-1","TunnelID":"tid-1","TunnelSecret":"user-secret"}`)
+	if !bytes.Equal(got.Data["credentials.json"], wantData) {
+		t.Errorf("credentials.json mismatch:\n got=%s\nwant=%s",
+			string(got.Data["credentials.json"]), string(wantData))
 	}
 }
