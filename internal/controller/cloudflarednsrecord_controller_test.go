@@ -2098,11 +2098,14 @@ func TestCloudflareDNSRecord_PhaseError(t *testing.T) {
 
 	r := buildReconciler(s, mock, dnsRecord, secret)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "phase-err-rec", Namespace: "default"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter <= 0 {
+		t.Errorf("expected RequeueAfter > 0 for failReconcile path, got %v", result.RequeueAfter)
 	}
 
 	var fetched cloudflarev1alpha1.CloudflareDNSRecord
@@ -2156,11 +2159,14 @@ func TestCloudflareDNSRecord_PhaseReconciling(t *testing.T) {
 	secret := newTestSecret("default")
 	r := buildReconciler(s, mock, zone, dnsRecord, secret)
 
-	_, err := r.Reconcile(context.Background(), reconcile.Request{
+	result, err := r.Reconcile(context.Background(), reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "phase-wait-rec", Namespace: "default"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error (should be handled gracefully): %v", err)
+	}
+	if result.RequeueAfter <= 0 {
+		t.Errorf("expected RequeueAfter > 0 for failReconcile path, got %v", result.RequeueAfter)
 	}
 
 	var fetched cloudflarev1alpha1.CloudflareDNSRecord

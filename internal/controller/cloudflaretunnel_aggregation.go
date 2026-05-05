@@ -287,6 +287,11 @@ func writeRuleStatus(ctx context.Context, c client.Client, r *cloudflarev1alpha1
 		status.SetCondition(&conds, cloudflarev1alpha1.ConditionTypeConflict,
 			metav1.ConditionFalse, cloudflarev1alpha1.ReasonReconcileSuccess, "no conflict", r.Generation)
 		r.Status.Phase = cloudflarev1alpha1.PhaseError
+
+	// Fail loud on unknown RuleDecision.Status — adding a new value
+	// without updating this switch would otherwise leave Phase stale.
+	default:
+		r.Status.Phase = cloudflarev1alpha1.PhaseError
 	}
 
 	r.Status.Conditions = conds

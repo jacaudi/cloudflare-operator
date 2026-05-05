@@ -928,14 +928,14 @@ func TestCloudflareTunnelReconcile_Phase_MidDeletion_PhaseDeleting(t *testing.T)
 	}
 }
 
-// TestCloudflareTunnelReconcile_Phase_InProgress_PhaseReconciling verifies that
+// TestCloudflareTunnel_Phase_FieldRoundTrip verifies that
 // CloudflareTunnelStatus.Phase correctly stores PhaseReconciling when the Ready
 // condition is set to False with an InProgressReasons member. The tunnel controller
 // does not naturally emit an InProgressReasons reason on the Ready condition in its
 // normal flow, so this test exercises the Phase field plumbing directly by writing
 // the status condition via the fake client's status subresource, then verifying the
 // persisted value via c.Get. It confirms the field is wired and retrievable.
-func TestCloudflareTunnelReconcile_Phase_InProgress_PhaseReconciling(t *testing.T) {
+func TestCloudflareTunnel_Phase_FieldRoundTrip(t *testing.T) {
 	s := testScheme(t)
 	tunnel := newTestTunnel("test-tunnel", "default")
 	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
