@@ -10,6 +10,11 @@ controllers:
     type: deployment
     replicas: {{ .Values.controller.replicas }}
     strategy: {{ .Values.controller.strategy }}
+    {{- with .Values.controller.rollingUpdate }}
+    rollingUpdate:
+      surge: {{ .maxSurge }}
+      unavailable: {{ .maxUnavailable | quote }}
+    {{- end }}
     {{- if .Values.serviceAccount.create }}
     serviceAccount:
       identifier: main
