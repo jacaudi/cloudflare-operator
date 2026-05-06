@@ -1341,3 +1341,74 @@ func TestEnsureCredentialsSecretExists_AlreadyOwnedByOtherController_ReturnsActi
 		t.Errorf("error message should reference the conflicting Secret and owner, got: %v", err)
 	}
 }
+
+// TestEnsureCredentialsSecretExists_AlreadyOwnedStaleData_OverwritesWithoutRedundantAdopt
+// covers the case where an already-operator-owned Secret has stale
+// data — TunnelID inside doesn't match the tunnel's current TunnelID.
+// The fix avoids calling the adoption helper (which would issue a
+// no-op Update against the same controller ref) and goes straight to
+// the empty-template overwrite.
+func TestEnsureCredentialsSecretExists_AlreadyOwnedStaleData_OverwritesWithoutRedundantAdopt(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-NEW"},
+	}
+
+	// Pre-existing Secret is already controlled by this tunnel but holds stale data.
+	yes := true
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels:    map[string]string{"cloudflare.io/managed": "true"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: cloudflarev1alpha1.GroupVersion.String(),
+				Kind:       "CloudflareTunnel",
+				Name:       "demo",
+				UID:        tun.UID,
+				Controller: &yes,
+			}},
+		},
+		Data: map[string][]byte{
+			"credentials.json": []byte(`{"AccountTag":"acct-old","TunnelSecret":"old-secret","TunnelID":"tid-OLD"}`),
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecretExists(context.Background(), tun, "acct-NEW"); err != nil {
+		t.Fatalf("ensureCredentialsSecretExists: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get post-overwrite: %v", err)
+	}
+
+	// Stale data must have been replaced by the empty-template payload.
+	wantData := []byte(`{"AccountTag":"acct-NEW","TunnelID":"tid-NEW","TunnelSecret":""}`)
+	if !bytes.Equal(got.Data["credentials.json"], wantData) {
+		t.Errorf("credentials.json should have been overwritten with empty template:\n got=%s\nwant=%s",
+			string(got.Data["credentials.json"]), string(wantData))
+	}
+	// Ownership invariants still hold.
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true preserved, got %q`, v)
+	}
+}

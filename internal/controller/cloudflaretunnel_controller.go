@@ -368,16 +368,23 @@ func (r *CloudflareTunnelReconciler) ensureCredentialsSecretExists(ctx context.C
 		)
 	}
 
-	if err := r.adoptCredentialsSecret(ctx, tunnel, &existing); err != nil {
-		return err
+	// Only run adoption when we don't already own the Secret.
+	// Adoption is the SetControllerReference + label-merge work; if we
+	// already own it, that work is a no-op and the redundant Update
+	// would just produce a spurious resource-version conflict on busy
+	// clusters.
+	if !controlledByThisTunnel(&existing, tunnel) {
+		if err := r.adoptCredentialsSecret(ctx, tunnel, &existing); err != nil {
+			return err
+		}
 	}
 
 	if secretMatchesTunnel(&existing, tunnel.Status.TunnelID) {
-		logger.Info("adopted pre-existing credentials Secret; data preserved",
+		logger.Info("credentials Secret matches adopted tunnel; data preserved",
 			"secretName", tunnel.Spec.GeneratedSecretName, "tunnelID", tunnel.Status.TunnelID)
 		return nil
 	}
-	logger.Info("adopted pre-existing credentials Secret but data does not match adopted tunnel; overwriting with empty TunnelSecret, user must refill",
+	logger.Info("credentials Secret does not match adopted tunnel; overwriting with empty TunnelSecret, user must refill",
 		"secretName", tunnel.Spec.GeneratedSecretName, "tunnelID", tunnel.Status.TunnelID)
 	return r.ensureCredentialsSecret(ctx, tunnel, accountID, "")
 }
