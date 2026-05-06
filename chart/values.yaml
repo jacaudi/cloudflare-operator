@@ -16,7 +16,21 @@ image:
 controller:
   # -- Number of replicas (for HA, use 2+ with leader election)
   replicas: 1
-  strategy: Recreate
+
+  # -- Deployment rollout strategy. RollingUpdate with maxUnavailable:0 +
+  # maxSurge:1 is safe at any replica count: at replicas=1 a new pod
+  # comes up before the old terminates (briefly 2 pods, leader
+  # election picks one); at replicas>1 it provides zero-downtime
+  # upgrades. Override to 'Recreate' only if you have a specific
+  # reason (e.g., shared exclusive storage).
+  strategy: RollingUpdate
+
+  # -- RollingUpdate parameters. Only applied when strategy is RollingUpdate.
+  # maxUnavailable is quoted as a string so that the value 0 is not treated
+  # as falsy by the Helm template engine (Go templates: 0 == false).
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: "0"
 
   # -- Default soft per-hostname topologySpreadConstraints applied when
   # replicas > 1 AND neither controller.affinity nor

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -134,6 +136,7 @@ func buildTunnelReconciler(t *testing.T, mock *mockTunnelClient, objs ...client.
 
 	return &CloudflareTunnelReconciler{
 		Client:        fakeClient,
+		APIReader:     fakeClient,
 		Scheme:        s,
 		Recorder:      record.NewFakeRecorder(10),
 		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
@@ -462,6 +465,7 @@ func buildInterceptedTunnelReconciler(t *testing.T, mock *mockTunnelClient, func
 
 	return &CloudflareTunnelReconciler{
 		Client:         wrapped,
+		APIReader:      wrapped,
 		Scheme:         s,
 		Recorder:       record.NewFakeRecorder(10),
 		ClientFactory:  cfclient.NewClientFactory(wrapped, wrapped),
@@ -671,6 +675,7 @@ func TestCloudflareTunnelReconciler_BadRequest_EmitsInvalidSpecEvent(t *testing.
 	fakeRec := record.NewFakeRecorder(10)
 	r := &CloudflareTunnelReconciler{
 		Client:        fakeClient,
+		APIReader:     fakeClient,
 		Scheme:        s,
 		Recorder:      fakeRec,
 		ClientFactory: cfclient.NewClientFactory(fakeClient, fakeClient),
@@ -718,9 +723,10 @@ func TestEnsureCredentialsSecret_AppliesManagedLabel(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun).Build()
 	r := &CloudflareTunnelReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(8),
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
 	}
 
 	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
@@ -773,9 +779,10 @@ func TestEnsureCredentialsSecret_PreservesExternalLabels(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
 	r := &CloudflareTunnelReconciler{
-		Client:   c,
-		Scheme:   s,
-		Recorder: record.NewFakeRecorder(8),
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
 	}
 
 	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "tunnel-secret"); err != nil {
@@ -1032,5 +1039,376 @@ func TestCloudflareTunnelReconcile_DeletionPath_PhasePreserved(t *testing.T) {
 	if fetched.Status.Phase != cloudflarev1alpha1.PhaseDeleting {
 		t.Errorf("expected Phase=%s, got %s — failReconcile inside reconcileDelete is overwriting Phase via derivePhase",
 			cloudflarev1alpha1.PhaseDeleting, fetched.Status.Phase)
+	}
+}
+
+// cacheFilteredClient simulates a label-filtered manager cache: Get on
+// a Secret named "demo-creds" returns NotFound (as if the cache filter
+// excluded it), while Create returns IsAlreadyExists (the API server
+// has it). Update falls through to the inner client (which holds the
+// Secret so writes succeed), modelling the real behaviour where the
+// cached client's Update talks to the same API server as APIReader.
+type cacheFilteredClient struct {
+	client.Client
+	getCount    int
+	createCount int
+}
+
+func (c *cacheFilteredClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Secret); ok && key.Name == "demo-creds" && c.getCount == 0 {
+		c.getCount++
+		return apierrors.NewNotFound(corev1.Resource("secrets"), key.Name)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *cacheFilteredClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if sec, ok := obj.(*corev1.Secret); ok && sec.Name == "demo-creds" && c.createCount == 0 {
+		c.createCount++
+		return apierrors.NewAlreadyExists(corev1.Resource("secrets"), sec.Name)
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+// TestEnsureCredentialsSecret_RecoversFromAlreadyExists verifies that
+// when the cached client misses a pre-existing unlabeled Secret (due to
+// the label-filter gate from PR #87) and the API server rejects the
+// Create with IsAlreadyExists, the recovery branch loads the actual
+// state via APIReader and persists the desired mutation via Update.
+func TestEnsureCredentialsSecret_RecoversFromAlreadyExists(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels:    map[string]string{"team": "infra"},
+		},
+		Data: map[string][]byte{
+			"credentials.json": []byte(`{"AccountTag":"acct-1","TunnelSecret":"user-secret","TunnelID":"tid-1"}`),
+		},
+	}
+
+	// The inner fake has both tun and the pre-existing Secret so that
+	// r.Client.Update (the recovery write) succeeds. The cacheFilteredClient
+	// wrapper intercepts Get to return NotFound on the first call (simulating
+	// the label-filter cache miss) and intercepts Create to return
+	// IsAlreadyExists (simulating the API-server conflict).
+	inner := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	cached := &cacheFilteredClient{Client: inner}
+	// APIReader shares the same fake store as the inner client, matching
+	// production where both talk to the same API server.
+	apiReader := inner
+
+	r := &CloudflareTunnelReconciler{
+		Client:    cached,
+		APIReader: apiReader,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecret(context.Background(), tun, "acct-1", "user-secret"); err != nil {
+		t.Fatalf("ensureCredentialsSecret: %v", err)
+	}
+
+	// After recovery the operator updated the Secret. Read post-state
+	// from the shared store via APIReader.
+	var got corev1.Secret
+	if err := apiReader.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get secret post-recovery: %v", err)
+	}
+
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true after recovery, got %q`, v)
+	}
+	if v := got.Labels["team"]; v != "infra" {
+		t.Errorf(`pre-existing label team=infra clobbered, got %q`, v)
+	}
+	wantData := []byte(`{"AccountTag":"acct-1","TunnelID":"tid-1","TunnelSecret":"user-secret"}`)
+	if !bytes.Equal(got.Data["credentials.json"], wantData) {
+		t.Errorf("credentials.json mismatch:\n got=%s\nwant=%s",
+			string(got.Data["credentials.json"]), string(wantData))
+	}
+}
+
+// TestEnsureCredentialsSecretExists_AdoptsExistingUnlabeledSecret_PreservesData
+// covers the production case from issue #90: a pre-existing unlabeled
+// credentials Secret (created by ExternalSecrets / SOPS / hand-applied)
+// already contains valid credentials.json. The operator must adopt it
+// — add the cloudflare.io/managed=true label and an OwnerRef pointing
+// at the tunnel — without touching the Data field.
+func TestEnsureCredentialsSecretExists_AdoptsExistingUnlabeledSecret_PreservesData(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	originalData := []byte(`{"AccountTag":"acct-1","TunnelSecret":"user-secret","TunnelID":"tid-1"}`)
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels:    map[string]string{"team": "infra"},
+		},
+		Data: map[string][]byte{
+			"credentials.json": originalData,
+		},
+	}
+
+	// Single fake client serves as both Client and APIReader: this case
+	// is "Secret exists, cached client also sees it" — once adopted the
+	// Secret will be cache-visible. The bug fix is correct in either
+	// configuration; this test verifies the adoption logic itself.
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecretExists(context.Background(), tun, "acct-1"); err != nil {
+		t.Fatalf("ensureCredentialsSecretExists: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get post-adoption: %v", err)
+	}
+
+	// Adoption invariants:
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true after adoption, got %q`, v)
+	}
+	if v := got.Labels["team"]; v != "infra" {
+		t.Errorf(`pre-existing label team=infra clobbered, got %q`, v)
+	}
+	var hasOwnerRef bool
+	for _, ref := range got.OwnerReferences {
+		if ref.UID == tun.UID && ref.Controller != nil && *ref.Controller {
+			hasOwnerRef = true
+			break
+		}
+	}
+	if !hasOwnerRef {
+		t.Errorf("expected controller OwnerReference to tunnel UID %q after adoption, got %+v",
+			tun.UID, got.OwnerReferences)
+	}
+	if !bytes.Equal(got.Data["credentials.json"], originalData) {
+		t.Errorf("credentials.json modified during adoption (must be byte-identical):\n got=%s\nwant=%s",
+			string(got.Data["credentials.json"]), string(originalData))
+	}
+}
+
+// TestEnsureCredentialsSecretExists_AdoptsExistingUnlabeledSecret_StaleData_FallsThroughToEmptyOverwrite
+// covers the case where the pre-existing Secret has stale data — the
+// TunnelID inside doesn't match the adopted tunnel's TunnelID. The
+// operator should still take ownership, then fall through to the
+// empty-template overwrite path so the Secret is correctly shaped for
+// the user to manually fill in TunnelSecret.
+func TestEnsureCredentialsSecretExists_AdoptsExistingUnlabeledSecret_StaleData_FallsThroughToEmptyOverwrite(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-NEW"},
+	}
+
+	// Pre-existing data has a different TunnelID than the adopted one.
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"credentials.json": []byte(`{"AccountTag":"acct-old","TunnelSecret":"old-secret","TunnelID":"tid-OLD"}`),
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecretExists(context.Background(), tun, "acct-NEW"); err != nil {
+		t.Fatalf("ensureCredentialsSecretExists: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get post-adoption: %v", err)
+	}
+
+	// Adoption ownership invariants apply.
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true after adoption, got %q`, v)
+	}
+	// Stale data must be replaced by the empty-template payload.
+	wantData := []byte(`{"AccountTag":"acct-NEW","TunnelID":"tid-NEW","TunnelSecret":""}`)
+	if !bytes.Equal(got.Data["credentials.json"], wantData) {
+		t.Errorf("credentials.json should have been overwritten with empty template:\n got=%s\nwant=%s",
+			string(got.Data["credentials.json"]), string(wantData))
+	}
+}
+
+// TestEnsureCredentialsSecretExists_AlreadyOwnedByOtherController_ReturnsActionableError
+// covers the safety case: the pre-existing Secret is already owned by
+// some other CR (e.g. the user accidentally pointed two CloudflareTunnels
+// at the same generatedSecretName). The operator must NOT silently
+// take over; it must return an actionable error.
+func TestEnsureCredentialsSecretExists_AlreadyOwnedByOtherController_ReturnsActionableError(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-1"},
+	}
+
+	otherCtrl := true
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "cloudflare.io/v1alpha1",
+				Kind:       "CloudflareTunnel",
+				Name:       "other-tunnel",
+				UID:        "uid-OTHER",
+				Controller: &otherCtrl,
+			}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	err := r.ensureCredentialsSecretExists(context.Background(), tun, "acct-1")
+	if err == nil {
+		t.Fatalf("expected error for Secret owned by other controller, got nil")
+	}
+	var ownedErr *controllerutil.AlreadyOwnedError
+	if !errors.As(err, &ownedErr) {
+		t.Errorf("expected wrapped *controllerutil.AlreadyOwnedError, got %T: %v", err, err)
+	}
+	// Confirm error message is actionable for the user.
+	if !strings.Contains(err.Error(), "demo-creds") || !strings.Contains(err.Error(), "uid-OTHER") {
+		t.Errorf("error message should reference the conflicting Secret and owner, got: %v", err)
+	}
+}
+
+// TestEnsureCredentialsSecretExists_AlreadyOwnedStaleData_OverwritesWithoutRedundantAdopt
+// covers the case where an already-operator-owned Secret has stale
+// data — TunnelID inside doesn't match the tunnel's current TunnelID.
+// The fix avoids calling the adoption helper (which would issue a
+// no-op Update against the same controller ref) and goes straight to
+// the empty-template overwrite.
+func TestEnsureCredentialsSecretExists_AlreadyOwnedStaleData_OverwritesWithoutRedundantAdopt(t *testing.T) {
+	s := testScheme(t)
+
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			UID:       "uid-1",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			GeneratedSecretName: "demo-creds",
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{TunnelID: "tid-NEW"},
+	}
+
+	// Pre-existing Secret is already controlled by this tunnel but holds stale data.
+	yes := true
+	preExisting := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-creds",
+			Namespace: "default",
+			Labels:    map[string]string{"cloudflare.io/managed": "true"},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: cloudflarev1alpha1.GroupVersion.String(),
+				Kind:       "CloudflareTunnel",
+				Name:       "demo",
+				UID:        tun.UID,
+				Controller: &yes,
+			}},
+		},
+		Data: map[string][]byte{
+			"credentials.json": []byte(`{"AccountTag":"acct-old","TunnelSecret":"old-secret","TunnelID":"tid-OLD"}`),
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tun, preExisting).Build()
+	r := &CloudflareTunnelReconciler{
+		Client:    c,
+		APIReader: c,
+		Scheme:    s,
+		Recorder:  record.NewFakeRecorder(8),
+	}
+
+	if err := r.ensureCredentialsSecretExists(context.Background(), tun, "acct-NEW"); err != nil {
+		t.Fatalf("ensureCredentialsSecretExists: %v", err)
+	}
+
+	var got corev1.Secret
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Name: "demo-creds", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("get post-overwrite: %v", err)
+	}
+
+	// Stale data must have been replaced by the empty-template payload.
+	wantData := []byte(`{"AccountTag":"acct-NEW","TunnelID":"tid-NEW","TunnelSecret":""}`)
+	if !bytes.Equal(got.Data["credentials.json"], wantData) {
+		t.Errorf("credentials.json should have been overwritten with empty template:\n got=%s\nwant=%s",
+			string(got.Data["credentials.json"]), string(wantData))
+	}
+	// Ownership invariants still hold.
+	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
+		t.Errorf(`expected cloudflare.io/managed=true preserved, got %q`, v)
 	}
 }
