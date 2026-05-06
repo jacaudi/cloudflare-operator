@@ -5,7 +5,7 @@ description: A Kubernetes operator for managing Cloudflare resources declarative
 type: application
 version: 0.14.1
 appVersion: "0.14.1"
-kubeVersion: ">=1.28.0-0"
+kubeVersion: ">=1.31.0-0"
 keywords:
   - cloudflare
   - dns

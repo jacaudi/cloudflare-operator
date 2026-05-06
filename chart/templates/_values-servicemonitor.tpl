@@ -6,6 +6,7 @@ Build serviceMonitor structure from flat values
 serviceMonitor:
   main:
     enabled: true
+    jobLabel: app.kubernetes.io/name
     service:
       identifier: main
     endpoints:
