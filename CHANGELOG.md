@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.14.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.14.0...v0.14.1) (2026-05-06)
+
+### Bug Fixes
+
+* tunnel adoption secret collision and chart rollout strategy default ([#92](https://github.com/jacaudi/cloudflare-operator/issues/92)) ([c8de609](https://github.com/jacaudi/cloudflare-operator/commit/c8de6099262439433a53381fd269a4d57c223ca1)), closes [#90](https://github.com/jacaudi/cloudflare-operator/issues/90)
+
 ## [0.14.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.13.0...v0.14.0) (2026-05-05)
 
 ### Features
