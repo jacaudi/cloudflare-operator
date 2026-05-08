@@ -194,7 +194,10 @@ func (r *CloudflareTunnelReconciler) reconcileTunnel(ctx context.Context, tunnel
 	if tunnel.Status.TunnelID != "" {
 		existing, err = tunnelClient.GetTunnel(ctx, accountID, tunnel.Status.TunnelID)
 		if err != nil {
-			logger.Info("could not fetch tunnel by ID, will search by name", "tunnelID", tunnel.Status.TunnelID)
+			if !cfclient.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("get tunnel by ID: %w", err)
+			}
+			logger.Info("tunnel not found by ID, will search by name", "tunnelID", tunnel.Status.TunnelID)
 			tunnel.Status.TunnelID = ""
 			existing = nil
 		}

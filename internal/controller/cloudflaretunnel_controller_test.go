@@ -600,9 +600,10 @@ func TestCloudflareTunnelReconciler_TunnelGoneClearsStatus(t *testing.T) {
 	}
 
 	mock := newMockTunnelClient()
-	// getErr triggers the in-flow fallthrough (reconcileTunnel logs + continues).
-	// listErr 404 then propagates to Reconcile's failReconcile site.
-	mock.getErr = errors.New("transient fetch error")
+	// GetTunnel returns 404 (stale ID); search-by-name also returns 404; the
+	// list error propagates to Reconcile's failReconcile site where the
+	// classifier returns ResetRemoteID=true and ReasonRemoteGone.
+	mock.getErr = &cfgo.Error{StatusCode: http.StatusNotFound}
 	mock.listErr = &cfgo.Error{StatusCode: http.StatusNotFound}
 
 	r := buildTunnelReconciler(t, mock, tunnel, secret)
@@ -1410,5 +1411,93 @@ func TestEnsureCredentialsSecretExists_AlreadyOwnedStaleData_OverwritesWithoutRe
 	// Ownership invariants still hold.
 	if v := got.Labels["cloudflare.io/managed"]; v != "true" {
 		t.Errorf(`expected cloudflare.io/managed=true preserved, got %q`, v)
+	}
+}
+
+// TestReconcileTunnel_GetByID_NotFound_FallsThroughToSearch verifies that a
+// 404 from GetTunnel clears Status.TunnelID and the reconciler proceeds to
+// search by name (here finding the existing tunnel and adopting it).
+func TestReconcileTunnel_GetByID_NotFound_FallsThroughToSearch(t *testing.T) {
+	tunnel := newTestTunnel("tun", "default")
+	tunnel.Spec.SecretRef = cloudflarev1alpha1.SecretReference{Name: "creds"}
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	tunnel.Status.TunnelID = "tun-stale"
+	tunnel.Status.TunnelCNAME = "tun-stale.cfargotunnel.com"
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	// GetTunnel returns 404; ListTunnelsByName finds the existing tunnel.
+	mock.getErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+	mock.tunnels["tun-fresh"] = &cfclient.Tunnel{ID: "tun-fresh", Name: "my-tunnel"}
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareTunnel{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), updated); err != nil {
+		t.Fatalf("get updated tunnel: %v", err)
+	}
+	if updated.Status.TunnelID != "tun-fresh" {
+		t.Errorf("Status.TunnelID = %q, want %q (adopted via search-by-name)", updated.Status.TunnelID, "tun-fresh")
+	}
+}
+
+// TestReconcileTunnel_GetByID_TransientError_PreservesID verifies that a
+// non-404 error from GetTunnel propagates up. The outer wrapper classifies
+// it as ReasonCloudflareError and preserves Status.TunnelID + TunnelCNAME
+// (the next reconcile retries the same Get).
+func TestReconcileTunnel_GetByID_TransientError_PreservesID(t *testing.T) {
+	tunnel := newTestTunnel("tun", "default")
+	tunnel.Spec.SecretRef = cloudflarev1alpha1.SecretReference{Name: "creds"}
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	tunnel.Status.TunnelID = "tun-stable"
+	tunnel.Status.TunnelCNAME = "tun-stable.cfargotunnel.com"
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	mock.getErr = &cfgo.Error{StatusCode: http.StatusInternalServerError}
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	}); err != nil {
+		t.Fatalf("unexpected error from Reconcile: %v", err)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareTunnel{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), updated); err != nil {
+		t.Fatalf("get updated tunnel: %v", err)
+	}
+	if updated.Status.TunnelID != "tun-stable" {
+		t.Errorf("Status.TunnelID = %q, want %q (must NOT be cleared on transient error)", updated.Status.TunnelID, "tun-stable")
+	}
+	if updated.Status.TunnelCNAME != "tun-stable.cfargotunnel.com" {
+		t.Errorf("Status.TunnelCNAME = %q, want %q (must NOT be cleared on transient error)", updated.Status.TunnelCNAME, "tun-stable.cfargotunnel.com")
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonCloudflareError {
+		t.Errorf("Reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonCloudflareError)
+	}
+	if updated.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("Phase = %q, want %q", updated.Status.Phase, cloudflarev1alpha1.PhaseError)
 	}
 }
