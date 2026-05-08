@@ -108,9 +108,12 @@ func filterRulesForTunnel(all []cloudflarev1alpha1.CloudflareTunnelRule, tunnelN
 
 // reconcileConnectorResources reconciles the ServiceAccount, ConfigMap,
 // Deployment, and PodDisruptionBudget for the operator-managed cloudflared
-// workload. After every apply succeeds, prunes any legacy-named resources
-// owned by tun (see cleanupLegacyConnectorResources) so a successful return
-// implies the rename has converged.
+// workload. After every apply succeeds AND the new connector has at least
+// one Ready replica, prunes any legacy-named resources owned by tun (see
+// cleanupLegacyConnectorResources). A successful return with the new
+// Deployment not yet Ready leaves legacy resources in place; the controller
+// watches owned Deployments and will re-reconcile when ReadyReplicas
+// advances.
 //
 // All apply paths absorb transient optimistic-concurrency conflicts
 // in-process via retry.RetryOnConflict (see applyOwned for the SA + ConfigMap
@@ -161,7 +164,31 @@ func reconcileConnectorResources(ctx context.Context, c client.Client, tun *clou
 	if err := applyOwnedPDB(ctx, c, tun); err != nil {
 		return err
 	}
+	ready, err := connectorDeploymentReady(ctx, c, tun)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return nil
+	}
 	return cleanupLegacyConnectorResources(ctx, c, tun)
+}
+
+// connectorDeploymentReady reports whether the new-named connector
+// Deployment for tun has at least one Ready replica. Returns false
+// (without error) if the Deployment doesn't yet exist — apply paths
+// create it idempotently and the next reconcile will see it.
+func connectorDeploymentReady(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel) (bool, error) {
+	current := ConnectorNames(tun)
+	var dep appsv1.Deployment
+	err := c.Get(ctx, types.NamespacedName{Name: current.Deployment, Namespace: tun.Namespace}, &dep)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get new Deployment for cleanup gate: %w", err)
+	}
+	return dep.Status.ReadyReplicas >= 1, nil
 }
 
 // applyOwnedPDB ensures the connector PDB matches what
@@ -214,8 +241,8 @@ func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1
 }
 
 // cleanupLegacyConnectorResources removes the legacy "<tunnel>-connector"
-// family of resources owned by tun. It is intended to run AFTER the
-// new-named resources have been applied, so that the rename appears as a
+// family of resources owned by tun. It is intended to run AFTER at least
+// one new-named connector pod is Ready, so that the rename appears as a
 // single transition: both connectors briefly coexist (Cloudflare permits
 // multiple connectors per tunnel — same mechanism as replicas > 1), then
 // the legacy ones are deleted.
