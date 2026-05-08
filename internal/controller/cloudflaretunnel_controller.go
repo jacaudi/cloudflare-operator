@@ -168,12 +168,16 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// writeTunnelAggStatus (called from ReconcileConnectorAndRules)
 		// persists the apex condition + status atomically with the rest of
 		// the terminal status write. Apex problems do NOT block the
-		// connector/rules step — they only flip ApexHostnameReady.
-		apexRes, err := reconcileApexHostname(ctx, r.Client, &tunnel)
-		if err != nil {
-			logger.Error(err, "apex reconcile failed")
-			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "ApexReconcileFailed", err.Error())
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		// connector/rules step or the tunnel's Ready condition (design D5)
+		// — that includes plumbing flakes here, not just condition-level
+		// failures returned via the apex condition. On plumbing error: log
+		// + event + force a 30s requeue, but continue through the connector
+		// path so writeTunnelAggStatus still fires.
+		apexRes, apexErr := reconcileApexHostname(ctx, r.Client, &tunnel)
+		if apexErr != nil {
+			logger.Error(apexErr, "apex reconcile failed")
+			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "ApexReconcileFailed", apexErr.Error())
+			apexRes = ctrl.Result{RequeueAfter: 30 * time.Second}
 		}
 
 		if err := ReconcileConnectorAndRules(ctx, r.Client, &tunnel, preStatus); err != nil {

@@ -1821,3 +1821,107 @@ func TestReconcile_ApexHostname_RemovedFromSpec_GCs(t *testing.T) {
 		t.Errorf("ApexHostnameReady condition should be removed when spec is absent")
 	}
 }
+
+// TestReconcile_ApexHostname_PlumbingErrorFallsThroughToConnector is the
+// regression test for the Task 4 review finding: when apex reconcile hits
+// a plumbing error (e.g. apiserver List flake), the controller must NOT
+// early-return — it must fall through to ReconcileConnectorAndRules so
+// writeTunnelAggStatus persists the in-memory ObservedGeneration + Ready
+// condition (set just before the apex branch). Apex problems do not take
+// down a working tunnel (design D5).
+//
+// The load-bearing assertion is Status.ObservedGeneration: under the
+// pre-fix early-return, the in-memory bump at line 159 of the controller
+// is dropped, so a re-fetched tunnel would still report the old
+// generation. Under the fix, the connector path runs and persists it.
+func TestReconcile_ApexHostname_PlumbingErrorFallsThroughToConnector(t *testing.T) {
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	// Bump generation so the assertion that Status.ObservedGeneration was
+	// persisted to the new value is meaningful (default zero-value would
+	// otherwise pass trivially).
+	tunnel.Generation = 7
+	tunnel.Spec.ApexHostname = &cloudflarev1alpha1.ApexHostnameSpec{
+		Name:    "edge.example.com",
+		ZoneRef: cloudflarev1alpha1.ZoneReference{Name: "example-com"},
+	}
+
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+		Spec:       cloudflarev1alpha1.CloudflareZoneSpec{Name: "example.com"},
+		Status: cloudflarev1alpha1.CloudflareZoneStatus{
+			Conditions: []metav1.Condition{{
+				Type:   cloudflarev1alpha1.ConditionTypeReady,
+				Status: metav1.ConditionTrue,
+				Reason: cloudflarev1alpha1.ReasonReconcileSuccess,
+			}},
+		},
+	}
+	secret := newTestSecret("default")
+	mock := newMockTunnelClient()
+
+	// Inject a plumbing error on findCollidingApexCR's List call. Other
+	// List callers (e.g. the rule aggregator) must continue to work, so
+	// only fail when the typed list is CloudflareDNSRecordList.
+	listErr := fmt.Errorf("simulated apiserver flake")
+	funcs := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*cloudflarev1alpha1.CloudflareDNSRecordList); ok {
+				return listErr
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}
+
+	r := buildInterceptedTunnelReconciler(t, mock, funcs, tunnel, secret, zone)
+	// Swap in a buffered FakeRecorder we can drain to assert on events.
+	fakeRec := record.NewFakeRecorder(10)
+	r.Recorder = fakeRec
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned unexpected error: %v", err)
+	}
+	// Apex plumbing error forces a 30s requeue, which beats the natural
+	// 30-minute interval from spec.Interval.
+	if res.RequeueAfter != 30*time.Second {
+		t.Errorf("RequeueAfter = %s, want 30s (apex-plumbing forced requeue)", res.RequeueAfter)
+	}
+
+	// Event was emitted on the apex failure.
+	close(fakeRec.Events)
+	var sawApexFailed bool
+	for ev := range fakeRec.Events {
+		if strings.Contains(ev, "ApexReconcileFailed") {
+			sawApexFailed = true
+		}
+	}
+	if !sawApexFailed {
+		t.Error("expected ApexReconcileFailed warning event")
+	}
+
+	// Load-bearing assertion: ReconcileConnectorAndRules ran and
+	// writeTunnelAggStatus persisted the in-memory status. Under the
+	// pre-fix early-return, ObservedGeneration would still be 0.
+	var updated cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get tunnel: %v", err)
+	}
+	if updated.Status.ObservedGeneration != tunnel.Generation {
+		t.Errorf("Status.ObservedGeneration = %d, want %d (proves writeTunnelAggStatus ran)",
+			updated.Status.ObservedGeneration, tunnel.Generation)
+	}
+	ready := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil {
+		t.Fatal("Ready condition missing; writeTunnelAggStatus did not persist status")
+	}
+	if ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready.Status = %s, want True", ready.Status)
+	}
+	if ready.Reason != cloudflarev1alpha1.ReasonReconcileSuccess {
+		t.Errorf("Ready.Reason = %s, want %s", ready.Reason, cloudflarev1alpha1.ReasonReconcileSuccess)
+	}
+}
