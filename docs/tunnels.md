@@ -44,7 +44,7 @@ spec:
     replicas: 2             # default: 2. Minimum: 1.
     nameOverride: ""        # default: "". When set, names the Deployment + SA exactly
                             # this value and the ConfigMap "<nameOverride>-config".
-                            # When unset, names use "<tunnel.metadata.name>-connector".
+                            # When unset, names use "cloudflared-<tunnel.metadata.name>".
     image:
       repository: docker.io/cloudflare/cloudflared
       tag: "2026.3.0"       # omit to use the operator's compile-time default
@@ -66,7 +66,16 @@ At `replicas: 2` or higher the operator additionally creates a `PodDisruptionBud
 
 ### Naming the connector resources
 
-By default the operator names the Deployment, ServiceAccount, and ConfigMap as `<tunnel.metadata.name>-connector`, `<tunnel.metadata.name>-connector`, and `<tunnel.metadata.name>-connector-config`. To use a different name family — for example, to fit existing monitoring labels or GitOps drift expectations — set `spec.connector.nameOverride`:
+By default the operator names the Deployment and ServiceAccount as
+`cloudflared-<tunnel.metadata.name>`, the ConfigMap as
+`cloudflared-<tunnel.metadata.name>-config`, and the PodDisruptionBudget
+(when configured) as `cloudflared-<tunnel.metadata.name>-pdb`. The
+`cloudflared-` prefix matches Cloudflare's official Helm chart and makes
+`kubectl get pods | grep cloudflared` find every operator-managed connector
+cluster-wide.
+
+To use a different name family — for example, to fit existing monitoring
+labels or GitOps drift expectations — set `spec.connector.nameOverride`:
 
 ```yaml
 spec:
@@ -75,15 +84,30 @@ spec:
     nameOverride: cloudflared-prod
 ```
 
-This produces:
+With `nameOverride: cloudflared-prod`, the Deployment and ServiceAccount are
+named `cloudflared-prod` and the ConfigMap is named `cloudflared-prod-config`.
 
-- Deployment: `cloudflared-prod`
-- ServiceAccount: `cloudflared-prod`
-- ConfigMap: `cloudflared-prod-config`
+Changing `nameOverride` on a live tunnel reconciles new resources at the new
+name; the old resources are NOT cleaned up automatically (tracked alongside
+[#52](https://github.com/jacaudi/cloudflare-operator/issues/52)). Delete the
+orphaned Deployment/SA/ConfigMap/PDB manually after a rename.
 
-Changing `nameOverride` on a live tunnel reconciles new resources at the new name; the old resources are NOT cleaned up automatically (tracked alongside [#52](https://github.com/jacaudi/cloudflare-operator/issues/52)). Delete the orphaned Deployment/SA/ConfigMap manually after a rename.
+`nameOverride` must be a valid DNS-1123 subdomain (lowercase alphanumerics
+and `-`, length ≤ 253).
 
-`nameOverride` must be a valid DNS-1123 subdomain (lowercase alphanumerics and `-`, length ≤ 253).
+#### Upgrading from earlier versions
+
+Operator versions before this change defaulted the base name to
+`<tunnel.metadata.name>-connector`. On upgrade, the connector reconciler
+automatically deletes the legacy-named resources (Deployment,
+ServiceAccount, ConfigMap, PDB) owned by your `CloudflareTunnel` after
+applying the new `cloudflared-<tunnel>` family. The two connectors briefly
+coexist while the new pods come up, so there is no traffic gap. No manual
+action is required for users who did not set `nameOverride`.
+
+If you have monitoring queries, alert routes, or external automation that
+filter by the old pod-name prefix (for example, `pod=~"<tunnel>-connector-.*"`),
+update them to match `cloudflared-<tunnel>-.*` after the upgrade.
 
 ### Upgrading the cloudflared image
 
@@ -280,7 +304,7 @@ If you currently run your own cloudflared Deployment:
 4. Set `connector.enabled: true`. The operator creates the managed `ServiceAccount`, `ConfigMap`, and `Deployment`, then compare the rendered ConfigMap against your hand-rolled config:
 
    ```bash
-   kubectl get configmap prod-connector-config -n network -o yaml
+   kubectl get configmap cloudflared-prod-config -n network -o yaml
    ```
 
 5. Once satisfied, delete your hand-rolled Deployment. Brief overlap is safe — cloudflared supports multiple connectors per tunnel.
