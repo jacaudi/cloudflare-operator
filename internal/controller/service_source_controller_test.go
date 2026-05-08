@@ -1407,3 +1407,40 @@ func TestServiceSource_SecretRefCrossNamespace_PropagatedToEmittedCR(t *testing.
 		}
 	}
 }
+
+// ---- TestServiceSource_MapTunnelToServices_EnqueuesOnApexUpdate ------------
+// Defensive coverage pinning the watch contract: when a tunnel's apex status
+// changes (Status.ApexHostname populated, ApexHostnameReady=True), the watch
+// + mapper must enqueue every Service targeting that tunnel so per-service
+// DNS records can flip to the apex CNAME. This test guards against a future
+// predicate narrowing the watch and silently breaking the apex migration path.
+func TestServiceSource_MapTunnelToServices_EnqueuesOnApexUpdate(t *testing.T) {
+	s := svcTestScheme(t)
+	svc := newSvc("my-svc", "apps", map[string]string{
+		AnnotationTarget:    "tunnel:home",
+		AnnotationHostnames: "foo.example.com",
+	})
+	tun := newReadyTunnel("home", "apps")
+	// Augment with apex status — the trigger we're pinning.
+	tun.Status.ApexHostname = &cloudflarev1alpha1.ApexHostnameStatus{Name: "edge.example.com"}
+	tun.Status.Conditions = []metav1.Condition{{
+		Type:               cloudflarev1alpha1.ConditionTypeApexHostnameReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             cloudflarev1alpha1.ReasonReconcileSuccess,
+		LastTransitionTime: metav1.Now(),
+	}}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(svc, tun).
+		Build()
+	r := &ServiceSourceReconciler{Client: c}
+
+	reqs := r.mapTunnelToServices(context.Background(), tun)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d: %v", len(reqs), reqs)
+	}
+	if reqs[0].Namespace != "apps" || reqs[0].Name != "my-svc" {
+		t.Errorf("expected {apps/my-svc}, got %v", reqs[0])
+	}
+}

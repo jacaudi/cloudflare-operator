@@ -1692,3 +1692,39 @@ func TestHTTPRouteSource_SecretRefCrossNamespace_PropagatedToEmittedCR(t *testin
 		}
 	}
 }
+
+// ---- TestHTTPRouteSource_MapTunnelToRoutes_EnqueuesOnApexUpdate -------------
+// Defensive coverage pinning the watch contract: when a tunnel's apex status
+// changes (Status.ApexHostname populated, ApexHostnameReady=True), the watch
+// + mapper must enqueue every Route targeting that tunnel so per-route DNS
+// records can flip to the apex CNAME. This test guards against a future
+// predicate narrowing the watch and silently breaking the apex migration path.
+func TestHTTPRouteSource_MapTunnelToRoutes_EnqueuesOnApexUpdate(t *testing.T) {
+	s := httpRouteScheme(t)
+	route := newHTTPRoute(testNsApps, testRouteName, map[string]string{
+		AnnotationTarget: "tunnel:" + testTunnelName,
+	}, hostnames("foo.example.com"), nil)
+	tun := newReadyTunnel(testTunnelName, testNsApps)
+	// Augment with apex status — the trigger we're pinning.
+	tun.Status.ApexHostname = &cloudflarev1alpha1.ApexHostnameStatus{Name: "edge.example.com"}
+	tun.Status.Conditions = []metav1.Condition{{
+		Type:               cloudflarev1alpha1.ConditionTypeApexHostnameReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             cloudflarev1alpha1.ReasonReconcileSuccess,
+		LastTransitionTime: metav1.Now(),
+	}}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(route, tun).
+		Build()
+	r := &HTTPRouteSourceReconciler{Client: c}
+
+	reqs := r.mapTunnelToRoutes(context.Background(), tun)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request, got %d: %v", len(reqs), reqs)
+	}
+	if reqs[0].Namespace != testNsApps || reqs[0].Name != testRouteName {
+		t.Errorf("expected {%s/%s}, got %v", testNsApps, testRouteName, reqs[0])
+	}
+}
