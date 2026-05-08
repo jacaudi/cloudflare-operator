@@ -17,12 +17,15 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 )
@@ -267,5 +270,99 @@ func TestOwnerRefsFor(t *testing.T) {
 	}
 	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
 		t.Error("BlockOwnerDeletion should be true")
+	}
+}
+
+// ---- TestResolveTunnelCNAME -------------------------------------------------
+
+func TestResolveTunnelCNAME_ApexFirst(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "external-edge", Namespace: "infra"},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID:    "abcd",
+			TunnelCNAME: "abcd.cfargotunnel.com",
+			ApexHostname: &cloudflarev1alpha1.ApexHostnameStatus{
+				Name:     "edge.example.com",
+				RecordID: "rec-1",
+			},
+			Conditions: []metav1.Condition{
+				{
+					Type:   cloudflarev1alpha1.ConditionTypeApexHostnameReady,
+					Status: metav1.ConditionTrue,
+					Reason: cloudflarev1alpha1.ReasonReconcileSuccess,
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tun).Build()
+	cname, ready, err := resolveTunnelCNAME(context.Background(), c, "infra", nil, "external-edge")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !ready {
+		t.Errorf("ready = false, want true")
+	}
+	if cname != "edge.example.com" {
+		t.Errorf("cname = %q, want edge.example.com (apex)", cname)
+	}
+}
+
+func TestResolveTunnelCNAME_ApexNotReady_FallsBackToTunnelCNAME(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "external-edge", Namespace: "infra"},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID:    "abcd",
+			TunnelCNAME: "abcd.cfargotunnel.com",
+			ApexHostname: &cloudflarev1alpha1.ApexHostnameStatus{
+				Name: "edge.example.com",
+			},
+			Conditions: []metav1.Condition{
+				{
+					Type:   cloudflarev1alpha1.ConditionTypeApexHostnameReady,
+					Status: metav1.ConditionFalse,
+					Reason: cloudflarev1alpha1.ReasonApexRecordPending,
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tun).Build()
+	cname, ready, err := resolveTunnelCNAME(context.Background(), c, "infra", nil, "external-edge")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !ready {
+		t.Errorf("ready = false, want true (TunnelCNAME is set)")
+	}
+	if cname != "abcd.cfargotunnel.com" {
+		t.Errorf("cname = %q, want fallback to TunnelCNAME", cname)
+	}
+}
+
+func TestResolveTunnelCNAME_NoApex_FallsBackToTunnelCNAME(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "external-edge", Namespace: "infra"},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelCNAME: "abcd.cfargotunnel.com",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tun).Build()
+	cname, ready, err := resolveTunnelCNAME(context.Background(), c, "infra", nil, "external-edge")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !ready || cname != "abcd.cfargotunnel.com" {
+		t.Errorf("got (%q, %v), want (abcd.cfargotunnel.com, true)", cname, ready)
 	}
 }
