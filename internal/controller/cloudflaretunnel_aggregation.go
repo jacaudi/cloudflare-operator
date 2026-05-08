@@ -48,8 +48,14 @@ var ErrUnownedPDB = stderrors.New("refusing to adopt PodDisruptionBudget not own
 
 // ReconcileConnectorAndRules performs the Task 8 additions to the tunnel
 // reconcile: aggregates CloudflareTunnelRule CRs for this tunnel, renders
-// config.yaml, reconciles the connector workload (when enabled), and writes
+// config.yaml, reconciles the connector workload (when enabled) or deletes
+// any previously-managed connector resources (when disabled), and writes
 // per-rule + per-tunnel status.
+//
+// When Spec.Connector == nil or Spec.Connector.Enabled == false, every
+// operator-owned connector resource for this tunnel is deleted via
+// cleanupConnectorResources — including resources from prior
+// spec.connector.nameOverride values, which share the connector label set.
 //
 // Pure controller-runtime operation: no Cloudflare API calls. Called by
 // Reconcile after tunnel provisioning has populated TunnelID/TunnelCNAME.
