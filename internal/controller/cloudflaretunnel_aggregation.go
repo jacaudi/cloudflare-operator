@@ -313,6 +313,90 @@ func deleteOwnedByName(ctx context.Context, c client.Client, obj client.Object, 
 	return nil
 }
 
+// cleanupConnectorResources deletes every operator-owned connector
+// resource for tun in tun.Namespace. It is intended to run when the
+// operator is no longer managing a connector for this tunnel
+// (Spec.Connector == nil or Spec.Connector.Enabled == false).
+//
+// Discovery is by label selector — app.kubernetes.io/name=cloudflared
+// AND cloudflare.io/tunnel=<tun.Name> — so resources from prior
+// spec.connector.nameOverride values are also cleaned up by the same
+// pass.
+//
+// For each label-matching object, the cleanup deletes only when the
+// owner-ref controller-UID matches tun.UID. Resources whose label set
+// matches but whose owner-ref does not are left alone (defensive
+// against hand-applied or cross-tunnel resources). IsNotFound on Delete
+// is treated as success.
+//
+// Mutually exclusive with cleanupLegacyConnectorResources, which fires
+// only when Connector.Enabled == true && NameOverride == "".
+func cleanupConnectorResources(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel) error {
+	listOpts := []client.ListOption{
+		client.InNamespace(tun.Namespace),
+		client.MatchingLabels{
+			"app.kubernetes.io/name": "cloudflared",
+			"cloudflare.io/tunnel":   tun.Name,
+		},
+	}
+
+	// Deployment first to stop pods, then PDB (depends on Deployment),
+	// then SA + ConfigMap (leaves).
+	var deps appsv1.DeploymentList
+	if err := c.List(ctx, &deps, listOpts...); err != nil {
+		return fmt.Errorf("list connector Deployments: %w", err)
+	}
+	for i := range deps.Items {
+		if err := deleteIfOwned(ctx, c, &deps.Items[i], tun.UID); err != nil {
+			return fmt.Errorf("delete connector Deployment %s/%s: %w", deps.Items[i].Namespace, deps.Items[i].Name, err)
+		}
+	}
+
+	var pdbs policyv1.PodDisruptionBudgetList
+	if err := c.List(ctx, &pdbs, listOpts...); err != nil {
+		return fmt.Errorf("list connector PDBs: %w", err)
+	}
+	for i := range pdbs.Items {
+		if err := deleteIfOwned(ctx, c, &pdbs.Items[i], tun.UID); err != nil {
+			return fmt.Errorf("delete connector PDB %s/%s: %w", pdbs.Items[i].Namespace, pdbs.Items[i].Name, err)
+		}
+	}
+
+	var sas corev1.ServiceAccountList
+	if err := c.List(ctx, &sas, listOpts...); err != nil {
+		return fmt.Errorf("list connector ServiceAccounts: %w", err)
+	}
+	for i := range sas.Items {
+		if err := deleteIfOwned(ctx, c, &sas.Items[i], tun.UID); err != nil {
+			return fmt.Errorf("delete connector ServiceAccount %s/%s: %w", sas.Items[i].Namespace, sas.Items[i].Name, err)
+		}
+	}
+
+	var cms corev1.ConfigMapList
+	if err := c.List(ctx, &cms, listOpts...); err != nil {
+		return fmt.Errorf("list connector ConfigMaps: %w", err)
+	}
+	for i := range cms.Items {
+		if err := deleteIfOwned(ctx, c, &cms.Items[i], tun.UID); err != nil {
+			return fmt.Errorf("delete connector ConfigMap %s/%s: %w", cms.Items[i].Namespace, cms.Items[i].Name, err)
+		}
+	}
+	return nil
+}
+
+// deleteIfOwned deletes obj if its owner-ref controller-UID matches
+// ownerUID. Returns nil (skip) if not owned. Treats IsNotFound on
+// Delete as success.
+func deleteIfOwned(ctx context.Context, c client.Client, obj client.Object, ownerUID types.UID) error {
+	if !isOwnedBy(obj.GetOwnerReferences(), ownerUID) {
+		return nil
+	}
+	if err := c.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
 // applyOwned creates or updates a fully operator-owned resource (SA or
 // ConfigMap). On create: submit as-is. On update: wholesale-overwrite
 // labels, annotations, ownerRefs, and the data fields that Build*
