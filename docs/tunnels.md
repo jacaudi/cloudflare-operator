@@ -255,15 +255,6 @@ apex.
 records revert to direct `<uuid>.cfargotunnel.com` content on their next
 reconcile.
 
-**Renaming the apex is not yet supported.** Editing
-`spec.apexHostname.name` after the apex has reconciled does not move the
-record in Cloudflare — the underlying `CloudflareDNSRecord` controller's
-in-place update path does not currently rewrite the record's `Name`
-field. Per-route records will flip to the new apex name immediately, but
-DNS will resolve to NXDOMAIN until you intervene. To rename safely:
-clear `spec.apexHostname`, wait for the apex CR to be GC'd, then set
-`spec.apexHostname.name` to the new value.
-
 ---
 
 ## Hand-Authored `CloudflareTunnelRule`
