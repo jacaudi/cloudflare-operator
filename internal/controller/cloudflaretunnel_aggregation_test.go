@@ -1555,47 +1555,98 @@ func TestCleanupLegacyConnectorResources_NoOpWhenConnectorDisabled(t *testing.T)
 	}
 }
 
-// TestReconcileConnectorResources_CleansUpLegacyOnRename verifies the end-to-end
-// rename: with a legacy-named Deployment, SA, ConfigMap, and PDB already in
-// place (owned by the tunnel), reconcileConnectorResources applies the new
-// "cloudflared-<tun>" family AND deletes the legacy "<tun>-connector" family.
+// TestReconcileConnectorResources_CleansUpLegacyOnRename verifies the
+// two-phase rename behavior: on the first reconcile (when the new-named
+// connector Deployment has no Ready replicas yet) the new-named resources
+// are applied AND the legacy-named family is left in place, so traffic
+// continues to flow through the legacy pods. After the new Deployment
+// reports at least one Ready replica, a second reconcile prunes the
+// legacy family.
 func TestReconcileConnectorResources_CleansUpLegacyOnRename(t *testing.T) {
 	tun := newTunnelForAgg("home", "network", true)
 	dep, sa, cm, pdb := legacyOwnedFixture(tun)
-	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	// Build a local fake client that registers Deployment as a status
+	// subresource so we can flip Status.ReadyReplicas via c.Status().Update.
+	// The shared buildAggFakeClient helper only registers status subresource
+	// for v1alpha1 CRDs, which is sufficient for every other test in this
+	// file but not here.
+	s := aggTestScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tun, dep, sa, cm, pdb).
+		WithStatusSubresource(tun, &appsv1.Deployment{}).
+		Build()
 
 	agg := Aggregate(tun.Status.TunnelID, nil, nil)
+
+	// --- First reconcile: apply new-named resources, but cleanup is gated
+	// on Deployment readiness so the legacy family must remain.
 	if err := reconcileConnectorResources(context.Background(), c, tun, agg); err != nil {
-		t.Fatalf("reconcileConnectorResources: %v", err)
+		t.Fatalf("reconcileConnectorResources (first): %v", err)
 	}
 
-	// New-named resources exist.
 	current := ConnectorNames(tun)
 	if err := c.Get(context.Background(), types.NamespacedName{Name: current.Deployment, Namespace: tun.Namespace}, &appsv1.Deployment{}); err != nil {
-		t.Errorf("new Deployment %q missing: %v", current.Deployment, err)
+		t.Errorf("new Deployment %q missing after first reconcile: %v", current.Deployment, err)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: current.ServiceAccount, Namespace: tun.Namespace}, &corev1.ServiceAccount{}); err != nil {
-		t.Errorf("new ServiceAccount %q missing: %v", current.ServiceAccount, err)
+		t.Errorf("new ServiceAccount %q missing after first reconcile: %v", current.ServiceAccount, err)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: current.ConfigMap, Namespace: tun.Namespace}, &corev1.ConfigMap{}); err != nil {
-		t.Errorf("new ConfigMap %q missing: %v", current.ConfigMap, err)
+		t.Errorf("new ConfigMap %q missing after first reconcile: %v", current.ConfigMap, err)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: current.PodDisruptionBudget, Namespace: tun.Namespace}, &policyv1.PodDisruptionBudget{}); err != nil {
-		t.Errorf("new PDB %q missing: %v", current.PodDisruptionBudget, err)
+		t.Errorf("new PDB %q missing after first reconcile: %v", current.PodDisruptionBudget, err)
 	}
 
-	// Legacy-named resources are gone.
 	legacy := legacyConnectorNames(tun)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, &appsv1.Deployment{}); err != nil {
+		t.Errorf("legacy Deployment %q must remain until new connector is Ready, got err=%v", legacy.Deployment, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ServiceAccount, Namespace: tun.Namespace}, &corev1.ServiceAccount{}); err != nil {
+		t.Errorf("legacy ServiceAccount %q must remain until new connector is Ready, got err=%v", legacy.ServiceAccount, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ConfigMap, Namespace: tun.Namespace}, &corev1.ConfigMap{}); err != nil {
+		t.Errorf("legacy ConfigMap %q must remain until new connector is Ready, got err=%v", legacy.ConfigMap, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.PodDisruptionBudget, Namespace: tun.Namespace}, &policyv1.PodDisruptionBudget{}); err != nil {
+		t.Errorf("legacy PDB %q must remain until new connector is Ready, got err=%v", legacy.PodDisruptionBudget, err)
+	}
+
+	// --- Simulate readiness: bump the new Deployment's Status.ReadyReplicas
+	// to 1 via the status subresource, then verify it stuck.
+	var newDep appsv1.Deployment
+	if err := c.Get(context.Background(), types.NamespacedName{Name: current.Deployment, Namespace: tun.Namespace}, &newDep); err != nil {
+		t.Fatalf("get new Deployment to flip readiness: %v", err)
+	}
+	newDep.Status.ReadyReplicas = 1
+	if err := c.Status().Update(context.Background(), &newDep); err != nil {
+		t.Fatalf("status update on new Deployment: %v", err)
+	}
+	var verify appsv1.Deployment
+	if err := c.Get(context.Background(), types.NamespacedName{Name: current.Deployment, Namespace: tun.Namespace}, &verify); err != nil {
+		t.Fatalf("re-get new Deployment after status update: %v", err)
+	}
+	if verify.Status.ReadyReplicas != 1 {
+		t.Fatalf("expected ReadyReplicas=1 after Status().Update, got %d", verify.Status.ReadyReplicas)
+	}
+
+	// --- Second reconcile: cleanup gate now opens; legacy family is pruned.
+	if err := reconcileConnectorResources(context.Background(), c, tun, agg); err != nil {
+		t.Fatalf("reconcileConnectorResources (second): %v", err)
+	}
+
 	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
-		t.Errorf("legacy Deployment %q not deleted: err=%v", legacy.Deployment, err)
+		t.Errorf("legacy Deployment %q not deleted after readiness: err=%v", legacy.Deployment, err)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ServiceAccount, Namespace: tun.Namespace}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
-		t.Errorf("legacy ServiceAccount %q not deleted: err=%v", legacy.ServiceAccount, err)
+		t.Errorf("legacy ServiceAccount %q not deleted after readiness: err=%v", legacy.ServiceAccount, err)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ConfigMap, Namespace: tun.Namespace}, &corev1.ConfigMap{}); !apierrors.IsNotFound(err) {
-		t.Errorf("legacy ConfigMap %q not deleted: err=%v", legacy.ConfigMap, err)
+		t.Errorf("legacy ConfigMap %q not deleted after readiness: err=%v", legacy.ConfigMap, err)
 	}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.PodDisruptionBudget, Namespace: tun.Namespace}, &policyv1.PodDisruptionBudget{}); !apierrors.IsNotFound(err) {
-		t.Errorf("legacy PDB %q not deleted: err=%v", legacy.PodDisruptionBudget, err)
+		t.Errorf("legacy PDB %q not deleted after readiness: err=%v", legacy.PodDisruptionBudget, err)
 	}
 }
