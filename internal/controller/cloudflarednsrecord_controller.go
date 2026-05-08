@@ -249,7 +249,10 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 	if dnsRecord.Status.RecordID != "" {
 		existing, err = dnsClient.GetRecord(ctx, zoneID, dnsRecord.Status.RecordID)
 		if err != nil {
-			logger.Info("could not fetch record by ID, will search by name", "recordID", dnsRecord.Status.RecordID)
+			if !cfclient.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("get record by ID: %w", err)
+			}
+			logger.Info("record not found by ID, will search by name", "recordID", dnsRecord.Status.RecordID)
 			dnsRecord.Status.RecordID = ""
 			existing = nil
 		}

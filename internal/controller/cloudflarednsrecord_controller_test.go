@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -1756,10 +1755,11 @@ func TestDNSReconcile_ZoneRefDeleteZoneNotResolvable(t *testing.T) {
 
 // TestCloudflareDNSRecordReconciler_NotFoundRoutesToRemoteGone verifies that a
 // 404 from the Cloudflare API routes the reconciler to the ReasonRemoteGone
-// condition and an immediate requeue. Note: Status.RecordID is cleared by the
-// in-flow ID-recovery path (lines 240-246 in reconcileRecord) when mock.getErr
-// is set, NOT by the classifier's ResetRemoteID flag. The classifier's reset
-// semantic is unit-tested in error_routing_test.go::TestClassifyCloudflareError.
+// condition and an immediate requeue. The 404 first comes from GetRecord by
+// stale ID — the in-flow recovery path clears Status.RecordID and falls
+// through to ListRecordsByNameAndType, which also returns 404. The list error
+// then propagates to Reconcile's failReconcile site, where the classifier
+// returns ResetRemoteID=true and ReasonRemoteGone.
 func TestCloudflareDNSRecordReconciler_NotFoundRoutesToRemoteGone(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
@@ -1793,7 +1793,7 @@ func TestCloudflareDNSRecordReconciler_NotFoundRoutesToRemoteGone(t *testing.T) 
 	}
 
 	mock := newMockDNSClient()
-	mock.getErr = errors.New("transient")
+	mock.getErr = &cfgo.Error{StatusCode: http.StatusNotFound}
 	mock.listErr = &cfgo.Error{StatusCode: http.StatusNotFound}
 
 	r := buildReconciler(scheme, mock, dns, secret)
@@ -2175,5 +2175,134 @@ func TestCloudflareDNSRecord_PhaseReconciling(t *testing.T) {
 	}
 	if fetched.Status.Phase != cloudflarev1alpha1.PhaseReconciling {
 		t.Errorf("Phase = %q, want %q", fetched.Status.Phase, cloudflarev1alpha1.PhaseReconciling)
+	}
+}
+
+// TestReconcileRecord_GetByID_NotFound_FallsThroughToSearch verifies that a
+// 404 from GetRecord clears Status.RecordID and the reconciler proceeds to
+// search by name (here finding the existing record and adopting it).
+func TestReconcileRecord_GetByID_NotFound_FallsThroughToSearch(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+		Status: cloudflarev1alpha1.CloudflareDNSRecordStatus{
+			RecordID: "rec-stale",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+
+	mock := newMockDNSClient()
+	// GetRecord returns 404 (stale ID), but search-by-name finds the record.
+	mock.getErr = &cfgo.Error{StatusCode: http.StatusNotFound}
+	// Seed the existing record so ListRecordsByNameAndType finds it.
+	mock.records["rec-fresh"] = &cfclient.DNSRecord{
+		ID: "rec-fresh", Name: "x.example.com", Type: "A",
+		Content: "1.2.3.4",
+	}
+
+	r := buildReconciler(scheme, mock, dns, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(dns),
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareDNSRecord{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(dns), updated); err != nil {
+		t.Fatalf("get updated record: %v", err)
+	}
+	// Adopted to the freshly-found record ID.
+	if updated.Status.RecordID != "rec-fresh" {
+		t.Errorf("Status.RecordID = %q, want %q (adopted via search-by-name)", updated.Status.RecordID, "rec-fresh")
+	}
+}
+
+// TestReconcileRecord_GetByID_TransientError_PreservesID verifies that a
+// non-404 error from GetRecord is propagated to the outer wrapper, which
+// classifies it as ReasonCloudflareError and preserves Status.RecordID
+// (the next reconcile retries the same Get).
+func TestReconcileRecord_GetByID_TransientError_PreservesID(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := cloudflarev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	dns := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Generation: 1,
+			Finalizers: []string{cloudflarev1alpha1.FinalizerName},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			ZoneID:    "zone-1",
+			Name:      "x.example.com",
+			Type:      cloudflarev1alpha1.DNSRecordTypeA,
+			Content:   strPtr("1.2.3.4"),
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "creds"},
+		},
+		Status: cloudflarev1alpha1.CloudflareDNSRecordStatus{
+			RecordID: "rec-stable",
+		},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{cfclient.SecretKeyAPIToken: []byte("token")},
+	}
+
+	mock := newMockDNSClient()
+	// 5xx — transient, ID must NOT be cleared, list path must NOT be reached.
+	mock.getErr = &cfgo.Error{StatusCode: http.StatusInternalServerError}
+
+	r := buildReconciler(scheme, mock, dns, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(dns),
+	}); err != nil {
+		t.Fatalf("unexpected error from Reconcile: %v", err)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareDNSRecord{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(dns), updated); err != nil {
+		t.Fatalf("get updated record: %v", err)
+	}
+	if updated.Status.RecordID != "rec-stable" {
+		t.Errorf("Status.RecordID = %q, want %q (must NOT be cleared on transient error)", updated.Status.RecordID, "rec-stable")
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonCloudflareError {
+		t.Errorf("Reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonCloudflareError)
+	}
+	if updated.Status.Phase != cloudflarev1alpha1.PhaseError {
+		t.Errorf("Phase = %q, want %q", updated.Status.Phase, cloudflarev1alpha1.PhaseError)
 	}
 }
