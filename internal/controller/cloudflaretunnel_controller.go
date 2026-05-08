@@ -163,14 +163,33 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 8. Aggregate rules and reconcile connector — only once the tunnel has a
 	// CNAME (i.e. provisioning succeeded at least once).
 	if tunnel.Status.TunnelCNAME != "" {
+		// 8a. Reconcile the apex CloudflareDNSRecord, if spec.apexHostname is
+		// set. Apex reconciliation runs BEFORE connector/rules so that
+		// writeTunnelAggStatus (called from ReconcileConnectorAndRules)
+		// persists the apex condition + status atomically with the rest of
+		// the terminal status write. Apex problems do NOT block the
+		// connector/rules step — they only flip ApexHostnameReady.
+		apexRes, err := reconcileApexHostname(ctx, r.Client, &tunnel)
+		if err != nil {
+			logger.Error(err, "apex reconcile failed")
+			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "ApexReconcileFailed", err.Error())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+
 		if err := ReconcileConnectorAndRules(ctx, r.Client, &tunnel, preStatus); err != nil {
 			logger.Error(err, "aggregator/connector failed")
 			r.Recorder.Event(&tunnel, corev1.EventTypeWarning, "AggregationFailed", err.Error())
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
-		// writeTunnelAggStatus (called by ReconcileConnectorAndRules) has already
-		// persisted the full status including the Ready condition set above.
-		return result, nil
+
+		// Combine the tunnel's natural requeue with the apex result. The
+		// shorter of the two wins so the operator catches up promptly when
+		// the apex needs a faster recheck (e.g. zone-not-ready).
+		merged := result
+		if apexRes.RequeueAfter > 0 && (merged.RequeueAfter == 0 || apexRes.RequeueAfter < merged.RequeueAfter) {
+			merged.RequeueAfter = apexRes.RequeueAfter
+		}
+		return merged, nil
 	}
 
 	// No CNAME yet — persist the status update here (first-reconcile path).

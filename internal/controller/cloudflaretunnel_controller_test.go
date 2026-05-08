@@ -120,8 +120,15 @@ func buildTunnelReconciler(t *testing.T, mock *mockTunnelClient, objs ...client.
 	t.Helper()
 	s := testScheme(t)
 
-	// Collect CRD objects for status subresource registration
-	var statusObjs []client.Object
+	// Register status subresource for every CRD type the tunnel reconcile
+	// may touch (apex reconciliation reads CloudflareDNSRecord/CloudflareZone
+	// status). Specific CloudflareTunnel objects are appended so the fake
+	// client tracks their resourceVersion accurately.
+	statusObjs := []client.Object{
+		&cloudflarev1alpha1.CloudflareTunnel{},
+		&cloudflarev1alpha1.CloudflareDNSRecord{},
+		&cloudflarev1alpha1.CloudflareZone{},
+	}
 	for _, o := range objs {
 		if _, ok := o.(*cloudflarev1alpha1.CloudflareTunnel); ok {
 			statusObjs = append(statusObjs, o)
@@ -1672,5 +1679,145 @@ func TestReconcileDelete_RetriesOnTunnelHasActiveConnections(t *testing.T) {
 	}
 	if cond.Reason != cloudflarev1alpha1.ReasonTunnelHasConnections {
 		t.Errorf("Reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonTunnelHasConnections)
+	}
+}
+
+// TestReconcile_ApexHostname_CreatesApexRecord covers the full Reconcile
+// flow with spec.apexHostname set: the orchestrator runs after
+// Status.TunnelCNAME is populated and before ReconcileConnectorAndRules,
+// produces the apex CloudflareDNSRecord with the right Spec, and
+// populates Status.ApexHostname. The aggregator's status write
+// (writeTunnelAggStatus) persists the apex condition + status atomically.
+func TestReconcile_ApexHostname_CreatesApexRecord(t *testing.T) {
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	tunnel.Spec.ApexHostname = &cloudflarev1alpha1.ApexHostnameSpec{
+		Name:    "edge.example.com",
+		ZoneRef: cloudflarev1alpha1.ZoneReference{Name: "example-com"},
+	}
+
+	zone := &cloudflarev1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: "default"},
+		Spec:       cloudflarev1alpha1.CloudflareZoneSpec{Name: "example.com"},
+		Status: cloudflarev1alpha1.CloudflareZoneStatus{
+			Conditions: []metav1.Condition{{
+				Type:   cloudflarev1alpha1.ConditionTypeReady,
+				Status: metav1.ConditionTrue,
+				Reason: cloudflarev1alpha1.ReasonReconcileSuccess,
+			}},
+		},
+	}
+	secret := newTestSecret("default")
+	mock := newMockTunnelClient()
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret, zone)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Apex CloudflareDNSRecord was created with the right spec.
+	var apex cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Name: "test-tunnel-apex", Namespace: "default"}, &apex); err != nil {
+		t.Fatalf("apex CR not found: %v", err)
+	}
+	if apex.Spec.Name != "edge.example.com" {
+		t.Errorf("apex.Spec.Name = %q, want edge.example.com", apex.Spec.Name)
+	}
+	if apex.Spec.Type != "CNAME" {
+		t.Errorf("apex.Spec.Type = %q, want CNAME", apex.Spec.Type)
+	}
+
+	// Status reflects the apex.
+	var updated cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get tunnel: %v", err)
+	}
+	if updated.Status.TunnelCNAME == "" {
+		t.Fatal("Status.TunnelCNAME should be populated by reconcileTunnel")
+	}
+	// Spec.Content on the apex CR is the CNAME the tunnel currently advertises.
+	if apex.Spec.Content == nil || *apex.Spec.Content != updated.Status.TunnelCNAME {
+		t.Errorf("apex.Spec.Content = %v, want pointer to %q",
+			apex.Spec.Content, updated.Status.TunnelCNAME)
+	}
+	if updated.Status.ApexHostname == nil {
+		t.Fatal("Status.ApexHostname should be populated")
+	}
+	if updated.Status.ApexHostname.Name != "edge.example.com" {
+		t.Errorf("Status.ApexHostname.Name = %q, want edge.example.com",
+			updated.Status.ApexHostname.Name)
+	}
+	// ApexHostnameReady condition was persisted by the aggregator's
+	// terminal status write — proves the in-memory writes survive.
+	apexCond := meta.FindStatusCondition(updated.Status.Conditions,
+		cloudflarev1alpha1.ConditionTypeApexHostnameReady)
+	if apexCond == nil {
+		t.Fatal("ApexHostnameReady condition missing from persisted status")
+	}
+	if apexCond.ObservedGeneration != updated.Generation {
+		t.Errorf("ApexHostnameReady ObservedGeneration = %d, want %d",
+			apexCond.ObservedGeneration, updated.Generation)
+	}
+}
+
+// TestReconcile_ApexHostname_RemovedFromSpec_GCs covers the full
+// Reconcile flow when spec.apexHostname is cleared: the orchestrator
+// deletes the previously-owned apex CR, clears Status.ApexHostname, and
+// removes the ApexHostnameReady condition.
+func TestReconcile_ApexHostname_RemovedFromSpec_GCs(t *testing.T) {
+	tunnel := newTestTunnel("test-tunnel", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	// Spec.ApexHostname intentionally nil (user removed it).
+	tunnel.Status.ApexHostname = &cloudflarev1alpha1.ApexHostnameStatus{
+		Name: "edge.example.com", RecordID: "rec-stale",
+	}
+	tunnel.Status.Conditions = []metav1.Condition{{
+		Type:   cloudflarev1alpha1.ConditionTypeApexHostnameReady,
+		Status: metav1.ConditionTrue,
+		Reason: cloudflarev1alpha1.ReasonReconcileSuccess,
+	}}
+
+	staleApex := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-tunnel-apex", Namespace: "default"},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			Name: "edge.example.com", Type: "CNAME",
+		},
+	}
+	secret := newTestSecret("default")
+	mock := newMockTunnelClient()
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret, staleApex)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "test-tunnel", Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Apex CR removed.
+	var probe cloudflarev1alpha1.CloudflareDNSRecord
+	getErr := r.Get(context.Background(),
+		types.NamespacedName{Name: "test-tunnel-apex", Namespace: "default"}, &probe)
+	if getErr == nil || !apierrors.IsNotFound(getErr) {
+		t.Errorf("stale apex CR not deleted: getErr=%v", getErr)
+	}
+
+	// Status cleared.
+	var updated cloudflarev1alpha1.CloudflareTunnel
+	if err := r.Get(context.Background(),
+		types.NamespacedName{Name: "test-tunnel", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get tunnel: %v", err)
+	}
+	if updated.Status.ApexHostname != nil {
+		t.Errorf("Status.ApexHostname = %+v, want nil", updated.Status.ApexHostname)
+	}
+	if meta.FindStatusCondition(updated.Status.Conditions,
+		cloudflarev1alpha1.ConditionTypeApexHostnameReady) != nil {
+		t.Errorf("ApexHostnameReady condition should be removed when spec is absent")
 	}
 }

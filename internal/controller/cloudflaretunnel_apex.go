@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	"github.com/jacaudi/cloudflare-operator/internal/status"
 )
 
 // Sentinel errors returned by validateApexSpec. Tests assert via errors.Is
@@ -204,7 +205,7 @@ func reconcileApexHostname(ctx context.Context, c client.Client, tunnel *cloudfl
 	}
 	if zone == nil || !zoneReady {
 		setApexCondition(tunnel, metav1.ConditionFalse, cloudflarev1alpha1.ReasonZoneRefNotReady,
-			fmt.Sprintf("zone %q not Ready", apex.ZoneRef.Name))
+			fmt.Sprintf("zone %q not Ready", apex.ZoneRef.Name), tunnel.Generation)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
@@ -220,7 +221,7 @@ func reconcileApexHostname(ctx context.Context, c client.Client, tunnel *cloudfl
 		case errors.Is(vErr, ErrApexInvalidName), errors.Is(vErr, ErrApexZoneMismatch):
 			reason = cloudflarev1alpha1.ReasonInvalidSpec
 		}
-		setApexCondition(tunnel, metav1.ConditionFalse, reason, vErr.Error())
+		setApexCondition(tunnel, metav1.ConditionFalse, reason, vErr.Error(), tunnel.Generation)
 		return ctrl.Result{}, nil
 	}
 
@@ -232,7 +233,8 @@ func reconcileApexHostname(ctx context.Context, c client.Client, tunnel *cloudfl
 	if collide != nil {
 		setApexCondition(tunnel, metav1.ConditionFalse,
 			cloudflarev1alpha1.ReasonRecordOwnershipConflict,
-			fmt.Sprintf("CloudflareDNSRecord %s/%s already claims %q", collide.Namespace, collide.Name, apex.Name))
+			fmt.Sprintf("CloudflareDNSRecord %s/%s already claims %q", collide.Namespace, collide.Name, apex.Name),
+			tunnel.Generation)
 		return ctrl.Result{}, nil
 	}
 
@@ -254,10 +256,10 @@ func reconcileApexHostname(ctx context.Context, c client.Client, tunnel *cloudfl
 	}
 	if isDNSRecordReady(current) {
 		setApexCondition(tunnel, metav1.ConditionTrue, cloudflarev1alpha1.ReasonReconcileSuccess,
-			"apex CloudflareDNSRecord Ready")
+			"apex CloudflareDNSRecord Ready", tunnel.Generation)
 	} else {
 		setApexCondition(tunnel, metav1.ConditionFalse, cloudflarev1alpha1.ReasonApexRecordPending,
-			"apex CloudflareDNSRecord not yet Ready")
+			"apex CloudflareDNSRecord not yet Ready", tunnel.Generation)
 	}
 	return ctrl.Result{}, nil
 }
@@ -286,14 +288,12 @@ func fetchApexZone(ctx context.Context, c client.Client, tunnelNs string, ref cl
 // setApexCondition writes a single ApexHostnameReady condition with the
 // supplied status, reason, and message. The tunnel's overall Ready
 // condition is intentionally NOT updated here — apex problems must not
-// take down a working tunnel (design D5).
-func setApexCondition(tunnel *cloudflarev1alpha1.CloudflareTunnel, status metav1.ConditionStatus, reason, message string) {
-	meta.SetStatusCondition(&tunnel.Status.Conditions, metav1.Condition{
-		Type:    cloudflarev1alpha1.ConditionTypeApexHostnameReady,
-		Status:  status,
-		Reason:  reason,
-		Message: message,
-	})
+// take down a working tunnel (design D5). generation is threaded through
+// to ObservedGeneration so the condition reflects the spec revision it
+// was evaluated against, matching the rest of the codebase.
+func setApexCondition(tunnel *cloudflarev1alpha1.CloudflareTunnel, condStatus metav1.ConditionStatus, reason, message string, generation int64) {
+	status.SetCondition(&tunnel.Status.Conditions, cloudflarev1alpha1.ConditionTypeApexHostnameReady,
+		condStatus, reason, message, generation)
 }
 
 // isDNSRecordReady reports whether rec has a Ready=True condition.
