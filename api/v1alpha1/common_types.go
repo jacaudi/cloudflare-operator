@@ -83,15 +83,17 @@ const (
 	ReasonTxtRegistryGap          = "TxtRegistryGap"
 	// ReasonTxtDecryptFailed is retained as a placeholder for the encryption
 	// code path that is in-tree but not yet active. Do not remove.
-	ReasonTxtDecryptFailed  = "TxtDecryptFailed"
-	ReasonRecordAdopted     = "RecordAdopted"
-	ReasonDNSReconciled     = "DNSReconciled"
-	ReasonDuplicateHostname = "DuplicateHostname"
-	ReasonApplied           = "Applied"
-	ReasonNotConfigured     = "NotConfigured"
-	ReasonPermissionDenied  = "PermissionDenied"
-	ReasonPlanTierRequired  = "PlanTierRequired"
-	ReasonPartialApply      = "PartialApply"
+	ReasonTxtDecryptFailed     = "TxtDecryptFailed"
+	ReasonRecordAdopted        = "RecordAdopted"
+	ReasonDNSReconciled        = "DNSReconciled"
+	ReasonDuplicateHostname    = "DuplicateHostname"
+	ReasonApplied              = "Applied"
+	ReasonNotConfigured        = "NotConfigured"
+	ReasonPermissionDenied     = "PermissionDenied"
+	ReasonPlanTierRequired     = "PlanTierRequired"
+	ReasonPartialApply         = "PartialApply"
+	ReasonTunnelHasConnections = "TunnelHasConnections"
+	ReasonDrainingConnector    = "DrainingConnector"
 )
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.

@@ -48,6 +48,16 @@ func TestClassifyCloudflareError(t *testing.T) {
 			false,
 		},
 		{
+			"400 with code 1022 routes to TunnelHasConnections before InvalidSpec",
+			&cfgo.Error{
+				StatusCode: http.StatusBadRequest,
+				Errors:     []shared.ErrorData{{Code: 1022}},
+			},
+			cloudflarev1alpha1.ReasonTunnelHasConnections,
+			30 * time.Second,
+			false,
+		},
+		{
 			"403 with code 1015 routes to PlanTierRequired before PermissionDenied",
 			planTierErr,
 			cloudflarev1alpha1.ReasonPlanTierRequired,

@@ -54,6 +54,11 @@ func ClassifyCloudflareError(err error) ErrorRouting {
 			RequeueAfter:  0,
 			ResetRemoteID: true,
 		}
+	case cfclient.IsTunnelHasActiveConnections(err):
+		return ErrorRouting{
+			Reason:       cloudflarev1alpha1.ReasonTunnelHasConnections,
+			RequeueAfter: 30 * time.Second,
+		}
 	case cfclient.IsBadRequest(err):
 		return ErrorRouting{
 			Reason:       cloudflarev1alpha1.ReasonInvalidSpec,
