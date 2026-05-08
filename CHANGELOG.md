@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.0...v0.18.1) (2026-05-08)
+
+### Bug Fixes
+
+* **dns:** propagate spec.name changes to Cloudflare ([#104](https://github.com/jacaudi/cloudflare-operator/issues/104)) ([d85a184](https://github.com/jacaudi/cloudflare-operator/commit/d85a184cf30a00357e276d33967f5b26b4fcaa78))
+
 ## [0.18.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.17.0...v0.18.0) (2026-05-08)
 
 ### Bug Fixes
