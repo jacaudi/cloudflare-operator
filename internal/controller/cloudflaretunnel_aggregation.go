@@ -71,6 +71,10 @@ func ReconcileConnectorAndRules(ctx context.Context, c client.Client, tun *cloud
 		if err := reconcileConnectorResources(ctx, c, tun, agg); err != nil {
 			return err
 		}
+	} else {
+		if err := cleanupConnectorResources(ctx, c, tun); err != nil {
+			return err
+		}
 	}
 
 	for i := range filtered {

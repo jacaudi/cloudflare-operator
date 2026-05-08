@@ -1780,3 +1780,49 @@ func TestCleanupConnectorResources_NoOpWhenAbsent(t *testing.T) {
 		t.Fatalf("cleanup returned error on empty cluster: %v", err)
 	}
 }
+
+// TestReconcileConnectorAndRules_DeletesResourcesOnDisable verifies the
+// end-to-end disable transition: with connector resources owned by the
+// tunnel already in place, calling ReconcileConnectorAndRules with
+// Spec.Connector.Enabled = false deletes them.
+func TestReconcileConnectorAndRules_DeletesResourcesOnDisable(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	tun.Spec.Connector.Enabled = false // simulate the flip to disabled
+	dep, sa, cm, pdb := connectorResourcesFixture(tun, "cloudflared-home")
+	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	preStatus := tun.Status.DeepCopy()
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, preStatus); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+
+	// All four resources gone.
+	for _, tc := range []struct {
+		kind string
+		obj  client.Object
+		name string
+	}{
+		{"Deployment", &appsv1.Deployment{}, "cloudflared-home"},
+		{"ServiceAccount", &corev1.ServiceAccount{}, "cloudflared-home"},
+		{"ConfigMap", &corev1.ConfigMap{}, "cloudflared-home-config"},
+		{"PodDisruptionBudget", &policyv1.PodDisruptionBudget{}, "cloudflared-home-pdb"},
+	} {
+		err := c.Get(context.Background(), types.NamespacedName{Name: tc.name, Namespace: tun.Namespace}, tc.obj)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("expected %s %q deleted, got err=%v", tc.kind, tc.name, err)
+		}
+	}
+}
+
+// TestReconcileConnectorAndRules_NoOpWhenSteadyStateDisabled verifies
+// that a disabled connector with no resources to clean up returns nil
+// without error.
+func TestReconcileConnectorAndRules_NoOpWhenSteadyStateDisabled(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false) // Spec.Connector == nil
+	c := buildAggFakeClient(tun)
+
+	preStatus := tun.Status.DeepCopy()
+	if err := ReconcileConnectorAndRules(context.Background(), c, tun, preStatus); err != nil {
+		t.Fatalf("ReconcileConnectorAndRules: %v", err)
+	}
+}
