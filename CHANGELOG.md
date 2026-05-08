@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.14.1...v0.15.0) (2026-05-08)
+
+### Bug Fixes
+
+* **connector:** defer legacy cleanup until new connector is Ready ([#93](https://github.com/jacaudi/cloudflare-operator/issues/93)) ([018cc1e](https://github.com/jacaudi/cloudflare-operator/commit/018cc1e595390647520a89f8faf82062c1541c99))
+* **connector:** tighten cleanup unowned-test + soften godoc ([#93](https://github.com/jacaudi/cloudflare-operator/issues/93)) ([8c54bdb](https://github.com/jacaudi/cloudflare-operator/commit/8c54bdba25d7c3074829a20cf32ad1ed2e40327e))
+
+
+### Features
+
+* **connector:** add legacy-name cleanup helper for default rename ([#93](https://github.com/jacaudi/cloudflare-operator/issues/93)) ([c722989](https://github.com/jacaudi/cloudflare-operator/commit/c7229897c084502ea6cad686a380242a6f8ad4bf))
+* **connector:** default base name to cloudflared-<tunnel> ([#93](https://github.com/jacaudi/cloudflare-operator/issues/93)) ([53648c4](https://github.com/jacaudi/cloudflare-operator/commit/53648c427710ec63ff2a2efe2835c98c848efee0))
+* **connector:** run legacy-name cleanup after successful apply ([#93](https://github.com/jacaudi/cloudflare-operator/issues/93)) ([fbec355](https://github.com/jacaudi/cloudflare-operator/commit/fbec3557d9eccd5fd0f48cc121ec8530a0350d9a))
+
 ## [Unreleased]
 
 ### Changed
