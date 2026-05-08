@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.17.0...v0.18.0) (2026-05-08)
+
+### Bug Fixes
+
+* **controller:** apex plumbing errors must not skip connector reconcile ([#101](https://github.com/jacaudi/cloudflare-operator/issues/101)) ([f7d4722](https://github.com/jacaudi/cloudflare-operator/commit/f7d47228350ac7a751c1276a6507fc63462772d1))
+
+
+### Features
+
+* **api:** add CloudflareTunnel.spec.apexHostname types ([#101](https://github.com/jacaudi/cloudflare-operator/issues/101)) ([d6aa674](https://github.com/jacaudi/cloudflare-operator/commit/d6aa67467d8a931cf667e1daeedcdd9ca4992b5c))
+* **controller:** apex hostname helpers ([#101](https://github.com/jacaudi/cloudflare-operator/issues/101)) ([cd16dfe](https://github.com/jacaudi/cloudflare-operator/commit/cd16dfe079f788d3a29cac0decd35556c618a165))
+* **controller:** apex hostname reconciler orchestrator ([#101](https://github.com/jacaudi/cloudflare-operator/issues/101)) ([ba0a054](https://github.com/jacaudi/cloudflare-operator/commit/ba0a054bb116ffca439f7ac77afd91e0032e1c6a))
+* **controller:** resolveTunnelCNAME prefers apex when Ready ([#101](https://github.com/jacaudi/cloudflare-operator/issues/101)) ([3a37f28](https://github.com/jacaudi/cloudflare-operator/commit/3a37f28d893b12a49bdf34d776af3895fce4075b))
+* **controller:** wire apex reconciler into tunnel Reconcile ([#101](https://github.com/jacaudi/cloudflare-operator/issues/101)) ([8be1001](https://github.com/jacaudi/cloudflare-operator/commit/8be1001d33416759f0190d593b369b3cecdba070))
+
 ## [0.17.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.16.0...v0.17.0) (2026-05-08)
 
 ### Bug Fixes
