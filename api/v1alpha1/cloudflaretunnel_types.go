@@ -96,9 +96,15 @@ type ConnectorSpec struct {
 	// NameOverride sets the base name for the operator-managed connector
 	// resources. When set, the Deployment and ServiceAccount are named
 	// exactly NameOverride and the ConfigMap is named "<NameOverride>-config".
-	// When unset, the operator falls back to "<tunnel.metadata.name>-connector"
-	// for the Deployment + ServiceAccount and "<tunnel.metadata.name>-connector-config"
-	// for the ConfigMap.
+	// When unset, names default to the "cloudflared-<tunnel.metadata.name>"
+	// family (Deployment and ServiceAccount) and
+	// "cloudflared-<tunnel.metadata.name>-config" (ConfigMap).
+	//
+	// On upgrade from operator versions that defaulted the base to
+	// "<tunnel.metadata.name>-connector", the connector reconciler
+	// automatically deletes the legacy-named resources owned by this
+	// CloudflareTunnel after the new-named resources are running. Setting
+	// NameOverride suppresses this auto-cleanup; the user is in charge.
 	//
 	// Changing NameOverride on a live tunnel reconciles new resources at the
 	// new name; the old resources are not cleaned up automatically (see #52).
