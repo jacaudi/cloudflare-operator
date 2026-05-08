@@ -220,8 +220,13 @@ func resolveZoneRefFromAnnotations(
 
 // resolveTunnelCNAME looks up the CloudflareTunnel named by the annotation
 // cloudflare.io/target (tunnel:<name>) in the given namespace (overridable via
-// cloudflare.io/tunnel-ref-namespace). It returns the tunnel's CNAME, the
-// tunnel's ready state, and any error.
+// cloudflare.io/tunnel-ref-namespace) and returns the CNAME target per-route
+// records should resolve to.
+//
+// When the tunnel has Status.ApexHostname.Name set and ApexHostnameReady=True,
+// returns the apex name (so per-route records CNAME to the stable apex rather
+// than the tunnel UUID — see #101). Otherwise returns Status.TunnelCNAME, the
+// direct <uuid>.cfargotunnel.com target.
 //
 // Returns (cname, ready, nil) on success.
 // Returns ("", false, nil) when the tunnel exists but has no CNAME yet (not ready).
