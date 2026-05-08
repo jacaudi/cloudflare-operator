@@ -29,6 +29,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`CloudflareTunnel.spec.apexHostname`**: opt-in operator-managed apex CNAME for a tunnel. When set, the operator reconciles a single `CloudflareDNSRecord` (named `<tunnel>-apex`) that CNAMEs to the tunnel's `.cfargotunnel.com` address; per-route records emitted by the HTTPRoute and Service source controllers CNAME to the apex instead of the tunnel UUID. Tunnel UUID rotation collapses to one record update — per-route records do not move. New `Status.ApexHostname` and `ApexHostnameReady` condition. Validation refuses to upsert when the apex name doesn't fall under the referenced zone or another `CloudflareDNSRecord` CR in the namespace already claims the same FQDN. Closes #101.
+
 ### Changed
 
 - **CloudflareTunnel connector default rename.** The default base name for the operator-managed connector resources is now `cloudflared-<tunnel-name>` (was `<tunnel-name>-connector`). New resource names: Deployment / ServiceAccount `cloudflared-<tun>`, ConfigMap `cloudflared-<tun>-config`, PodDisruptionBudget `cloudflared-<tun>-pdb`. Pods now appear in `kubectl get pods` as `cloudflared-<tun>-...`, matching the Cloudflare upstream Helm chart. The connector reconciler automatically deletes the legacy `<tun>-connector` family of resources owned by your `CloudflareTunnel` on the next reconcile after upgrade, with no traffic gap (the new connector comes up first; both briefly coexist; legacy is then deleted). Users who set `spec.connector.nameOverride` are unaffected and the auto-cleanup is suppressed for them. Update any monitoring/alert filters that match the old pod-name prefix. (#93)
