@@ -147,7 +147,7 @@ kubectl patch cloudflaretunnel prod -n network \
   -p '{"spec":{"connector":{"enabled":false}}}'
 ```
 
-Setting `spec.connector.enabled: false` (or removing the `connector` block) tells the operator to stop running cloudflared for this tunnel. On the next reconcile the operator deletes the Deployment, ServiceAccount, ConfigMap, and PodDisruptionBudget it owns for this `CloudflareTunnel` — including any resources left over from prior `spec.connector.nameOverride` values. The deletion is gated on owner-reference UID, so any hand-applied resources sharing the connector labels are left alone. The operator continues to reconcile `CloudflareTunnelRule` CRs but does not render or update the ConfigMap while the connector is disabled.
+Setting `spec.connector.enabled: false` (or removing the `connector` block) tells the operator to stop running cloudflared for this tunnel. On the next reconcile the operator deletes the Deployment, ServiceAccount, ConfigMap, and PodDisruptionBudget it owns for this `CloudflareTunnel` — including any resources left over from prior `spec.connector.nameOverride` values. The deletion is gated on owner-reference UID, so any hand-applied resources sharing the connector labels are left alone. The credentials Secret named by `spec.generatedSecretName` is preserved so a self-managed cloudflared can keep using it. The operator continues to reconcile `CloudflareTunnelRule` CRs but does not render or update the ConfigMap while the connector is disabled.
 
 ---
 
