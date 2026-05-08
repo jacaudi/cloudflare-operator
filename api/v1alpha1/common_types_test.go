@@ -50,3 +50,29 @@ func TestConditionTypeConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestApexHostnameConstants(t *testing.T) {
+	if ConditionTypeApexHostnameReady == "" {
+		t.Error("ConditionTypeApexHostnameReady should not be empty")
+	}
+	if ConditionTypeApexHostnameReady != "ApexHostnameReady" {
+		t.Errorf("ConditionTypeApexHostnameReady = %q, want %q",
+			ConditionTypeApexHostnameReady, "ApexHostnameReady")
+	}
+	if ReasonApexRecordPending == "" {
+		t.Error("ReasonApexRecordPending should not be empty")
+	}
+	// ReasonApexRecordPending is an in-progress reason: derivePhase must
+	// map it to PhaseReconciling, not PhaseError. Membership in
+	// InProgressReasons is the contract.
+	found := false
+	for _, r := range InProgressReasons {
+		if r == ReasonApexRecordPending {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("ReasonApexRecordPending must be a member of InProgressReasons")
+	}
+}

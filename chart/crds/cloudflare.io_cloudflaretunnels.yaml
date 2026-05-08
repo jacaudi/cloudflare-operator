@@ -24,6 +24,9 @@ spec:
     - jsonPath: .status.tunnelCNAME
       name: CNAME
       type: string
+    - jsonPath: .status.apexHostname.name
+      name: Apex
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
@@ -58,6 +61,47 @@ spec:
           spec:
             description: spec defines the desired state of CloudflareTunnel
             properties:
+              apexHostname:
+                description: |-
+                  ApexHostname is an opt-in operator-managed apex CNAME for this
+                  tunnel. When set, the operator reconciles a single
+                  CloudflareDNSRecord named "<metadata.name>-apex" in this CR's
+                  namespace, owner-reffed to the tunnel. Per-route records emitted by
+                  the source controllers (HTTPRoute, Service) targeting this tunnel
+                  CNAME to the apex name once it is Ready. See issue #101.
+                properties:
+                  name:
+                    description: |-
+                      Name is the apex FQDN. Must fall under the zone referenced by
+                      ZoneRef (i.e. equal the zone name or have it as a suffix).
+                    minLength: 1
+                    type: string
+                  proxied:
+                    default: true
+                    description: |-
+                      Proxied controls whether the apex record is orange-clouded.
+                      Defaults to true; the apex's purpose is hiding the tunnel UUID
+                      behind a stable user-facing FQDN, so proxied is the natural default.
+                    type: boolean
+                  zoneRef:
+                    description: ZoneRef references the CloudflareZone that owns Name.
+                    properties:
+                      name:
+                        description: Name of the CloudflareZone resource.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: |-
+                          Namespace of the CloudflareZone. Defaults to the referencing CR's own
+                          namespace when empty.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - name
+                - zoneRef
+                type: object
               connector:
                 description: |-
                   Connector configures an operator-managed cloudflared workload for this
@@ -1418,6 +1462,22 @@ spec:
           status:
             description: status defines the observed state of CloudflareTunnel
             properties:
+              apexHostname:
+                description: |-
+                  ApexHostname reflects the operator-managed apex CloudflareDNSRecord
+                  when spec.apexHostname is set. Cleared when spec.apexHostname is
+                  removed.
+                properties:
+                  name:
+                    description: Name is the resolved apex FQDN currently being reconciled.
+                    type: string
+                  recordID:
+                    description: |-
+                      RecordID is the Cloudflare DNS record ID for the apex CNAME, copied
+                      from the underlying CloudflareDNSRecord's status. Empty until the
+                      apex record has reconciled at least once.
+                    type: string
+                type: object
               conditions:
                 description: 'Conditions: Ready, ConnectorReady, IngressConfigured.'
                 items:
