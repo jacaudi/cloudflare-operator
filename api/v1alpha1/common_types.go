@@ -54,6 +54,7 @@ const (
 	ConditionTypeNetworkApplied       = "NetworkApplied"
 	ConditionTypeDNSApplied           = "DNSApplied"
 	ConditionTypeBotManagementApplied = "BotManagementApplied"
+	ConditionTypeApexHostnameReady    = "ApexHostnameReady"
 )
 
 // Condition reason constants.
@@ -94,6 +95,9 @@ const (
 	ReasonPartialApply         = "PartialApply"
 	ReasonTunnelHasConnections = "TunnelHasConnections"
 	ReasonDrainingConnector    = "DrainingConnector"
+
+	// Tunnel apex hostname (issue #101).
+	ReasonApexRecordPending = "ApexRecordPending"
 )
 
 // FinalizerName is the finalizer used by all cloudflare-operator controllers.
@@ -132,4 +136,5 @@ var InProgressReasons = []string{
 	ReasonTunnelNotReady,
 	ReasonDrainingConnector,
 	ReasonTunnelHasConnections,
+	ReasonApexRecordPending,
 }

@@ -53,6 +53,15 @@ type CloudflareTunnelSpec struct {
 	// originRequest defaults applied to all rules.
 	// +optional
 	Routing *TunnelRoutingSpec `json:"routing,omitempty"`
+
+	// ApexHostname is an opt-in operator-managed apex CNAME for this
+	// tunnel. When set, the operator reconciles a single
+	// CloudflareDNSRecord named "<metadata.name>-apex" in this CR's
+	// namespace, owner-reffed to the tunnel. Per-route records emitted by
+	// the source controllers (HTTPRoute, Service) targeting this tunnel
+	// CNAME to the apex name once it is Ready. See issue #101.
+	// +optional
+	ApexHostname *ApexHostnameSpec `json:"apexHostname,omitempty"`
 }
 
 // ConnectorSpec configures the operator-managed cloudflared Deployment.
@@ -141,6 +150,45 @@ type TunnelRoutingSpec struct {
 	OriginRequest *TunnelRuleOriginRequest `json:"originRequest,omitempty"`
 }
 
+// ApexHostnameSpec configures an opt-in operator-managed apex CNAME for
+// this tunnel. When set, the operator reconciles a single
+// CloudflareDNSRecord at the named FQDN that CNAMEs to the tunnel's
+// .cfargotunnel.com address; per-route records emitted by the
+// HTTPRoute/Service sources targeting this tunnel CNAME to the apex
+// instead of the tunnel UUID, so tunnel rotation is one record update
+// rather than N. See issue #101.
+type ApexHostnameSpec struct {
+	// Name is the apex FQDN. Must fall under the zone referenced by
+	// ZoneRef (i.e. equal the zone name or have it as a suffix).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// ZoneRef references the CloudflareZone that owns Name.
+	// +kubebuilder:validation:Required
+	ZoneRef ZoneReference `json:"zoneRef"`
+
+	// Proxied controls whether the apex record is orange-clouded.
+	// Defaults to true; the apex's purpose is hiding the tunnel UUID
+	// behind a stable user-facing FQDN, so proxied is the natural default.
+	// +kubebuilder:default=true
+	// +optional
+	Proxied *bool `json:"proxied,omitempty"`
+}
+
+// ApexHostnameStatus reflects the operator-managed apex CloudflareDNSRecord.
+type ApexHostnameStatus struct {
+	// Name is the resolved apex FQDN currently being reconciled.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// RecordID is the Cloudflare DNS record ID for the apex CNAME, copied
+	// from the underlying CloudflareDNSRecord's status. Empty until the
+	// apex record has reconciled at least once.
+	// +optional
+	RecordID string `json:"recordID,omitempty"`
+}
+
 // CloudflareTunnelStatus defines the observed state of a CloudflareTunnel.
 type CloudflareTunnelStatus struct {
 	// Conditions: Ready, ConnectorReady, IngressConfigured.
@@ -171,6 +219,12 @@ type CloudflareTunnelStatus struct {
 	// Deployment (when spec.connector.enabled=true).
 	// +optional
 	Connector *ConnectorStatus `json:"connector,omitempty"`
+
+	// ApexHostname reflects the operator-managed apex CloudflareDNSRecord
+	// when spec.apexHostname is set. Cleared when spec.apexHostname is
+	// removed.
+	// +optional
+	ApexHostname *ApexHostnameStatus `json:"apexHostname,omitempty"`
 
 	// LastSyncedAt is the last time the tunnel was successfully synced.
 	// +optional
@@ -205,6 +259,7 @@ type ConnectorStatus struct {
 // +kubebuilder:printcolumn:name="Tunnel Name",type=string,JSONPath=`.spec.name`
 // +kubebuilder:printcolumn:name="Tunnel ID",type=string,JSONPath=`.status.tunnelID`
 // +kubebuilder:printcolumn:name="CNAME",type=string,JSONPath=`.status.tunnelCNAME`
+// +kubebuilder:printcolumn:name="Apex",type=string,JSONPath=`.status.apexHostname.name`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

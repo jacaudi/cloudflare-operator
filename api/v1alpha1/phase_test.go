@@ -14,6 +14,7 @@ func TestInProgressReasons_KnownInProgressMembers(t *testing.T) {
 		ReasonTunnelNotReady,
 		ReasonDrainingConnector,
 		ReasonTunnelHasConnections,
+		ReasonApexRecordPending,
 	}
 	for _, r := range wantIn {
 		if !slices.Contains(InProgressReasons, r) {
