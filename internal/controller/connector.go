@@ -59,12 +59,31 @@ type ConnectorResourceNames struct {
 // When tun.Spec.Connector.NameOverride is set, the Deployment and
 // ServiceAccount are named exactly NameOverride and the ConfigMap is named
 // "<NameOverride>-config". When unset, names fall back to the
-// "<tunnel.metadata.name>-connector" family.
+// "cloudflared-<tunnel.metadata.name>" family so the workload type is
+// visible in `kubectl get pods` output cluster-wide.
 func ConnectorNames(tun *cloudflarev1alpha1.CloudflareTunnel) ConnectorResourceNames {
-	base := tun.Name + "-connector"
+	base := "cloudflared-" + tun.Name
 	if tun.Spec.Connector != nil && tun.Spec.Connector.NameOverride != "" {
 		base = tun.Spec.Connector.NameOverride
 	}
+	return ConnectorResourceNames{
+		Deployment:          base,
+		ConfigMap:           base + "-config",
+		ServiceAccount:      base,
+		PodDisruptionBudget: base + "-pdb",
+	}
+}
+
+// legacyConnectorNames returns the pre-rename "<tunnel-name>-connector"
+// family of resource names for tun. It exists so the connector reconciler
+// can find and delete legacy-named resources after a successful rename to
+// the new default.
+//
+// Callers MUST gate use on tun.Spec.Connector.NameOverride == "": when an
+// override is set, the override name is the source of truth and there is
+// no legacy family to clean up.
+func legacyConnectorNames(tun *cloudflarev1alpha1.CloudflareTunnel) ConnectorResourceNames {
+	base := tun.Name + "-connector"
 	return ConnectorResourceNames{
 		Deployment:          base,
 		ConfigMap:           base + "-config",
