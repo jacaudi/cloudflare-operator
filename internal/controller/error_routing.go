@@ -37,9 +37,11 @@ type ErrorRouting struct {
 
 // ClassifyCloudflareError walks the predicate ladder (first match wins)
 // and returns the routing decision for err. Predicate order is significant
-// only between IsPlanTierRequired and IsPermissionDenied (both match 403);
-// the plan-tier check MUST come first so plan-restricted failures get the
-// distinct PlanTierRequired reason rather than the catch-all PermissionDenied.
+// where multiple predicates can match the same status code: the more-specific
+// predicate MUST come first so the failure gets a distinct condition reason
+// rather than the catch-all. Currently:
+//   - IsTunnelHasActiveConnections (400 + code 1022) before IsBadRequest (any 400)
+//   - IsPlanTierRequired (403 + code 1015) before IsPermissionDenied (any 403)
 //
 // nil err returns the zero ErrorRouting{}; callers MUST gate on err != nil
 // before calling. The zero value's empty Reason would write an invalid
