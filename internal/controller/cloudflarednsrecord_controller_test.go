@@ -2361,6 +2361,9 @@ func TestReconcile_RenamesRecordInPlace(t *testing.T) {
 	if got2.Status.CurrentContent != testDNSContent {
 		t.Errorf("Status.CurrentContent = %q, want %q", got2.Status.CurrentContent, testDNSContent)
 	}
+	if got2.Status.RecordID != recID {
+		t.Errorf("Status.RecordID = %q, want %q (rename must be in-place, not delete+create)", got2.Status.RecordID, recID)
+	}
 }
 
 func TestNeedsUpdate_NameChange(t *testing.T) {
