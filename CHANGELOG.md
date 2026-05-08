@@ -6,6 +6,10 @@
 
 - **CloudflareTunnel connector default rename.** The default base name for the operator-managed connector resources is now `cloudflared-<tunnel-name>` (was `<tunnel-name>-connector`). New resource names: Deployment / ServiceAccount `cloudflared-<tun>`, ConfigMap `cloudflared-<tun>-config`, PodDisruptionBudget `cloudflared-<tun>-pdb`. Pods now appear in `kubectl get pods` as `cloudflared-<tun>-...`, matching the Cloudflare upstream Helm chart. The connector reconciler automatically deletes the legacy `<tun>-connector` family of resources owned by your `CloudflareTunnel` on the next reconcile after upgrade, with no traffic gap (the new connector comes up first; both briefly coexist; legacy is then deleted). Users who set `spec.connector.nameOverride` are unaffected and the auto-cleanup is suppressed for them. Update any monitoring/alert filters that match the old pod-name prefix. (#93)
 
+### Fixed
+
+- **Transient errors no longer wipe stored remote IDs.** The DNS and tunnel reconcilers previously cleared `Status.RecordID` / `Status.TunnelID` on any error from the in-flow Get-by-ID call, including transient 5xx responses or network blips. They now gate the ID-clear on `cfclient.IsNotFound(err)` (the same shape the zone reconciler uses); other errors propagate to the existing outer-`Reconcile` classifier, which preserves the stored ID and surfaces a `CloudflareAPIError` (or `PermissionDenied` / `BadRequest` / `PlanTierRequired`) condition `Reason` while the workqueue retries with backoff. Closes #85.
+
 ## [0.14.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.14.0...v0.14.1) (2026-05-06)
 
 ### Bug Fixes
