@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.17.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.16.0...v0.17.0) (2026-05-08)
+
+### Bug Fixes
+
+* **api:** classify deletion-drain reasons as in-progress, not error ([c13d77a](https://github.com/jacaudi/cloudflare-operator/commit/c13d77a3b47e182ca328192d75d013d5ec2e8c58))
+* **tunnel:** drain connector before DeleteTunnel ([#100](https://github.com/jacaudi/cloudflare-operator/issues/100)) ([964d4c5](https://github.com/jacaudi/cloudflare-operator/commit/964d4c51ec42f48060fcf3164e0cfec5570f461b))
+
+
+### Features
+
+* **cfclient:** add IsTunnelHasActiveConnections predicate ([#100](https://github.com/jacaudi/cloudflare-operator/issues/100)) ([fc37c2a](https://github.com/jacaudi/cloudflare-operator/commit/fc37c2a1dcc4c556371f11b877ab9ff3cd4db36c))
+* **controller:** route 400/1022 to TunnelHasConnections ([#100](https://github.com/jacaudi/cloudflare-operator/issues/100)) ([96d83ae](https://github.com/jacaudi/cloudflare-operator/commit/96d83ae97804c22c545bd99aed61210d8c7fee19))
+
 ## [0.16.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.15.0...v0.16.0) (2026-05-08)
 
 ### Bug Fixes
