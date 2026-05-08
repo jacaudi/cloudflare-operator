@@ -13,6 +13,7 @@ import (
 	"time"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
+	"github.com/cloudflare/cloudflare-go/v6/shared"
 	cloudflarev1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cfclient "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 
@@ -1499,5 +1500,167 @@ func TestReconcileTunnel_GetByID_TransientError_PreservesID(t *testing.T) {
 	}
 	if updated.Status.Phase != cloudflarev1alpha1.PhaseError {
 		t.Errorf("Phase = %q, want %q", updated.Status.Phase, cloudflarev1alpha1.PhaseError)
+	}
+}
+
+// TestReconcileDelete_DrainsConnectorBeforeAPIDelete verifies the happy path:
+// with Spec.Connector.Enabled=true and a connector Deployment at replicas=2,
+// deletion scales it to 0, requeues; the next reconcile (with ReadyReplicas
+// flipped to 0) calls DeleteTunnel and clears the finalizer.
+func TestReconcileDelete_DrainsConnectorBeforeAPIDelete(t *testing.T) {
+	tunnel := newTestTunnel("tun", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	now := metav1.Now()
+	tunnel.DeletionTimestamp = &now
+	tunnel.Spec.SecretRef = cloudflarev1alpha1.SecretReference{Name: "creds"}
+	tunnel.Spec.Connector = &cloudflarev1alpha1.ConnectorSpec{Enabled: true, Replicas: 2}
+	tunnel.Status.TunnelID = "tun-uuid"
+	tunnel.Status.TunnelCNAME = "tun-uuid.cfargotunnel.com"
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+	depName := ConnectorNames(tunnel).Deployment
+	two := int32(2)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: depName, Namespace: "default"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &two},
+		Status:     appsv1.DeploymentStatus{ReadyReplicas: 2},
+	}
+
+	mock := newMockTunnelClient()
+	r := buildTunnelReconciler(t, mock, tunnel, secret, dep)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	})
+	if err != nil {
+		t.Fatalf("first reconcile error: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("first reconcile RequeueAfter = 0, want > 0 (drain in progress)")
+	}
+	if mock.deleteCalled {
+		t.Error("DeleteTunnel was called before drain completed")
+	}
+	gotDep := &appsv1.Deployment{}
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: depName}, gotDep); err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	if gotDep.Spec.Replicas == nil || *gotDep.Spec.Replicas != 0 {
+		t.Errorf("Spec.Replicas = %v, want 0", gotDep.Spec.Replicas)
+	}
+
+	gotDep.Status.ReadyReplicas = 0
+	if err := r.Status().Update(context.Background(), gotDep); err != nil {
+		t.Fatalf("update deployment status: %v", err)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareTunnel{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), updated); err != nil {
+		t.Fatalf("re-get tunnel: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(updated),
+	}); err != nil {
+		t.Fatalf("second reconcile error: %v", err)
+	}
+	if !mock.deleteCalled {
+		t.Error("DeleteTunnel was not called after drain completed")
+	}
+	gotTun := &cloudflarev1alpha1.CloudflareTunnel{}
+	err = r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), gotTun)
+	if err == nil && len(gotTun.Finalizers) > 0 {
+		t.Errorf("finalizer still present: %v", gotTun.Finalizers)
+	}
+}
+
+// TestReconcileDelete_NoConnector_DeletesImmediately verifies that without a
+// managed connector, the deletion path skips the drain step and calls
+// DeleteTunnel on the first reconcile.
+func TestReconcileDelete_NoConnector_DeletesImmediately(t *testing.T) {
+	tunnel := newTestTunnel("tun", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	now := metav1.Now()
+	tunnel.DeletionTimestamp = &now
+	tunnel.Spec.SecretRef = cloudflarev1alpha1.SecretReference{Name: "creds"}
+	tunnel.Status.TunnelID = "tun-uuid"
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	}); err != nil {
+		t.Fatalf("reconcile error: %v", err)
+	}
+	if !mock.deleteCalled {
+		t.Error("DeleteTunnel was not called on the first reconcile (no drain step needed)")
+	}
+}
+
+// TestReconcileDelete_RetriesOnTunnelHasActiveConnections verifies that a
+// 400/1022 response from DeleteTunnel routes to ReasonTunnelHasConnections
+// with 30s requeue, and Status.TunnelID is preserved.
+func TestReconcileDelete_RetriesOnTunnelHasActiveConnections(t *testing.T) {
+	tunnel := newTestTunnel("tun", "default")
+	tunnel.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	now := metav1.Now()
+	tunnel.DeletionTimestamp = &now
+	tunnel.Spec.SecretRef = cloudflarev1alpha1.SecretReference{Name: "creds"}
+	tunnel.Status.TunnelID = "tun-uuid"
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data: map[string][]byte{
+			cfclient.SecretKeyAPIToken:  []byte("token"),
+			cfclient.SecretKeyAccountID: []byte("acct"),
+		},
+	}
+
+	mock := newMockTunnelClient()
+	mock.deleteErr = &cfgo.Error{
+		StatusCode: http.StatusBadRequest,
+		Errors:     []shared.ErrorData{{Code: 1022, Message: "This tunnel has active connections"}},
+	}
+
+	r := buildTunnelReconciler(t, mock, tunnel, secret)
+
+	res, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKeyFromObject(tunnel),
+	})
+	if err != nil {
+		t.Fatalf("reconcile error: %v", err)
+	}
+	if res.RequeueAfter != 30*time.Second {
+		t.Errorf("RequeueAfter = %v, want 30s", res.RequeueAfter)
+	}
+
+	updated := &cloudflarev1alpha1.CloudflareTunnel{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), updated); err != nil {
+		t.Fatalf("get tunnel: %v", err)
+	}
+	if updated.Status.TunnelID != "tun-uuid" {
+		t.Errorf("Status.TunnelID = %q, want %q (must NOT be cleared on 1022)",
+			updated.Status.TunnelID, "tun-uuid")
+	}
+	cond := meta.FindStatusCondition(updated.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil {
+		t.Fatal("Ready condition missing")
+	}
+	if cond.Reason != cloudflarev1alpha1.ReasonTunnelHasConnections {
+		t.Errorf("Reason = %q, want %q", cond.Reason, cloudflarev1alpha1.ReasonTunnelHasConnections)
 	}
 }

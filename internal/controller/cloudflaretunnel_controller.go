@@ -493,6 +493,22 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 				nil, cloudflarev1alpha1.ReasonSecretNotFound, wrapDeleteErr(err), 30*time.Second)
 		}
 
+		drained, derr := r.drainConnectorBeforeTunnelDelete(ctx, tunnel)
+		if derr != nil {
+			logger.Error(derr, "failed to drain connector before tunnel delete")
+			return failReconcile(ctx, r.Client, tunnel, &tunnel.Status.Conditions,
+				nil, cloudflarev1alpha1.ReasonCloudflareError, wrapDeleteErr(derr), 30*time.Second)
+		}
+		if !drained {
+			status.SetCondition(&tunnel.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady,
+				metav1.ConditionFalse, cloudflarev1alpha1.ReasonDrainingConnector,
+				"scaling connector Deployment to 0 before deleting tunnel from Cloudflare", tunnel.Generation)
+			if err := r.Status().Update(ctx, tunnel); err != nil {
+				logger.Error(err, "failed to update Draining status")
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
 		if err := r.tunnelClient(creds.APIToken).DeleteTunnel(ctx, creds.AccountID, tunnel.Status.TunnelID); err != nil {
 			if cfclient.IsNotFound(err) {
 				logger.Info("tunnel already gone in Cloudflare; treating delete as success",
@@ -523,6 +539,45 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 
 	controllerutil.RemoveFinalizer(tunnel, cloudflarev1alpha1.FinalizerName)
 	return ctrl.Result{}, r.Update(ctx, tunnel)
+}
+
+// drainConnectorBeforeTunnelDelete scales the operator-managed connector
+// Deployment to zero and reports whether all pods have terminated. Returns:
+//
+//	(true,  nil)  drain complete; safe to call DeleteTunnel.
+//	(false, nil)  drain in progress; caller should requeue.
+//	(false, err)  Get/Update failure; caller should propagate.
+//
+// Gated on Spec.Connector != nil && Spec.Connector.Enabled. When the
+// connector is disabled or absent, returns (true, nil) — nothing to drain.
+// IsNotFound on the Deployment Get also returns (true, nil) (the user or a
+// prior cleanup pass removed it; no drain needed).
+func (r *CloudflareTunnelReconciler) drainConnectorBeforeTunnelDelete(
+	ctx context.Context, tun *cloudflarev1alpha1.CloudflareTunnel,
+) (bool, error) {
+	if tun.Spec.Connector == nil || !tun.Spec.Connector.Enabled {
+		return true, nil
+	}
+	depName := ConnectorNames(tun).Deployment
+	var dep appsv1.Deployment
+	if err := r.Get(ctx, types.NamespacedName{Name: depName, Namespace: tun.Namespace}, &dep); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("get connector Deployment for drain: %w", err)
+	}
+	zero := int32(0)
+	if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 0 {
+		dep.Spec.Replicas = &zero
+		if err := r.Update(ctx, &dep); err != nil {
+			return false, fmt.Errorf("scale connector Deployment to 0: %w", err)
+		}
+		return false, nil
+	}
+	if dep.Status.ReadyReplicas > 0 {
+		return false, nil
+	}
+	return true, nil
 }
 
 // tunnelClient returns the test-injected TunnelClient if present, otherwise
