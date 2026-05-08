@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.15.0...v0.16.0) (2026-05-08)
+
+### Bug Fixes
+
+* **dns:** preserve Status.RecordID on transient GetRecord errors ([#85](https://github.com/jacaudi/cloudflare-operator/issues/85)) ([907aa43](https://github.com/jacaudi/cloudflare-operator/commit/907aa43f6b809436d7853dfa0a5960f7141e5e6b))
+* **tunnel:** preserve Status.TunnelID on transient GetTunnel errors ([#85](https://github.com/jacaudi/cloudflare-operator/issues/85)) ([ef9d3f3](https://github.com/jacaudi/cloudflare-operator/commit/ef9d3f3f60b599ab32a703d1f2880fb89ea60903))
+
+
+### Features
+
+* **connector:** add cleanup helper for disabled connector ([#52](https://github.com/jacaudi/cloudflare-operator/issues/52)) ([05c6474](https://github.com/jacaudi/cloudflare-operator/commit/05c6474b7624164188459633d49e5cf3d2cf516c))
+* **connector:** delete connector resources on disable ([#52](https://github.com/jacaudi/cloudflare-operator/issues/52)) ([ed11da3](https://github.com/jacaudi/cloudflare-operator/commit/ed11da3104c67d0ccb73812ea592f24f4799edc9))
+
 ## [0.15.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.14.1...v0.15.0) (2026-05-08)
 
 ### Bug Fixes
