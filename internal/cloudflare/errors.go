@@ -80,3 +80,34 @@ func IsPlanTierRequired(err error) bool {
 	}
 	return false
 }
+
+// tunnelActiveConnectionsErrorCode is the Cloudflare API error code returned
+// from DELETE /accounts/{id}/cfd_tunnel/{uuid} when the tunnel still has
+// connected cloudflared replicas. The HTTP status accompanying this code is
+// 400. Cloudflare's message is "This tunnel has active connections.
+// Please stop all cloudflared replicas, or wait a few minutes for connections
+// to close, then try again."
+const tunnelActiveConnectionsErrorCode = 1022
+
+// IsTunnelHasActiveConnections reports whether err is a Cloudflare 400
+// carrying error code 1022. Cloudflare returns this when DeleteTunnel
+// is called while cloudflared replicas are still connected. The
+// operator handles this by scaling its managed connector Deployment to
+// zero before calling DeleteTunnel, but a transient drain-tail can
+// still surface this error briefly after pods exit; in that case the
+// caller should requeue with backoff.
+func IsTunnelHasActiveConnections(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *cfgo.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	for _, e := range apiErr.Errors {
+		if e.Code == tunnelActiveConnectionsErrorCode {
+			return true
+		}
+	}
+	return false
+}
