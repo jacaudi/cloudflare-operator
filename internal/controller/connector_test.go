@@ -61,7 +61,7 @@ func TestConnectorNames(t *testing.T) {
 }
 
 // TestConnectorNames_NameOverride verifies that spec.connector.nameOverride
-// replaces the default "<tunnel-name>-connector" base across the Deployment,
+// replaces the default "cloudflared-<tunnel-name>" base across the Deployment,
 // ServiceAccount, and ConfigMap. ConfigMap retains its "-config" suffix to
 // disambiguate it from the Deployment/SA, which share the override name (#68).
 func TestConnectorNames_NameOverride(t *testing.T) {
