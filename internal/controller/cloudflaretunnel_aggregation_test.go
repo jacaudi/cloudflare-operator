@@ -1650,3 +1650,133 @@ func TestReconcileConnectorResources_CleansUpLegacyOnRename(t *testing.T) {
 		t.Errorf("legacy PDB %q not deleted after readiness: err=%v", legacy.PodDisruptionBudget, err)
 	}
 }
+
+// ---- cleanupConnectorResources tests ---------------------------------------
+
+// connectorResourcesFixture returns the four connector resources for tun
+// with the standard label set + an owner-ref pointing at tun.UID. Names
+// use a custom base so the test is independent of ConnectorNames /
+// legacyConnectorNames defaults — discovery is by label, not by name.
+func connectorResourcesFixture(tun *cloudflarev1alpha1.CloudflareTunnel, base string) (*appsv1.Deployment, *corev1.ServiceAccount, *corev1.ConfigMap, *policyv1.PodDisruptionBudget) {
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            base,
+			Namespace:       tun.Namespace,
+			Labels:          connectorLabels(tun),
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            base,
+			Namespace:       tun.Namespace,
+			Labels:          connectorLabels(tun),
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            base + "-config",
+			Namespace:       tun.Namespace,
+			Labels:          connectorLabels(tun),
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            base + "-pdb",
+			Namespace:       tun.Namespace,
+			Labels:          connectorLabels(tun),
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	return dep, sa, cm, pdb
+}
+
+// TestCleanupConnectorResources_DeletesOwnedViaLabels verifies the happy path:
+// the four label-matching, owner-ref-matching connector resources are deleted.
+func TestCleanupConnectorResources_DeletesOwnedViaLabels(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	dep, sa, cm, pdb := connectorResourcesFixture(tun, "cloudflared-home")
+	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	if err := cleanupConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	for _, tc := range []struct {
+		kind string
+		obj  client.Object
+		name string
+	}{
+		{"Deployment", &appsv1.Deployment{}, "cloudflared-home"},
+		{"ServiceAccount", &corev1.ServiceAccount{}, "cloudflared-home"},
+		{"ConfigMap", &corev1.ConfigMap{}, "cloudflared-home-config"},
+		{"PodDisruptionBudget", &policyv1.PodDisruptionBudget{}, "cloudflared-home-pdb"},
+	} {
+		err := c.Get(context.Background(), types.NamespacedName{Name: tc.name, Namespace: tun.Namespace}, tc.obj)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("expected %s %q to be deleted, got err=%v", tc.kind, tc.name, err)
+		}
+	}
+}
+
+// TestCleanupConnectorResources_DeletesPriorNameOverrideOrphans verifies
+// that label-based discovery catches resources from prior nameOverride
+// values whose names don't match the current ConnectorNames family.
+func TestCleanupConnectorResources_DeletesPriorNameOverrideOrphans(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	// Resources stamped with the standard labels but a unique name family
+	// that is neither "cloudflared-home" nor "home-connector".
+	dep, sa, cm, pdb := connectorResourcesFixture(tun, "old-override-name")
+	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	if err := cleanupConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "old-override-name", Namespace: tun.Namespace}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected nameOverride-orphan Deployment to be deleted, got err=%v", err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "old-override-name-config", Namespace: tun.Namespace}, &corev1.ConfigMap{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected nameOverride-orphan ConfigMap to be deleted, got err=%v", err)
+	}
+}
+
+// TestCleanupConnectorResources_RefusesUnowned verifies that a
+// label-matching resource owned by a DIFFERENT CloudflareTunnel (different
+// UID) is NOT deleted.
+func TestCleanupConnectorResources_RefusesUnowned(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	otherTun := newTunnelForAgg("home", "network", true)
+	otherTun.UID = "some-other-tunnel-uid"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "cloudflared-home",
+			Namespace:       tun.Namespace,
+			Labels:          connectorLabels(tun),        // labels match tun
+			OwnerReferences: connectorOwnerRef(otherTun), // but owner is otherTun
+		},
+	}
+	c := buildAggFakeClient(tun, dep)
+
+	if err := cleanupConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	got := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "cloudflared-home", Namespace: tun.Namespace}, got); err != nil {
+		t.Fatalf("unowned Deployment was deleted (or get failed): %v", err)
+	}
+}
+
+// TestCleanupConnectorResources_NoOpWhenAbsent verifies the cleanup is a
+// no-op (no error) when there are no label-matching resources.
+func TestCleanupConnectorResources_NoOpWhenAbsent(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	c := buildAggFakeClient(tun)
+
+	if err := cleanupConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error on empty cluster: %v", err)
+	}
+}
