@@ -155,7 +155,10 @@ func reconcileConnectorResources(ctx context.Context, c client.Client, tun *clou
 		return err
 	}
 
-	return applyOwnedPDB(ctx, c, tun)
+	if err := applyOwnedPDB(ctx, c, tun); err != nil {
+		return err
+	}
+	return cleanupLegacyConnectorResources(ctx, c, tun)
 }
 
 // applyOwnedPDB ensures the connector PDB matches what

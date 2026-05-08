@@ -1554,3 +1554,48 @@ func TestCleanupLegacyConnectorResources_NoOpWhenConnectorDisabled(t *testing.T)
 		t.Errorf("PodDisruptionBudget unexpectedly deleted: %v", err)
 	}
 }
+
+// TestReconcileConnectorResources_CleansUpLegacyOnRename verifies the end-to-end
+// rename: with a legacy-named Deployment, SA, ConfigMap, and PDB already in
+// place (owned by the tunnel), reconcileConnectorResources applies the new
+// "cloudflared-<tun>" family AND deletes the legacy "<tun>-connector" family.
+func TestReconcileConnectorResources_CleansUpLegacyOnRename(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	dep, sa, cm, pdb := legacyOwnedFixture(tun)
+	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	agg := Aggregate(tun.Status.TunnelID, nil, nil)
+	if err := reconcileConnectorResources(context.Background(), c, tun, agg); err != nil {
+		t.Fatalf("reconcileConnectorResources: %v", err)
+	}
+
+	// New-named resources exist.
+	current := ConnectorNames(tun)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: current.Deployment, Namespace: tun.Namespace}, &appsv1.Deployment{}); err != nil {
+		t.Errorf("new Deployment %q missing: %v", current.Deployment, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: current.ServiceAccount, Namespace: tun.Namespace}, &corev1.ServiceAccount{}); err != nil {
+		t.Errorf("new ServiceAccount %q missing: %v", current.ServiceAccount, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: current.ConfigMap, Namespace: tun.Namespace}, &corev1.ConfigMap{}); err != nil {
+		t.Errorf("new ConfigMap %q missing: %v", current.ConfigMap, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: current.PodDisruptionBudget, Namespace: tun.Namespace}, &policyv1.PodDisruptionBudget{}); err != nil {
+		t.Errorf("new PDB %q missing: %v", current.PodDisruptionBudget, err)
+	}
+
+	// Legacy-named resources are gone.
+	legacy := legacyConnectorNames(tun)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
+		t.Errorf("legacy Deployment %q not deleted: err=%v", legacy.Deployment, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ServiceAccount, Namespace: tun.Namespace}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Errorf("legacy ServiceAccount %q not deleted: err=%v", legacy.ServiceAccount, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ConfigMap, Namespace: tun.Namespace}, &corev1.ConfigMap{}); !apierrors.IsNotFound(err) {
+		t.Errorf("legacy ConfigMap %q not deleted: err=%v", legacy.ConfigMap, err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.PodDisruptionBudget, Namespace: tun.Namespace}, &policyv1.PodDisruptionBudget{}); !apierrors.IsNotFound(err) {
+		t.Errorf("legacy PDB %q not deleted: err=%v", legacy.PodDisruptionBudget, err)
+	}
+}
