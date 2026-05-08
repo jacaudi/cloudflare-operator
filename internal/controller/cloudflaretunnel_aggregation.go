@@ -106,12 +106,15 @@ func filterRulesForTunnel(all []cloudflarev1alpha1.CloudflareTunnelRule, tunnelN
 	return out
 }
 
-// reconcileConnectorResources reconciles the ServiceAccount, ConfigMap, and
-// Deployment for the operator-managed cloudflared workload.
+// reconcileConnectorResources reconciles the ServiceAccount, ConfigMap,
+// Deployment, and PodDisruptionBudget for the operator-managed cloudflared
+// workload. After every apply succeeds, prunes any legacy-named resources
+// owned by tun (see cleanupLegacyConnectorResources) so a successful return
+// implies the rename has converged.
 //
-// All three apply paths absorb transient optimistic-concurrency conflicts
+// All apply paths absorb transient optimistic-concurrency conflicts
 // in-process via retry.RetryOnConflict (see applyOwned for the SA + ConfigMap
-// path; the Deployment path retries inline below). Without this, sustained
+// path; the Deployment and PDB paths retry inline). Without this, sustained
 // conflicts propagate as reconcile errors, the controller workqueue
 // rate-limiter applies exponential backoff up to ~16 minutes, and downstream
 // events (e.g. CR deletion) sit behind that backoff until the operator pod
