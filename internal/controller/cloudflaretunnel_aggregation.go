@@ -208,12 +208,11 @@ func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1
 }
 
 // cleanupLegacyConnectorResources removes the legacy "<tunnel>-connector"
-// family of resources owned by tun. It runs at the end of
-// reconcileConnectorResources, after the new-named resources have been
-// applied, so that the rename appears as a single transition: both
-// connectors briefly coexist (Cloudflare permits multiple connectors per
-// tunnel — same mechanism as replicas > 1), then the legacy ones are
-// deleted.
+// family of resources owned by tun. It is intended to run AFTER the
+// new-named resources have been applied, so that the rename appears as a
+// single transition: both connectors briefly coexist (Cloudflare permits
+// multiple connectors per tunnel — same mechanism as replicas > 1), then
+// the legacy ones are deleted.
 //
 // Gated on:
 //   - tun.Spec.Connector != nil && tun.Spec.Connector.Enabled (otherwise the

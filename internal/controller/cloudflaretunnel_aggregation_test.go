@@ -1462,15 +1462,20 @@ func TestCleanupLegacyConnectorResources_DeletesOwned(t *testing.T) {
 }
 
 // TestCleanupLegacyConnectorResources_LeavesUnowned verifies that the cleanup
-// refuses to touch a legacy-named resource that this tunnel does NOT own.
+// refuses to touch a legacy-named resource owned by a DIFFERENT CloudflareTunnel
+// (same name, different UID) — the realistic collision scenario.
 func TestCleanupLegacyConnectorResources_LeavesUnowned(t *testing.T) {
 	tun := newTunnelForAgg("home", "network", true)
 	legacy := legacyConnectorNames(tun)
-	// Same name, but no owner reference at all.
+	// Owner ref points at a DIFFERENT tunnel UID — the legacy Deployment
+	// belongs to someone else, even though the name collides.
+	otherTun := newTunnelForAgg("home", "network", true)
+	otherTun.UID = "some-other-tunnel-uid"
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      legacy.Deployment,
-			Namespace: tun.Namespace,
+			Name:            legacy.Deployment,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(otherTun),
 		},
 	}
 	c := buildAggFakeClient(tun, dep)
@@ -1481,7 +1486,7 @@ func TestCleanupLegacyConnectorResources_LeavesUnowned(t *testing.T) {
 
 	got := &appsv1.Deployment{}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, got); err != nil {
-		t.Fatalf("unowned Deployment was deleted (or get failed): %v", err)
+		t.Fatalf("Deployment owned by another tunnel was deleted (or get failed): %v", err)
 	}
 }
 
