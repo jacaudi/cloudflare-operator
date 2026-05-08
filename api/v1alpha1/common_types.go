@@ -130,4 +130,6 @@ var InProgressReasons = []string{
 	ReasonZonePending,
 	ReasonGatewayAddressNotReady,
 	ReasonTunnelNotReady,
+	ReasonDrainingConnector,
+	ReasonTunnelHasConnections,
 }

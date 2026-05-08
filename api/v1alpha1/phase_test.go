@@ -12,6 +12,8 @@ func TestInProgressReasons_KnownInProgressMembers(t *testing.T) {
 		ReasonZonePending,
 		ReasonGatewayAddressNotReady,
 		ReasonTunnelNotReady,
+		ReasonDrainingConnector,
+		ReasonTunnelHasConnections,
 	}
 	for _, r := range wantIn {
 		if !slices.Contains(InProgressReasons, r) {
