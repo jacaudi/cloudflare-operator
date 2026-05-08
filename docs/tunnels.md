@@ -101,7 +101,7 @@ Operator versions before this change defaulted the base name to
 `<tunnel.metadata.name>-connector`. On upgrade, the connector reconciler
 automatically deletes the legacy-named resources (Deployment,
 ServiceAccount, ConfigMap, PDB) owned by your `CloudflareTunnel` after
-applying the new `cloudflared-<tunnel>` family. The two connectors briefly
+applying the new `cloudflared-<tunnel.metadata.name>` family. The two connectors briefly
 coexist while the new pods come up, so there is no traffic gap. No manual
 action is required for users who did not set `nameOverride`.
 
