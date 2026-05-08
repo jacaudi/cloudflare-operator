@@ -377,6 +377,9 @@ func (r *CloudflareDNSRecordReconciler) resolveContent(ctx context.Context, dnsR
 }
 
 func (r *CloudflareDNSRecordReconciler) needsUpdate(existing *cfclient.DNSRecord, desired cfclient.DNSRecordParams) bool {
+	if existing.Name != desired.Name && desired.Name != "" {
+		return true
+	}
 	if existing.Content != desired.Content && desired.Content != "" {
 		return true
 	}
