@@ -149,3 +149,49 @@ func TestIsPlanTierRequired(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTunnelHasActiveConnections(t *testing.T) {
+	hasConnsErr := &cfgo.Error{
+		StatusCode: http.StatusBadRequest,
+		Errors:     []shared.ErrorData{{Code: 1022, Message: "This tunnel has active connections"}},
+	}
+	wrongCodeErr := &cfgo.Error{
+		StatusCode: http.StatusBadRequest,
+		Errors:     []shared.ErrorData{{Code: 9000}},
+	}
+	multiCodeIncluding1022 := &cfgo.Error{
+		StatusCode: http.StatusBadRequest,
+		Errors:     []shared.ErrorData{{Code: 9999}, {Code: 1022}},
+	}
+	wrongStatus := &cfgo.Error{
+		StatusCode: http.StatusForbidden,
+		Errors:     []shared.ErrorData{{Code: 1022}},
+	}
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"plain error", errors.New("boom"), false},
+		{"400 with code 1022", hasConnsErr, true},
+		{"400 with code 9000", wrongCodeErr, false},
+		{"400 with empty Errors slice", &cfgo.Error{StatusCode: http.StatusBadRequest}, false},
+		{"400 with mixed codes including 1022", multiCodeIncluding1022, true},
+		{"403 with code 1022", wrongStatus, false},
+		{
+			"wrapped 400/1022",
+			fmt.Errorf("delete tunnel: %w", hasConnsErr),
+			true,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsTunnelHasActiveConnections(tc.err); got != tc.want {
+				t.Errorf("IsTunnelHasActiveConnections(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
