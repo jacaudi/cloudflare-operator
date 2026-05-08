@@ -207,6 +207,80 @@ func applyOwnedPDB(ctx context.Context, c client.Client, tun *cloudflarev1alpha1
 	})
 }
 
+// cleanupLegacyConnectorResources removes the legacy "<tunnel>-connector"
+// family of resources owned by tun. It runs at the end of
+// reconcileConnectorResources, after the new-named resources have been
+// applied, so that the rename appears as a single transition: both
+// connectors briefly coexist (Cloudflare permits multiple connectors per
+// tunnel — same mechanism as replicas > 1), then the legacy ones are
+// deleted.
+//
+// Gated on:
+//   - tun.Spec.Connector != nil && tun.Spec.Connector.Enabled (otherwise the
+//     operator is not managing this connector at all).
+//   - tun.Spec.Connector.NameOverride == "" (when the user has set an
+//     override, they own the naming and we must not delete anything that
+//     happens to match the legacy pattern).
+//   - legacy and current base names differ (a defensive guard; today the
+//     two formulas can't collide for any valid tunnel name, but the check
+//     keeps the function correct if either formula changes).
+//
+// For each of the four legacy resource kinds, the function does a Get,
+// skips on IsNotFound, refuses to delete a resource not owned by tun, and
+// otherwise deletes. IsNotFound on Delete is treated as success (race
+// tolerance).
+func cleanupLegacyConnectorResources(ctx context.Context, c client.Client, tun *cloudflarev1alpha1.CloudflareTunnel) error {
+	if tun.Spec.Connector == nil || !tun.Spec.Connector.Enabled {
+		return nil
+	}
+	if tun.Spec.Connector.NameOverride != "" {
+		return nil
+	}
+
+	current := ConnectorNames(tun)
+	legacy := legacyConnectorNames(tun)
+	if legacy.Deployment == current.Deployment {
+		return nil
+	}
+
+	// Order: Deployment first (highest blast radius if left running), then
+	// PDB (which references the deployment via selector labels), then SA
+	// and ConfigMap (small + leaf objects).
+	if err := deleteOwnedByName(ctx, c, &appsv1.Deployment{}, types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, tun.UID); err != nil {
+		return fmt.Errorf("cleanup legacy Deployment: %w", err)
+	}
+	if err := deleteOwnedByName(ctx, c, &policyv1.PodDisruptionBudget{}, types.NamespacedName{Name: legacy.PodDisruptionBudget, Namespace: tun.Namespace}, tun.UID); err != nil {
+		return fmt.Errorf("cleanup legacy PDB: %w", err)
+	}
+	if err := deleteOwnedByName(ctx, c, &corev1.ServiceAccount{}, types.NamespacedName{Name: legacy.ServiceAccount, Namespace: tun.Namespace}, tun.UID); err != nil {
+		return fmt.Errorf("cleanup legacy ServiceAccount: %w", err)
+	}
+	if err := deleteOwnedByName(ctx, c, &corev1.ConfigMap{}, types.NamespacedName{Name: legacy.ConfigMap, Namespace: tun.Namespace}, tun.UID); err != nil {
+		return fmt.Errorf("cleanup legacy ConfigMap: %w", err)
+	}
+	return nil
+}
+
+// deleteOwnedByName Get/Delete-pairs a single named resource. It skips
+// IsNotFound on Get (nothing to do), refuses to delete when the resource
+// is not owner-ref-controlled by ownerUID, and treats IsNotFound on Delete
+// as success.
+func deleteOwnedByName(ctx context.Context, c client.Client, obj client.Object, key types.NamespacedName, ownerUID types.UID) error {
+	if err := c.Get(ctx, key, obj); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get %s: %w", key, err)
+	}
+	if !isOwnedBy(obj.GetOwnerReferences(), ownerUID) {
+		return nil
+	}
+	if err := c.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete %s: %w", key, err)
+	}
+	return nil
+}
+
 // applyOwned creates or updates a fully operator-owned resource (SA or
 // ConfigMap). On create: submit as-is. On update: wholesale-overwrite
 // labels, annotations, ownerRefs, and the data fields that Build*

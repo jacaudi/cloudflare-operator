@@ -1382,3 +1382,170 @@ func TestApplyOwned_RetriesOnServiceAccountConflict(t *testing.T) {
 		t.Errorf("expected >=3 update attempts, got %d", calls)
 	}
 }
+
+// ---- cleanupLegacyConnectorResources tests ---------------------------------
+
+// legacyOwnedFixture returns the four legacy-named resources for tun, all
+// stamped with a controller owner-ref pointing at tun.UID. Used by the
+// happy-path cleanup test.
+func legacyOwnedFixture(tun *cloudflarev1alpha1.CloudflareTunnel) (*appsv1.Deployment, *corev1.ServiceAccount, *corev1.ConfigMap, *policyv1.PodDisruptionBudget) {
+	legacy := legacyConnectorNames(tun)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            legacy.Deployment,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            legacy.ServiceAccount,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            legacy.ConfigMap,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            legacy.PodDisruptionBudget,
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	return dep, sa, cm, pdb
+}
+
+// TestCleanupLegacyConnectorResources_DeletesOwned verifies the happy path:
+// when all four legacy-named resources exist and are owned by this tunnel,
+// they are all deleted.
+func TestCleanupLegacyConnectorResources_DeletesOwned(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	dep, sa, cm, pdb := legacyOwnedFixture(tun)
+	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	if err := cleanupLegacyConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	legacy := legacyConnectorNames(tun)
+	for _, tc := range []struct {
+		name string
+		obj  client.Object
+	}{
+		{"Deployment", &appsv1.Deployment{}},
+		{"ServiceAccount", &corev1.ServiceAccount{}},
+		{"ConfigMap", &corev1.ConfigMap{}},
+		{"PodDisruptionBudget", &policyv1.PodDisruptionBudget{}},
+	} {
+		var name string
+		switch tc.name {
+		case "Deployment":
+			name = legacy.Deployment
+		case "ServiceAccount":
+			name = legacy.ServiceAccount
+		case "ConfigMap":
+			name = legacy.ConfigMap
+		case "PodDisruptionBudget":
+			name = legacy.PodDisruptionBudget
+		}
+		err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: tun.Namespace}, tc.obj)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("expected %s %q to be deleted, got err=%v", tc.name, name, err)
+		}
+	}
+}
+
+// TestCleanupLegacyConnectorResources_LeavesUnowned verifies that the cleanup
+// refuses to touch a legacy-named resource that this tunnel does NOT own.
+func TestCleanupLegacyConnectorResources_LeavesUnowned(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	legacy := legacyConnectorNames(tun)
+	// Same name, but no owner reference at all.
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      legacy.Deployment,
+			Namespace: tun.Namespace,
+		},
+	}
+	c := buildAggFakeClient(tun, dep)
+
+	if err := cleanupLegacyConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	got := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, got); err != nil {
+		t.Fatalf("unowned Deployment was deleted (or get failed): %v", err)
+	}
+}
+
+// TestCleanupLegacyConnectorResources_NoOpWithNameOverride verifies that the
+// cleanup is a no-op when the user has set spec.connector.nameOverride. A
+// resource that happens to match the legacy pattern must not be deleted.
+func TestCleanupLegacyConnectorResources_NoOpWithNameOverride(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	tun.Spec.Connector.NameOverride = "cloudflared-prod"
+	legacy := legacyConnectorNames(tun)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            legacy.Deployment, // "home-connector"
+			Namespace:       tun.Namespace,
+			OwnerReferences: connectorOwnerRef(tun),
+		},
+	}
+	c := buildAggFakeClient(tun, dep)
+
+	if err := cleanupLegacyConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	got := &appsv1.Deployment{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, got); err != nil {
+		t.Fatalf("Deployment deleted despite nameOverride being set: %v", err)
+	}
+}
+
+// TestCleanupLegacyConnectorResources_NoOpWhenAbsent verifies that the cleanup
+// is a no-op (no error) when there are no legacy-named resources to clean up.
+func TestCleanupLegacyConnectorResources_NoOpWhenAbsent(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", true)
+	c := buildAggFakeClient(tun)
+
+	if err := cleanupLegacyConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error on empty cluster: %v", err)
+	}
+}
+
+// TestCleanupLegacyConnectorResources_NoOpWhenConnectorDisabled verifies that
+// the cleanup is a no-op when spec.connector is nil or disabled — the operator
+// is not managing this connector at all.
+func TestCleanupLegacyConnectorResources_NoOpWhenConnectorDisabled(t *testing.T) {
+	tun := newTunnelForAgg("home", "network", false) // Connector == nil
+	dep, sa, cm, pdb := legacyOwnedFixture(tun)
+	c := buildAggFakeClient(tun, dep, sa, cm, pdb)
+
+	if err := cleanupLegacyConnectorResources(context.Background(), c, tun); err != nil {
+		t.Fatalf("cleanup returned error: %v", err)
+	}
+
+	// All four legacy-named resources must still exist.
+	legacy := legacyConnectorNames(tun)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.Deployment, Namespace: tun.Namespace}, &appsv1.Deployment{}); err != nil {
+		t.Errorf("Deployment unexpectedly deleted: %v", err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ServiceAccount, Namespace: tun.Namespace}, &corev1.ServiceAccount{}); err != nil {
+		t.Errorf("ServiceAccount unexpectedly deleted: %v", err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.ConfigMap, Namespace: tun.Namespace}, &corev1.ConfigMap{}); err != nil {
+		t.Errorf("ConfigMap unexpectedly deleted: %v", err)
+	}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: legacy.PodDisruptionBudget, Namespace: tun.Namespace}, &policyv1.PodDisruptionBudget{}); err != nil {
+		t.Errorf("PodDisruptionBudget unexpectedly deleted: %v", err)
+	}
+}
