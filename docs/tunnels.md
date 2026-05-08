@@ -87,10 +87,7 @@ spec:
 With `nameOverride: cloudflared-prod`, the Deployment and ServiceAccount are
 named `cloudflared-prod` and the ConfigMap is named `cloudflared-prod-config`.
 
-Changing `nameOverride` on a live tunnel reconciles new resources at the new
-name; the old resources are NOT cleaned up automatically (tracked alongside
-[#52](https://github.com/jacaudi/cloudflare-operator/issues/52)). Delete the
-orphaned Deployment/SA/ConfigMap/PDB manually after a rename.
+Changing `nameOverride` on a live tunnel reconciles new resources at the new name; the old resources are NOT cleaned up automatically while the connector remains enabled. Delete the orphaned Deployment/SA/ConfigMap/PDB manually, or briefly toggle `spec.connector.enabled: false` to let the operator garbage-collect them on the next reconcile (see [Disabling the connector](#disabling-the-connector-reverting-to-self-managed-cloudflared)).
 
 `nameOverride` must be a valid DNS-1123 subdomain (lowercase alphanumerics
 and `-`, length ≤ 253).
@@ -150,7 +147,7 @@ kubectl patch cloudflaretunnel prod -n network \
   -p '{"spec":{"connector":{"enabled":false}}}'
 ```
 
-Setting `spec.connector.enabled: false` stops the operator from reconciling the connector resources (`Deployment`, `ConfigMap`, `ServiceAccount`). Any previously managed resources are not automatically deleted — remove them manually if no longer needed (see [#52](https://github.com/jacaudi/cloudflare-operator/issues/52) for planned garbage-collection support). The operator continues to reconcile `CloudflareTunnelRule` CRs but does not render or update the ConfigMap while the connector is disabled.
+Setting `spec.connector.enabled: false` (or removing the `connector` block) tells the operator to stop running cloudflared for this tunnel. On the next reconcile the operator deletes the Deployment, ServiceAccount, ConfigMap, and PodDisruptionBudget it owns for this `CloudflareTunnel` — including any resources left over from prior `spec.connector.nameOverride` values. The deletion is gated on owner-reference UID, so any hand-applied resources sharing the connector labels are left alone. The operator continues to reconcile `CloudflareTunnelRule` CRs but does not render or update the ConfigMap while the connector is disabled.
 
 ---
 
