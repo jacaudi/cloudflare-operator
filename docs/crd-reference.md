@@ -240,7 +240,7 @@ For the full operator-managed connector story — connector spec fields in depth
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | When `true`, the operator reconciles a Deployment, ConfigMap, and ServiceAccount running cloudflared. |
 | `replicas` | int | `2` | Number of cloudflared replicas. Minimum `1`. |
-| `nameOverride` | string | `""` | Optional base name for the connector resources. When set, the Deployment and ServiceAccount are named exactly `<nameOverride>` and the ConfigMap is named `<nameOverride>-config`. When unset, the operator falls back to `<tunnel.metadata.name>-connector` (and `…-config` for the ConfigMap). DNS-1123 subdomain validation. See [`tunnels.md`](tunnels.md) for caveats around live renames. |
+| `nameOverride` | string | `""` | Optional base name for the connector resources. When set, the Deployment and ServiceAccount are named exactly `<nameOverride>` and the ConfigMap is named `<nameOverride>-config`. When unset, the operator defaults to `cloudflared-<tunnel.metadata.name>` (and `…-config` for the ConfigMap). DNS-1123 subdomain validation. See [`tunnels.md`](tunnels.md) for caveats around live renames and the auto-cleanup of legacy `<tunnel-name>-connector` resources on upgrade. |
 | `image.repository` | string | `docker.io/cloudflare/cloudflared` | Container image repository. |
 | `image.tag` | string | compile-time default | Container image tag. |
 | `resources` | object | sane defaults | Container `resources` (requests + limits). |
@@ -278,7 +278,7 @@ Conditions: `Ready`, `IngressConfigured`, and (when connector is enabled) `Conne
 
 When `spec.connector.replicas` is `>= 2`, the operator automatically creates two safe-by-default Kubernetes objects to keep the connector available during voluntary disruption:
 
-- A **`PodDisruptionBudget`** named `<connector-base>-pdb` (where `<connector-base>` follows the same naming as the Deployment, including any `spec.connector.nameOverride`) with `minAvailable: 1`. This protects the connector from node drains, autoscaler scale-downs, and manual evictions.
+- A **`PodDisruptionBudget`** named `<connector-base>-pdb` (where `<connector-base>` is `cloudflared-<tunnel-name>` by default, or `<spec.connector.nameOverride>` when set) with `minAvailable: 1`. This protects the connector from node drains, autoscaler scale-downs, and manual evictions.
 - A **`topologySpreadConstraint`** on the connector pod template with `maxSkew: 1`, `topologyKey: kubernetes.io/hostname`, `whenUnsatisfiable: ScheduleAnyway`. Connector replicas land on different nodes by default. Soft semantics preserve scheduling on small clusters where `replicas > nodes`.
 
 Both defaults are skipped at `replicas: 1`. A `minAvailable: 1` PDB on a single-replica deployment blocks all voluntary disruptions (strictly worse than no PDB), and a `topologySpreadConstraint` across one pod is meaningless.
@@ -311,7 +311,7 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: <tunnel-name>-connector-pdb
+  name: cloudflared-<tunnel-name>-pdb
 spec:
   minAvailable: 1
   selector:

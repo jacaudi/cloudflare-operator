@@ -176,7 +176,7 @@ If two rules claim the same hostname, one wins and the other gets `TunnelAccepte
 kubectl get deploy -n <namespace> -l cloudflare.io/tunnel=<name>
 
 # Describe it for events
-kubectl describe deploy <tunnel-name>-connector -n <namespace>
+kubectl describe deploy cloudflared-<tunnel-name> -n <namespace>
 ```
 
 Common causes:
@@ -192,7 +192,7 @@ Common causes:
 - **Unowned Deployment** — a Deployment with the expected name exists but was not created by the operator (no ownerRef to the `CloudflareTunnel`). The operator logs `AggregationFailed` and requeues without modifying the Deployment. Check:
 
   ```bash
-  kubectl get deploy <tunnel-name>-connector -n <namespace> \
+  kubectl get deploy cloudflared-<tunnel-name> -n <namespace> \
     -o jsonpath='{.metadata.ownerReferences}'
   ```
 
