@@ -186,6 +186,77 @@ The operator owns the final `http_status:404`. Any catch-all intent goes through
 
 ---
 
+## Primary apex hostname
+
+A `CloudflareTunnel` may declare an opt-in *apex hostname* — a single
+operator-managed FQDN that CNAMEs to the underlying tunnel UUID. When set,
+per-route DNS records emitted by the HTTPRoute and Service source
+controllers CNAME to this apex instead of carrying the tunnel UUID
+themselves.
+
+**Why:** without an apex, a tunnel UUID rotation requires updating every
+per-route record. With one, only the apex record moves; per-route records
+keep pointing at the stable apex name.
+
+```yaml
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareTunnel
+metadata:
+  name: external-edge
+  namespace: cloudflare
+spec:
+  name: external-edge
+  secretRef:
+    name: cloudflare-credentials
+  generatedSecretName: external-edge-credentials
+  apexHostname:
+    name: edge.example.com
+    zoneRef:
+      name: example-com
+    proxied: true            # default true; orange-cloud the apex
+```
+
+**What the operator manages:**
+
+- A `CloudflareDNSRecord` named `<tunnel-name>-apex` (here:
+  `external-edge-apex`), in the same namespace as the tunnel,
+  owner-reffed to the tunnel — Kubernetes garbage-collects it when the
+  tunnel is deleted.
+- The apex CNAME's content tracks `Status.TunnelCNAME`, so a tunnel UUID
+  rotation results in exactly one Cloudflare API write (the apex update);
+  per-route records do not move.
+
+**Per-route record content** (HTTPRoute / Service source controllers):
+
+| Tunnel state | Per-route CNAME content |
+|---|---|
+| `spec.apexHostname` unset | `<tunnel-uuid>.cfargotunnel.com` (legacy / direct) |
+| `spec.apexHostname` set, apex *not* yet Ready | `<tunnel-uuid>.cfargotunnel.com` (fallback during transition) |
+| `spec.apexHostname` set, apex Ready | `<spec.apexHostname.name>` |
+
+**Status:** `Status.ApexHostname` reflects the resolved name and the
+underlying record ID; `ApexHostnameReady` is the dedicated condition.
+The tunnel's overall `Ready` condition is independent — a misconfigured
+apex does not take down a working tunnel.
+
+**Validation:** the operator checks at reconcile time that
+`spec.apexHostname.name` is a valid DNS name and falls under the zone
+referenced by `spec.apexHostname.zoneRef`. Mismatches set
+`ApexHostnameReady=False, ReasonInvalidSpec`.
+
+**Collision policy:** if a different `CloudflareDNSRecord` CR in the same
+namespace already claims `spec.apexHostname.name`, the operator refuses
+to upsert and sets `ApexHostnameReady=False,
+ReasonRecordOwnershipConflict` — the pre-existing CR is left alone.
+Resolve manually by either deleting the conflicting CR or renaming the
+apex.
+
+**Removal:** clearing `spec.apexHostname` GCs the apex CR and per-route
+records revert to direct `<uuid>.cfargotunnel.com` content on their next
+reconcile.
+
+---
+
 ## Hand-Authored `CloudflareTunnelRule`
 
 Source controllers emit `CloudflareTunnelRule` CRs automatically. You can also write them by hand for cases that the annotation sources don't cover — for example, explicit `http_status` rejections, custom `originRequest` settings, or backends not reachable from a Service reference.

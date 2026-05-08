@@ -233,6 +233,7 @@ For the full operator-managed connector story — connector spec fields in depth
 | `interval` | duration | No | `30m` | Reconciliation interval |
 | `connector` | object | No | | Operator-managed `cloudflared` runtime. See `connector` sub-fields below and [`tunnels.md`](tunnels.md). |
 | `routing` | object | No | | Tunnel-wide routing defaults applied to the rendered `cloudflared` config. See `routing` sub-fields below and [`tunnels.md`](tunnels.md). |
+| `apexHostname` | object | No | | Opt-in operator-managed apex CNAME. When set, the operator reconciles `<metadata.name>-apex` CloudflareDNSRecord. See `apexHostname` sub-fields below and [`tunnels.md`](tunnels.md). |
 
 ### `connector` sub-fields
 
@@ -254,6 +255,14 @@ For the full operator-managed connector story — connector spec fields in depth
 | `defaultBackend.serviceRef` | object | Reference to a Kubernetes Service (`name`, `namespace`, `port`, `scheme`). |
 | `originRequest` | object | Defaults applied to all rules unless overridden by an individual `CloudflareTunnelRule.originRequest`. |
 
+### `apexHostname` sub-fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | required | The apex FQDN. Must fall under the zone referenced by `zoneRef`. |
+| `zoneRef` | object | required | Reference to the `CloudflareZone` (`name`, `namespace`) that owns the apex name. |
+| `proxied` | bool | `true` | Whether to orange-cloud the apex CNAME. |
+
 ### Status
 
 | Field | Description |
@@ -264,8 +273,10 @@ For the full operator-managed connector story — connector spec fields in depth
 | `connector.replicas` / `connector.readyReplicas` | Connector Deployment scale |
 | `connector.image` | Image actually running in the connector pods |
 | `connector.configHash` | sha256 of the rendered `config.yaml` |
+| `apexHostname.name` | Currently-reconciled apex FQDN |
+| `apexHostname.recordID` | Cloudflare DNS record ID for the apex CNAME |
 
-Conditions: `Ready`, `IngressConfigured`, and (when connector is enabled) `ConnectorReady`.
+Conditions: `Ready`, `IngressConfigured`, and (when connector is enabled) `ConnectorReady`. When `spec.apexHostname` is set, an `ApexHostnameReady` condition reflects the apex CloudflareDNSRecord state.
 
 ### Behavior
 
@@ -346,8 +357,8 @@ spec:
 ### Print Columns
 
 ```
-NAME         TUNNEL NAME           TUNNEL ID     CNAME                                   READY   AGE
-k8s-tunnel   k8s-external-ingress  abc123...     abc123.cfargotunnel.com                 True    5d
+NAME         TUNNEL NAME           TUNNEL ID     CNAME                                   APEX                  READY   AGE
+k8s-tunnel   k8s-external-ingress  abc123...     abc123.cfargotunnel.com                 edge.example.com      True    5d
 ```
 
 ---
