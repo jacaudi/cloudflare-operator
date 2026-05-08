@@ -323,9 +323,9 @@ func deleteOwnedByName(ctx context.Context, c client.Client, obj client.Object, 
 // spec.connector.nameOverride values are also cleaned up by the same
 // pass.
 //
-// For each label-matching object, the cleanup deletes only when the
-// owner-ref controller-UID matches tun.UID. Resources whose label set
-// matches but whose owner-ref does not are left alone (defensive
+// For each label-matching object, the cleanup deletes only when one
+// of its owner-ref UIDs matches tun.UID. Resources whose label set
+// matches but whose owner-refs do not are left alone (defensive
 // against hand-applied or cross-tunnel resources). IsNotFound on Delete
 // is treated as success.
 //
@@ -384,15 +384,16 @@ func cleanupConnectorResources(ctx context.Context, c client.Client, tun *cloudf
 	return nil
 }
 
-// deleteIfOwned deletes obj if its owner-ref controller-UID matches
+// deleteIfOwned deletes obj if any of its owner-ref UIDs matches
 // ownerUID. Returns nil (skip) if not owned. Treats IsNotFound on
-// Delete as success.
+// Delete as success. Wraps non-IsNotFound Delete errors with %w so
+// callers can re-wrap with kind/namespace/name context.
 func deleteIfOwned(ctx context.Context, c client.Client, obj client.Object, ownerUID types.UID) error {
 	if !isOwnedBy(obj.GetOwnerReferences(), ownerUID) {
 		return nil
 	}
 	if err := c.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
-		return err
+		return fmt.Errorf("delete: %w", err)
 	}
 	return nil
 }
