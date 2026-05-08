@@ -46,17 +46,17 @@ func tunnelFixture(enabled bool) *cloudflarev1alpha1.CloudflareTunnel {
 func TestConnectorNames(t *testing.T) {
 	tun := tunnelFixture(true)
 	n := ConnectorNames(tun)
-	if n.Deployment != "home-connector" {
+	if n.Deployment != "cloudflared-home" {
 		t.Errorf("Deployment name = %q", n.Deployment)
 	}
-	if n.ConfigMap != "home-connector-config" {
+	if n.ConfigMap != "cloudflared-home-config" {
 		t.Errorf("ConfigMap name = %q", n.ConfigMap)
 	}
-	if n.ServiceAccount != "home-connector" {
+	if n.ServiceAccount != "cloudflared-home" {
 		t.Errorf("ServiceAccount name = %q", n.ServiceAccount)
 	}
-	if n.PodDisruptionBudget != "home-connector-pdb" {
-		t.Errorf("PodDisruptionBudget name = %q, want %q", n.PodDisruptionBudget, "home-connector-pdb")
+	if n.PodDisruptionBudget != "cloudflared-home-pdb" {
+		t.Errorf("PodDisruptionBudget name = %q, want %q", n.PodDisruptionBudget, "cloudflared-home-pdb")
 	}
 }
 
@@ -81,20 +81,20 @@ func TestConnectorNames_NameOverride(t *testing.T) {
 }
 
 // TestConnectorNames_NameOverrideEmpty verifies that an empty NameOverride
-// (the zero value) falls back to the default "<tunnel-name>-connector" family.
+// (the zero value) falls back to the default "cloudflared-<tunnel-name>" family.
 func TestConnectorNames_NameOverrideEmpty(t *testing.T) {
 	tun := tunnelFixture(true)
 	tun.Spec.Connector.NameOverride = ""
 
 	n := ConnectorNames(tun)
-	if n.Deployment != "home-connector" {
-		t.Errorf("Deployment name = %q, want default %q", n.Deployment, "home-connector")
+	if n.Deployment != "cloudflared-home" {
+		t.Errorf("Deployment name = %q, want default %q", n.Deployment, "cloudflared-home")
 	}
-	if n.ConfigMap != "home-connector-config" {
-		t.Errorf("ConfigMap name = %q, want default %q", n.ConfigMap, "home-connector-config")
+	if n.ConfigMap != "cloudflared-home-config" {
+		t.Errorf("ConfigMap name = %q, want default %q", n.ConfigMap, "cloudflared-home-config")
 	}
-	if n.ServiceAccount != "home-connector" {
-		t.Errorf("ServiceAccount name = %q, want default %q", n.ServiceAccount, "home-connector")
+	if n.ServiceAccount != "cloudflared-home" {
+		t.Errorf("ServiceAccount name = %q, want default %q", n.ServiceAccount, "cloudflared-home")
 	}
 }
 
@@ -105,8 +105,27 @@ func TestConnectorNames_NameOverrideNilConnector(t *testing.T) {
 	tun.Spec.Connector = nil
 
 	n := ConnectorNames(tun)
+	if n.Deployment != "cloudflared-home" {
+		t.Errorf("Deployment name = %q, want default %q", n.Deployment, "cloudflared-home")
+	}
+}
+
+// TestLegacyConnectorNames verifies that legacyConnectorNames returns the
+// pre-rename "<tunnel-name>-connector" family used by the cleanup path.
+func TestLegacyConnectorNames(t *testing.T) {
+	tun := tunnelFixture(true)
+	n := legacyConnectorNames(tun)
 	if n.Deployment != "home-connector" {
-		t.Errorf("Deployment name = %q, want default %q", n.Deployment, "home-connector")
+		t.Errorf("Deployment name = %q, want %q", n.Deployment, "home-connector")
+	}
+	if n.ConfigMap != "home-connector-config" {
+		t.Errorf("ConfigMap name = %q, want %q", n.ConfigMap, "home-connector-config")
+	}
+	if n.ServiceAccount != "home-connector" {
+		t.Errorf("ServiceAccount name = %q, want %q", n.ServiceAccount, "home-connector")
+	}
+	if n.PodDisruptionBudget != "home-connector-pdb" {
+		t.Errorf("PodDisruptionBudget name = %q, want %q", n.PodDisruptionBudget, "home-connector-pdb")
 	}
 }
 
@@ -523,8 +542,8 @@ func TestBuildConnectorPodDisruptionBudget_AtReplicasTwo(t *testing.T) {
 	if pdb == nil {
 		t.Fatal("expected non-nil PDB at replicas==2")
 	}
-	if pdb.Name != "home-connector-pdb" {
-		t.Errorf("Name = %q, want %q", pdb.Name, "home-connector-pdb")
+	if pdb.Name != "cloudflared-home-pdb" {
+		t.Errorf("Name = %q, want %q", pdb.Name, "cloudflared-home-pdb")
 	}
 	if pdb.Namespace != tun.Namespace {
 		t.Errorf("Namespace = %q, want %q", pdb.Namespace, tun.Namespace)
