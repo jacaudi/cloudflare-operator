@@ -1555,6 +1555,16 @@ func TestReconcileDelete_DrainsConnectorBeforeAPIDelete(t *testing.T) {
 		t.Errorf("Spec.Replicas = %v, want 0", gotDep.Spec.Replicas)
 	}
 
+	// First-reconcile status must reflect the drain in progress.
+	drainingTun := &cloudflarev1alpha1.CloudflareTunnel{}
+	if err := r.Get(context.Background(), client.ObjectKeyFromObject(tunnel), drainingTun); err != nil {
+		t.Fatalf("re-get tunnel post-drain-start: %v", err)
+	}
+	cond := meta.FindStatusCondition(drainingTun.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if cond == nil || cond.Reason != cloudflarev1alpha1.ReasonDrainingConnector {
+		t.Errorf("Ready condition reason = %v, want %s", cond, cloudflarev1alpha1.ReasonDrainingConnector)
+	}
+
 	gotDep.Status.ReadyReplicas = 0
 	if err := r.Status().Update(context.Background(), gotDep); err != nil {
 		t.Fatalf("update deployment status: %v", err)
