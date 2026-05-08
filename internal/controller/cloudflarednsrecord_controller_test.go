@@ -110,6 +110,9 @@ func (m *mockDNSClient) UpdateRecord(_ context.Context, _, recordID string, para
 	if !ok {
 		return nil, fmt.Errorf("record not found")
 	}
+	if params.Name != "" {
+		r.Name = params.Name
+	}
 	r.Content = params.Content
 	if params.Proxied != nil {
 		r.Proxied = *params.Proxied
@@ -2304,5 +2307,77 @@ func TestReconcileRecord_GetByID_TransientError_PreservesID(t *testing.T) {
 	}
 	if updated.Status.Phase != cloudflarev1alpha1.PhaseError {
 		t.Errorf("Phase = %q, want %q", updated.Status.Phase, cloudflarev1alpha1.PhaseError)
+	}
+}
+
+// TestReconcile_RenamesRecordInPlace verifies that mutating spec.name on a
+// CloudflareDNSRecord with a populated Status.RecordID triggers
+// UpdateRecord with the new name (in-place rename via Cloudflare's API),
+// closing the gap from #104.
+func TestReconcile_RenamesRecordInPlace(t *testing.T) {
+	const oldName = "foo.example.com"
+	const newName = "bar.example.com"
+	const recID = "rec-rename-1"
+
+	s := testScheme(t)
+	mock := newMockDNSClient()
+	mock.records[recID] = &cfclient.DNSRecord{
+		ID:      recID,
+		Name:    oldName,
+		Type:    "A",
+		Content: testDNSContent,
+		TTL:     1,
+	}
+
+	dnsRecord := newTestDNSRecord("rename-test", "default")
+	dnsRecord.Spec.Name = newName // user just edited spec.name
+	dnsRecord.Status.RecordID = recID
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+
+	r := buildReconciler(s, mock, dnsRecord, secret)
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: dnsRecord.Name, Namespace: dnsRecord.Namespace},
+	}); err != nil {
+		t.Fatalf("Reconcile err = %v", err)
+	}
+
+	if !mock.updateCalled {
+		t.Errorf("expected UpdateRecord to be called for Name change")
+	}
+	got, ok := mock.records[recID]
+	if !ok {
+		t.Fatalf("record %q vanished from mock store", recID)
+	}
+	if got.Name != newName {
+		t.Errorf("post-Reconcile mock record Name = %q, want %q", got.Name, newName)
+	}
+
+	var got2 cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: dnsRecord.Name, Namespace: dnsRecord.Namespace}, &got2); err != nil {
+		t.Fatalf("get CR: %v", err)
+	}
+	if got2.Status.CurrentContent != testDNSContent {
+		t.Errorf("Status.CurrentContent = %q, want %q", got2.Status.CurrentContent, testDNSContent)
+	}
+}
+
+func TestNeedsUpdate_NameChange(t *testing.T) {
+	r := &CloudflareDNSRecordReconciler{}
+	existing := &cfclient.DNSRecord{
+		Name:    "foo.example.com",
+		Type:    "A",
+		Content: "1.2.3.4",
+		TTL:     300,
+	}
+	desired := cfclient.DNSRecordParams{
+		Name:    "bar.example.com",
+		Type:    "A",
+		Content: "1.2.3.4",
+		TTL:     300,
+	}
+	if !r.needsUpdate(existing, desired) {
+		t.Errorf("needsUpdate returned false for Name change; want true")
 	}
 }
