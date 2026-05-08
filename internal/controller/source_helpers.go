@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -239,6 +240,15 @@ func resolveTunnelCNAME(
 			return "", false, fmt.Errorf("CloudflareTunnel %s/%s not found", ns, tunnelName)
 		}
 		return "", false, fmt.Errorf("get CloudflareTunnel %s/%s: %w", ns, tunnelName, err)
+	}
+	// Prefer the apex hostname when the tunnel reports ApexHostnameReady=True
+	// and Status.ApexHostname.Name is set. Per-route records get a stable
+	// human-readable CNAME target; tunnel UUID rotation only moves the apex
+	// record, not the per-route fan-out.
+	if tunnel.Status.ApexHostname != nil &&
+		tunnel.Status.ApexHostname.Name != "" &&
+		meta.IsStatusConditionTrue(tunnel.Status.Conditions, cloudflarev1alpha1.ConditionTypeApexHostnameReady) {
+		return tunnel.Status.ApexHostname.Name, true, nil
 	}
 	if tunnel.Status.TunnelCNAME == "" {
 		return "", false, nil
