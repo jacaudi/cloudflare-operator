@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.3](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.2...v0.18.3) (2026-05-09)
+
+### Bug Fixes
+
+* **tunnel:** self-heal apex CloudflareDNSRecord on out-of-band delete ([#109](https://github.com/jacaudi/cloudflare-operator/issues/109)) ([74c5a26](https://github.com/jacaudi/cloudflare-operator/commit/74c5a265f82591cc46ee047e01272e373da0d893))
+
 ## [0.18.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.1...v0.18.2) (2026-05-09)
 
 ### Bug Fixes
