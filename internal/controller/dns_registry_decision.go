@@ -155,9 +155,16 @@ func (r *CloudflareDNSRecordReconciler) applyRegistryDecision(
 		r.Recorder.Event(dnsRecord, corev1.EventTypeNormal, cloudflarev1alpha1.ReasonRecordAdopted,
 			fmt.Sprintf("Adopted DNS record %s — writing TXT ownership", dnsRecord.Spec.Name))
 		if writeErr := r.writeRegistryTXT(ctx, dnsRecord, dnsClient, zoneID); writeErr != nil {
-			if !errors.Is(writeErr, ErrSourceLabelsMissing) {
+			// Strict-mode: an operator-emitted CR missing source labels is a
+			// bug, not a user-recoverable misconfig. Surface as an error so
+			// reconcile fails loudly instead of silently shipping a half-
+			// configured record.
+			managedByOperator := dnsRecord.Labels[LabelManagedBy] == "cloudflare-operator"
+			if !errors.Is(writeErr, ErrSourceLabelsMissing) || managedByOperator {
 				return true, verdict, ctrl.Result{}, fmt.Errorf("write registry TXT (adopt): %w", writeErr)
 			}
+			// Hand-authored CRs (no LabelManagedBy) retain the silent-skip
+			// for backwards compatibility with user-emitted CR workflows.
 			logger.Info("skipped companion TXT write: source labels missing", "record", dnsRecord.Spec.Name)
 		}
 
