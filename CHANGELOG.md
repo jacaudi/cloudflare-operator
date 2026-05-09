@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`CloudflareTunnel.spec.apexHostname` now works under registry-enabled config.** v0.17.0 / v0.18.0 / v0.18.1 emitted the apex `CloudflareDNSRecord` without `cloudflare.io/source-{kind,namespace,name}` labels, so when `RegistryConfig.TxtOwnerID` was set (the documented production config), `writeRegistryTXT` returned `ErrSourceLabelsMissing`, the companion TXT was never written, and the next reconcile saw a record without TXT and refused with `RegistryActionRefuseNoTXT` — the apex stayed in `Phase=Error, Reason=TxtRegistryGap` indefinitely and `ApexHostnameReady` never reached `True`. The apex CR now carries the four standard source labels matching the `HTTPRoute` / `Service` emitter convention. Additionally, the previously-silent skip on `ErrSourceLabelsMissing` is now a hard error when the CR carries `cloudflare.io/managed-by: cloudflare-operator`, so future operator-emitters that forget the labels surface immediately. **Migration:** if you have an apex CR stuck in `Phase=Error, Reason=TxtRegistryGap` after upgrade, set the annotation `cloudflare.io/adopt: "true"` on the apex CR for one reconcile cycle — the operator will write the missing companion TXT and the apex will reach `Ready`. A more automatic recovery path is tracked in #107. Closes #106.
+
 ## [0.18.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.0...v0.18.1) (2026-05-08)
 
 ### Bug Fixes
