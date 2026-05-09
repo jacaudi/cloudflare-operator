@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.1...v0.18.2) (2026-05-09)
+
+### Bug Fixes
+
+* **dns:** hard-fail on missing source labels for operator-emitted CRs ([#106](https://github.com/jacaudi/cloudflare-operator/issues/106)) ([e0cbf44](https://github.com/jacaudi/cloudflare-operator/commit/e0cbf449a710769a828b36046810831f4b79f211))
+* **tunnel:** add source labels to apex CloudflareDNSRecord ([#106](https://github.com/jacaudi/cloudflare-operator/issues/106)) ([2752081](https://github.com/jacaudi/cloudflare-operator/commit/275208138a6df12fecb801ce72c9ea9f2dde71e4))
+
 ## [Unreleased]
 
 ### Fixed
