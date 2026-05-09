@@ -255,6 +255,44 @@ func TestDesiredApexRecord_ProxiedExplicitlyFalse(t *testing.T) {
 	}
 }
 
+func TestDesiredApexRecord_HasSourceLabels(t *testing.T) {
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "external-edge",
+			Namespace: "infra",
+			UID:       "tun-uid-123",
+		},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: cloudflarev1alpha1.GroupVersion.String(),
+			Kind:       "CloudflareTunnel",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-creds", Namespace: "cf-system"},
+			ApexHostname: &cloudflarev1alpha1.ApexHostnameSpec{
+				Name:    "edge.example.com",
+				ZoneRef: cloudflarev1alpha1.ZoneReference{Name: "example-com", Namespace: "cf-system"},
+			},
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID:    "abcd-1234",
+			TunnelCNAME: "abcd-1234.cfargotunnel.com",
+		},
+	}
+
+	got := desiredApexRecord(tun)
+	want := map[string]string{
+		LabelSourceKind:      "CloudflareTunnel",
+		LabelSourceNamespace: "infra",
+		LabelSourceName:      "external-edge",
+		LabelManagedBy:       "cloudflare-operator",
+	}
+	for k, v := range want {
+		if got.Labels[k] != v {
+			t.Errorf("Labels[%q] = %q, want %q", k, got.Labels[k], v)
+		}
+	}
+}
+
 func TestDeleteApexRecordIfPresent(t *testing.T) {
 	tun := &cloudflarev1alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "external-edge", Namespace: "infra"},

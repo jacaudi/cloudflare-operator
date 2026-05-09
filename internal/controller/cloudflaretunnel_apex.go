@@ -117,6 +117,12 @@ func desiredApexRecord(tunnel *cloudflarev1alpha1.CloudflareTunnel) *cloudflarev
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      apexRecordName(tunnel),
 			Namespace: tunnel.Namespace,
+			Labels: map[string]string{
+				LabelSourceKind:      "CloudflareTunnel",
+				LabelSourceNamespace: tunnel.Namespace,
+				LabelSourceName:      tunnel.Name,
+				LabelManagedBy:       "cloudflare-operator",
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion:         tunnel.APIVersion,

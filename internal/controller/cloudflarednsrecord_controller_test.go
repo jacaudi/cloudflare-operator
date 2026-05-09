@@ -2384,3 +2384,65 @@ func TestNeedsUpdate_NameChange(t *testing.T) {
 		t.Errorf("needsUpdate returned false for Name change; want true")
 	}
 }
+
+// TestWriteRegistryTXT_ApexCR is the contract test that #106 broke. It
+// passes a CloudflareDNSRecord built by desiredApexRecord through
+// writeRegistryTXT and verifies the call succeeds (does not return
+// ErrSourceLabelsMissing). The captured TXT params confirm the registry
+// payload carries SourceKind=CloudflareTunnel.
+func TestWriteRegistryTXT_ApexCR(t *testing.T) {
+	tun := &cloudflarev1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "external-edge",
+			Namespace: "infra",
+			UID:       "tun-uid-123",
+		},
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: cloudflarev1alpha1.GroupVersion.String(),
+			Kind:       "CloudflareTunnel",
+		},
+		Spec: cloudflarev1alpha1.CloudflareTunnelSpec{
+			SecretRef: cloudflarev1alpha1.SecretReference{Name: "cf-creds"},
+			ApexHostname: &cloudflarev1alpha1.ApexHostnameSpec{
+				Name:    "edge.example.com",
+				ZoneRef: cloudflarev1alpha1.ZoneReference{Name: "example-com"},
+			},
+		},
+		Status: cloudflarev1alpha1.CloudflareTunnelStatus{
+			TunnelID:    "abcd",
+			TunnelCNAME: "abcd.cfargotunnel.com",
+		},
+	}
+	apexCR := desiredApexRecord(tun)
+
+	capturer := &capturingMockDNSClient{mockDNSClient: newMockDNSClient()}
+	r := &CloudflareDNSRecordReconciler{
+		Registry: RegistryConfig{
+			TxtOwnerID: "cf-operator-test",
+			AffixConfig: cfclient.AffixConfig{
+				Prefix: "cname-",
+			},
+		},
+	}
+	if err := r.writeRegistryTXT(context.Background(), apexCR, capturer, "zone-abc"); err != nil {
+		t.Fatalf("writeRegistryTXT returned error: %v", err)
+	}
+
+	// Confirm a TXT was created with the apex's payload.
+	if len(capturer.createParams) == 0 {
+		t.Fatalf("CreateRecord was not called")
+	}
+	got := capturer.createParams[0]
+	if got.Type != "TXT" {
+		t.Errorf("Type = %q, want TXT", got.Type)
+	}
+	wantPayload := cfclient.EncodeRegistryPayload(cfclient.RegistryPayload{
+		Owner:           "cf-operator-test",
+		SourceKind:      "CloudflareTunnel",
+		SourceNamespace: "infra",
+		SourceName:      "external-edge",
+	})
+	if got.Content != wantPayload {
+		t.Errorf("Content = %q, want %q", got.Content, wantPayload)
+	}
+}
