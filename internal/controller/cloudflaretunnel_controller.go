@@ -624,6 +624,7 @@ func (r *CloudflareTunnelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&corev1.Secret{}).
+		Owns(&cloudflarev1alpha1.CloudflareDNSRecord{}).
 		Watches(&cloudflarev1alpha1.CloudflareTunnelRule{}, handler.EnqueueRequestsFromMapFunc(r.mapRuleToTunnel)).
 		Complete(r)
 }
