@@ -335,9 +335,16 @@ func (r *CloudflareDNSRecordReconciler) reconcileRecord(ctx context.Context, dns
 		// Only on RegistryActionCreate: the TXT does not yet exist.
 		if registryEnabled && registryVerdict == RegistryActionCreate {
 			if writeErr := r.writeRegistryTXT(ctx, dnsRecord, dnsClient, zoneID); writeErr != nil {
-				if !stderrors.Is(writeErr, ErrSourceLabelsMissing) {
+				// Strict-mode: an operator-emitted CR missing source labels is a
+				// bug, not a user-recoverable misconfig. Surface as an error so
+				// reconcile fails loudly instead of silently shipping a half-
+				// configured record.
+				managedByOperator := dnsRecord.Labels[LabelManagedBy] == "cloudflare-operator"
+				if !stderrors.Is(writeErr, ErrSourceLabelsMissing) || managedByOperator {
 					return ctrl.Result{}, fmt.Errorf("write registry TXT after create: %w", writeErr)
 				}
+				// Hand-authored CRs (no LabelManagedBy) retain the silent-skip
+				// for backwards compatibility with user-emitted CR workflows.
 				logger.Info("skipped companion TXT write: source labels missing", "record", dnsRecord.Spec.Name)
 			}
 		}

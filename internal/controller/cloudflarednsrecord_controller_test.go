@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -2444,5 +2445,102 @@ func TestWriteRegistryTXT_ApexCR(t *testing.T) {
 	})
 	if got.Content != wantPayload {
 		t.Errorf("Content = %q, want %q", got.Content, wantPayload)
+	}
+}
+
+// TestWriteRegistryTXT_StrictMode_ManagedByOperator asserts that an
+// operator-emitted CR (LabelManagedBy=cloudflare-operator) missing source
+// labels causes writeRegistryTXT to return ErrSourceLabelsMissing —
+// reproducing the contract the hardening enforces. A CR WITHOUT
+// LabelManagedBy retains the existing silent-skip behavior so
+// user-authored CRs aren't broken.
+func TestWriteRegistryTXT_StrictMode_ManagedByOperator(t *testing.T) {
+	mock := newMockDNSClient()
+	r := &CloudflareDNSRecordReconciler{
+		Registry: RegistryConfig{TxtOwnerID: "cf-operator-test"},
+	}
+
+	// Operator-emitted CR missing source labels — must error.
+	managedNoSource := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "broken",
+			Namespace: "default",
+			Labels: map[string]string{
+				LabelManagedBy: "cloudflare-operator",
+				// Source labels intentionally absent.
+			},
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			Name: "x.example.com", Type: "CNAME",
+		},
+	}
+	err := r.writeRegistryTXT(context.Background(), managedNoSource, mock, "zone-abc")
+	if !errors.Is(err, ErrSourceLabelsMissing) {
+		t.Errorf("operator-emitted CR with missing labels: err = %v, want ErrSourceLabelsMissing", err)
+	}
+
+	// User-authored CR (no LabelManagedBy) missing source labels — also errors at the
+	// helper level (the silent-skip happens at the call sites, not in writeRegistryTXT itself).
+	// This test pins writeRegistryTXT's contract; the call-site behavior change is tested
+	// in TestReconcile_StrictMode_OperatorEmittedMissingLabels below.
+	userAuthored := &cloudflarev1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "user-cr",
+			Namespace: "default",
+			// No labels at all.
+		},
+		Spec: cloudflarev1alpha1.CloudflareDNSRecordSpec{
+			Name: "x.example.com", Type: "CNAME",
+		},
+	}
+	err = r.writeRegistryTXT(context.Background(), userAuthored, mock, "zone-abc")
+	if !errors.Is(err, ErrSourceLabelsMissing) {
+		t.Errorf("user-authored CR with missing labels: err = %v, want ErrSourceLabelsMissing (helper-level contract)", err)
+	}
+}
+
+// TestReconcile_StrictMode_OperatorEmittedMissingLabels asserts that the
+// post-create silent-skip path now propagates ErrSourceLabelsMissing
+// when the CR carries LabelManagedBy=cloudflare-operator. This is the
+// call-site behavior change in cloudflarednsrecord_controller.go's
+// post-create branch — the controller routes the error through
+// failReconcile, which sets Ready=False on the persisted status. Pre-fix
+// the path returned nil and the CR appeared healthy while the companion
+// TXT silently never landed.
+func TestReconcile_StrictMode_OperatorEmittedMissingLabels(t *testing.T) {
+	s := testScheme(t)
+	// Build a CR with LabelManagedBy set but missing source labels.
+	dnsRecord := newTestDNSRecord("strict-test", "default")
+	dnsRecord.Labels = map[string]string{
+		LabelManagedBy: "cloudflare-operator",
+		// Source labels intentionally absent.
+	}
+	dnsRecord.Finalizers = []string{cloudflarev1alpha1.FinalizerName}
+	secret := newTestSecret("default")
+
+	mock := newMockDNSClient()
+	// No existing record — first reconcile takes the Create path.
+	r := buildReconcilerWithRegistry(s, mock, RegistryConfig{TxtOwnerID: "cf-operator-test"}, dnsRecord, secret)
+
+	_, _ = r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: dnsRecord.Name, Namespace: dnsRecord.Namespace},
+	})
+
+	// failReconcile swallows the error into status; assert Ready=False on the
+	// persisted CR so the visible behavior change (loud failure vs. silent
+	// success) is what the test pins.
+	var got cloudflarev1alpha1.CloudflareDNSRecord
+	if err := r.Get(context.Background(), types.NamespacedName{Name: dnsRecord.Name, Namespace: dnsRecord.Namespace}, &got); err != nil {
+		t.Fatalf("get CR after reconcile: %v", err)
+	}
+	ready := meta.FindStatusCondition(got.Status.Conditions, cloudflarev1alpha1.ConditionTypeReady)
+	if ready == nil {
+		t.Fatalf("Ready condition not set; want False (operator-emitted CR with missing source labels must surface failure)")
+	}
+	if ready.Status != metav1.ConditionFalse {
+		t.Errorf("Ready = %s, want False (operator-emitted CR with missing source labels must surface failure)", ready.Status)
+	}
+	if !strings.Contains(ready.Message, "source-* labels") && !strings.Contains(ready.Message, ErrSourceLabelsMissing.Error()) {
+		t.Errorf("Ready.Message = %q, want it to mention ErrSourceLabelsMissing (%q)", ready.Message, ErrSourceLabelsMissing.Error())
 	}
 }
