@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolver_FirstProviderWins(t *testing.T) {
+func TestResolver_SingleProviderHappyPath(t *testing.T) {
 	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("192.0.2.42"))
 	}))
@@ -57,14 +57,28 @@ func TestResolver_AllProvidersFail(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestResolver_RejectsNonIPResponse pairs a provider returning a malformed
+// body with a provider returning a valid IP. The malformed response must be
+// rejected by the IP-validation branch (not surface as the result), and the
+// surviving good vote must win the tally.
 func TestResolver_RejectsNonIPResponse(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("not-an-ip"))
 	}))
-	defer srv.Close()
-	r := NewResolver(WithProviders([]string{srv.URL}))
-	_, err := r.GetExternalIP(context.Background())
-	require.Error(t, err)
+	defer bad.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.7"))
+	}))
+	defer good.Close()
+
+	r := NewResolver(
+		WithProviders([]string{bad.URL, good.URL}),
+		WithCacheTTL(0),
+	)
+	ip, err := r.GetExternalIP(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "192.0.2.7", ip)
 }
 
 // TestResolver_ContextCancel covers the context-cancel branch: passing an
@@ -90,15 +104,16 @@ func TestResolver_ContextCancel(t *testing.T) {
 	start := time.Now()
 	_, err := r.GetExternalIP(ctx)
 	elapsed := time.Since(start)
-	require.Error(t, err, "expected error when context is canceled")
+	require.ErrorIs(t, err, context.Canceled, "expected wrapped context.Canceled when ctx is canceled")
 	require.Less(t, elapsed, time.Second, "should return promptly on canceled context")
 }
 
-// TestResolver_FallsThroughOnFirstError chains a failing provider (500) with
-// a good provider. Because the lifted implementation tallies provider votes
-// rather than short-circuiting on the first success, the returned IP must come
-// from the surviving provider when all others error.
-func TestResolver_FallsThroughOnFirstError(t *testing.T) {
+// TestResolver_OneProviderErrorsOneSucceeds_ReturnsSurvivingVote pairs a
+// failing provider (500) with a good provider. Because the lifted
+// implementation tallies provider votes rather than short-circuiting on the
+// first success, the returned IP must come from the surviving provider when
+// all others error.
+func TestResolver_OneProviderErrorsOneSucceeds_ReturnsSurvivingVote(t *testing.T) {
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
