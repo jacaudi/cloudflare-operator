@@ -1,3 +1,19 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Package main is the cloudflare-operator binary entrypoint. It dispatches
 // on --mode=meta|zone|tunnel: meta runs the bootstrap reconciler, zone and
 // tunnel run stub no-ops (specs 2 and 3 fill them in).
@@ -127,8 +143,14 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 		fmt.Fprintln(os.Stderr, "setup bootstrap reconciler:", err)
 		os.Exit(1)
 	}
-	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		fmt.Fprintln(os.Stderr, "add healthz check:", err)
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		fmt.Fprintln(os.Stderr, "add readyz check:", err)
+		os.Exit(1)
+	}
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		fmt.Fprintln(os.Stderr, "manager exited with error:", err)
 		os.Exit(1)

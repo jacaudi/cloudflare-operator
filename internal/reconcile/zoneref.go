@@ -1,3 +1,19 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package reconcile
 
 import (
@@ -40,6 +56,16 @@ type ZoneRefResult struct {
 //
 // Every CR that binds to a zone uses this helper. No caller hand-rolls zone
 // resolution.
+//
+// Result contract:
+//   - On `ZoneID` input path: result.ZoneID is the literal input; ZoneObject is nil.
+//   - On `ZoneRef` input path: result.ZoneObject is the fetched CloudflareZone.
+//     result.ZoneID is read from status.zoneID — which is populated by spec 2's
+//     CloudflareZone reconciler. **In Foundation, status.zoneID does not exist
+//     yet**, so result.ZoneID is always "" on this path. Callers should treat
+//     "ZoneID == "" && ZoneObject != nil" as "zone exists, status not yet
+//     populated — requeue."
+//   - On `ZoneRef` input path with the target CR missing: returns ErrZoneRefNotFound.
 func ResolveZoneID(ctx context.Context, c client.Client, in ZoneRefInputs, defaultNamespace string) (ZoneRefResult, error) {
 	switch {
 	case in.ZoneID != "" && in.ZoneRef != nil:

@@ -1,9 +1,26 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package bootstrap
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 )
@@ -83,4 +100,44 @@ func TestBuildControllerDeployment_EnvCredentialPassthrough(t *testing.T) {
 	}
 	require.True(t, sawAccount, "expected CLOUDFLARE_ACCOUNT_ID env var")
 	require.True(t, sawToken, "expected CLOUDFLARE_API_TOKEN env var sourced from secretKeyRef")
+}
+
+func TestBuildControllerDeployment_SecurityContext(t *testing.T) {
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle:    "zone",
+		Namespace: "cf",
+		Image:     "img:1",
+		Replicas:  1,
+	})
+	podSC := dep.Spec.Template.Spec.SecurityContext
+	require.NotNil(t, podSC, "pod security context must be set")
+	require.NotNil(t, podSC.RunAsNonRoot)
+	require.True(t, *podSC.RunAsNonRoot, "runAsNonRoot must be true")
+
+	ctrSC := dep.Spec.Template.Spec.Containers[0].SecurityContext
+	require.NotNil(t, ctrSC, "container security context must be set")
+	require.NotNil(t, ctrSC.AllowPrivilegeEscalation)
+	require.False(t, *ctrSC.AllowPrivilegeEscalation, "allowPrivilegeEscalation must be false")
+	require.NotNil(t, ctrSC.Capabilities)
+	require.Contains(t, ctrSC.Capabilities.Drop, corev1.Capability("ALL"))
+}
+
+func TestBuildControllerDeployment_LeaderElectionArg(t *testing.T) {
+	enabled := BuildControllerDeployment(BuildArgs{
+		Bundle:         "zone",
+		Namespace:      "cf",
+		Image:          "img:1",
+		Replicas:       1,
+		LeaderElection: true,
+	})
+	require.Contains(t, enabled.Spec.Template.Spec.Containers[0].Args, "--leader-election=true")
+
+	disabled := BuildControllerDeployment(BuildArgs{
+		Bundle:         "zone",
+		Namespace:      "cf",
+		Image:          "img:1",
+		Replicas:       1,
+		LeaderElection: false,
+	})
+	require.Contains(t, disabled.Spec.Template.Spec.Containers[0].Args, "--leader-election=false")
 }

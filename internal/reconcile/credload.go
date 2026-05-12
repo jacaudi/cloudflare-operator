@@ -1,3 +1,19 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package reconcile
 
 import (
@@ -32,7 +48,7 @@ func LoadCredentials(
 	if errors.Is(err, cloudflare.ErrSecretNotFound) ||
 		errors.Is(err, cloudflare.ErrSecretKeyMissing) ||
 		errors.Is(err, cloudflare.ErrAccountIDUnset) {
-		return cloudflare.Credentials{}, FailReconcile("CredentialsUnavailable", err.Error()), nil
+		return cloudflare.Credentials{}, FailReconcile(ctx, "CredentialsUnavailable", err.Error()), nil
 	}
 	return cloudflare.Credentials{}, nil, err
 }
@@ -69,7 +85,7 @@ func LoadCredentialsHierarchical(
 	}
 	creds, ok := EnvCredentials()
 	if !ok {
-		return cloudflare.Credentials{}, FailReconcile("CredentialsUnavailable",
+		return cloudflare.Credentials{}, FailReconcile(ctx, "CredentialsUnavailable",
 			"no per-CR credential override and CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID env vars unset"), nil
 	}
 	return creds, nil, nil

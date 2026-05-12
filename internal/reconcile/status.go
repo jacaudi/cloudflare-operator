@@ -1,21 +1,30 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Package reconcile holds Foundation-owned helpers shared by the bootstrap
 // reconciler and the zone / tunnel controllers introduced in specs 2 and 3.
 package reconcile
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
-)
-
-// Phase is a coarse-grained status summary derived from the Ready condition.
-type Phase string
-
-const (
-	PhaseReady       Phase = "Ready"
-	PhaseReconciling Phase = "Reconciling"
-	PhaseError       Phase = "Error"
-	PhasePending     Phase = "Pending"
 )
 
 // inProgressReasons are reasons that mean "still working" rather than "broken".
@@ -53,17 +62,46 @@ func SetCondition(conds []metav1.Condition, condType string, status metav1.Condi
 	})
 }
 
-// DerivePhase maps (Ready.Status, Ready.Reason) to a Phase enum.
-func DerivePhase(status metav1.ConditionStatus, reason string) Phase {
+// DerivePhase maps (Ready.Status, Ready.Reason) to a v1alpha1.Phase enum.
+func DerivePhase(status metav1.ConditionStatus, reason string) v1alpha1.Phase {
 	switch status {
 	case metav1.ConditionTrue:
-		return PhaseReady
+		return v1alpha1.PhaseReady
 	case metav1.ConditionFalse:
 		if _, ok := inProgressReasons[reason]; ok {
-			return PhaseReconciling
+			return v1alpha1.PhaseReconciling
 		}
-		return PhaseError
+		return v1alpha1.PhaseError
 	default:
-		return PhasePending
+		return v1alpha1.PhasePending
 	}
+}
+
+// SetUnstructuredCondition is the unstructured-slice equivalent of SetCondition.
+// It upserts by `type` and only updates `lastTransitionTime` when `status` changes.
+// Used by callers that operate on *unstructured.Unstructured for domain-agnostic code paths.
+func SetUnstructuredCondition(conds []interface{}, condType, status, reason, msg string) []interface{} {
+	now := metav1.Now().UTC().Format(time.RFC3339)
+	newC := map[string]interface{}{
+		"type":               condType,
+		"status":             status,
+		"reason":             reason,
+		"message":            msg,
+		"lastTransitionTime": now,
+	}
+	for i, c := range conds {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if m["type"] == condType {
+			// Preserve LastTransitionTime if status (and reason) unchanged.
+			if m["status"] == status && m["reason"] == reason {
+				newC["lastTransitionTime"] = m["lastTransitionTime"]
+			}
+			conds[i] = newC
+			return conds
+		}
+	}
+	return append(conds, newC)
 }

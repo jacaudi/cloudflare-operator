@@ -1,9 +1,24 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package bootstrap
 
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -128,6 +143,7 @@ func (r *Reconciler) reconcileDeployments(ctx context.Context, op *v1alpha1.Clou
 			args.HealthAddress = op.Spec.Observability.HealthAddress
 			args.TokenSecretRef = op.Spec.Cloudflare.TokenSecretRef
 			args.AccountID = op.Spec.Cloudflare.AccountID
+			args.LeaderElection = op.Spec.Observability.LeaderElection.Enabled
 			dep := BuildControllerDeployment(args)
 			if err := reconcile.Apply(ctx, r.Client, dep); err != nil {
 				return nil, fmt.Errorf("apply Deployment %s: %w", dep.Name, err)
@@ -156,9 +172,13 @@ func (r *Reconciler) reconcileDeployments(ctx context.Context, op *v1alpha1.Clou
 // bundle was disabled. CRD-not-found errors are swallowed (the CRD may already
 // be uninstalled).
 //
+// If any status update fails, the first error is tracked and returned so the
+// parent reconcile requeues and retries the sweep.
+//
 // Uses unstructured so the bootstrap reconciler stays domain-agnostic — no
 // dependency on spec 2 / spec 3 CRD Go types.
 func (r *Reconciler) sweepStaleCRs(ctx context.Context, bundle Bundle, logger logr.Logger) error {
+	var firstErr error
 	for _, gvk := range bundleKinds(bundle) {
 		list := &unstructured.UnstructuredList{}
 		list.SetGroupVersionKind(gvk)
@@ -177,11 +197,14 @@ func (r *Reconciler) sweepStaleCRs(ctx context.Context, bundle Bundle, logger lo
 			}
 			if err := r.Client.Status().Update(ctx, item); err != nil {
 				logger.V(1).Info("failed to stamp ControllerOffline; will retry", "kind", gvk.Kind, "name", item.GetName(), "err", err)
+				if firstErr == nil {
+					firstErr = err
+				}
 				continue
 			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // bundleKinds returns the GroupVersionKinds belonging to each bundle.
@@ -202,34 +225,23 @@ func bundleKinds(b Bundle) []schema.GroupVersionKind {
 }
 
 // upsertOfflineCondition sets or replaces the Ready condition to
-// (False, ControllerOffline). Operates on unstructured slices to stay
-// domain-agnostic.
+// (False, ControllerOffline). Delegates to the shared SetUnstructuredCondition
+// helper which correctly preserves LastTransitionTime on no-op calls.
 func upsertOfflineCondition(conds []interface{}) []interface{} {
-	now := metav1.Now().UTC().Format(time.RFC3339)
-	offline := map[string]interface{}{
-		"type":               "Ready",
-		"status":             "False",
-		"reason":             conventions.ReasonControllerOffline,
-		"message":            "bundle disabled by CloudflareOperator; controller no longer reconciling",
-		"lastTransitionTime": now,
-	}
-	for i, c := range conds {
-		m, ok := c.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if m["type"] == "Ready" {
-			conds[i] = offline
-			return conds
-		}
-	}
-	return append(conds, offline)
+	return reconcile.SetUnstructuredCondition(
+		conds,
+		conventions.ConditionTypeReady,
+		"False",
+		conventions.ReasonControllerOffline,
+		"bundle disabled by CloudflareOperator; controller no longer reconciling",
+	)
 }
 
 // markIgnored stamps an Ignored condition on non-singleton CRs.
 func (r *Reconciler) markIgnored(ctx context.Context, op *v1alpha1.CloudflareOperator) (ctrl.Result, error) {
 	op.Status.Conditions = reconcile.SetReady(op.Status.Conditions, metav1.ConditionFalse, conventions.ReasonIgnored,
 		fmt.Sprintf("only the singleton CR named %q is reconciled", v1alpha1.CloudflareOperatorSingletonName))
+	op.Status.ObservedGeneration = op.Generation
 	if err := r.Client.Status().Update(ctx, op); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -239,6 +251,7 @@ func (r *Reconciler) markIgnored(ctx context.Context, op *v1alpha1.CloudflareOpe
 // markFailure stamps Ready=False with reason+msg and returns the FailReconcile result.
 func (r *Reconciler) markFailure(ctx context.Context, op *v1alpha1.CloudflareOperator, reason, msg string) (ctrl.Result, error) {
 	op.Status.Conditions = reconcile.SetReady(op.Status.Conditions, metav1.ConditionFalse, reason, msg)
+	op.Status.ObservedGeneration = op.Generation
 	_ = r.Client.Status().Update(ctx, op)
-	return *reconcile.FailReconcile(reason, msg), nil
+	return *reconcile.FailReconcile(ctx, reason, msg), nil
 }

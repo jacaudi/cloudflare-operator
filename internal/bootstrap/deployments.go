@@ -1,9 +1,27 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 // Package bootstrap is the meta-operator reconciler. It SSAs the domain CRDs
 // and the zone / tunnel controller Deployments based on the CloudflareOperator
 // CR.
 package bootstrap
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -22,6 +40,7 @@ type BuildArgs struct {
 	LogLevel       string
 	MetricsAddress string
 	HealthAddress  string
+	LeaderElection bool
 	// Default-credential env passthrough. The bootstrap reconciler fills these
 	// from the top-level CloudflareOperator.spec.cloudflare so controllers have
 	// credentials at startup; per-CR overrides still work at reconcile time via
@@ -76,6 +95,7 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 	if a.HealthAddress != "" {
 		args = append(args, "--health-address="+a.HealthAddress)
 	}
+	args = append(args, fmt.Sprintf("--leader-election=%t", a.LeaderElection))
 
 	// Env vars. Controllers read these at startup as the default credentials;
 	// per-CR overrides still work at reconcile time via LoadCredentialsHierarchical.
@@ -112,11 +132,27 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "cloudflare-operator",
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptrBool(true),
+						RunAsUser:    ptrInt64(65532),
+						RunAsGroup:   ptrInt64(65532),
+						FSGroup:      ptrInt64(65532),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
 					Containers: []corev1.Container{{
 						Name:  "manager",
 						Image: a.Image,
 						Args:  args,
 						Env:   envVars,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: ptrBool(false),
+							ReadOnlyRootFilesystem:   ptrBool(true),
+							Capabilities: &corev1.Capabilities{
+								Drop: []corev1.Capability{"ALL"},
+							},
+						},
 						Ports: []corev1.ContainerPort{
 							{Name: "metrics", ContainerPort: 8080},
 							{Name: "health", ContainerPort: 8081},
@@ -148,4 +184,6 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 	}
 }
 
-func ptr32(v int32) *int32 { return &v }
+func ptr32(v int32) *int32    { return &v }
+func ptrBool(b bool) *bool    { return &b }
+func ptrInt64(i int64) *int64 { return &i }
