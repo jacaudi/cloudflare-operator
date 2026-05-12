@@ -234,7 +234,7 @@ type DNSSettings struct {
 // Configuring this section requires the Zone:Bot Management:Edit scope on the
 // API token and a Cloudflare plan that supports bot management. On Free plans
 // this section's API call returns 403; the controller will surface that on
-// the BotManagementApplied condition with reason=PermissionDenied without
+// the BotManagementApplied condition with reason=PlanTierInsufficient without
 // preventing other groups (ssl / security / performance / network) from
 // being applied.
 type BotManagementSettings struct {
