@@ -1,1 +1,12 @@
 docs/design/
+docs/plans/
+docs/prompt/
+.claude/worktrees/
+
+bin/
+cover.out
+*.test
+*.out
+vendor/
+.vscode/
+.idea/

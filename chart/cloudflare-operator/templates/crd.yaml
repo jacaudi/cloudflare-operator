@@ -1,0 +1,287 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: cloudflareoperators.cloudflare.io
+spec:
+  group: cloudflare.io
+  names:
+    kind: CloudflareOperator
+    listKind: CloudflareOperatorList
+    plural: cloudflareoperators
+    singular: cloudflareoperator
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.installedBundles
+      name: Bundles
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: CloudflareOperator is the top-level CR that drives bundle installation.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CloudflareOperatorSpec defines the desired state of the meta-operator.
+            properties:
+              cloudflare:
+                description: |-
+                  Cloudflare is the default credential + account used by all reconciled
+                  CRs that do not override at the CR level.
+                properties:
+                  accountID:
+                    description: AccountID is the Cloudflare account ID this credential
+                      scopes to.
+                    minLength: 1
+                    type: string
+                  tokenSecretRef:
+                    description: TokenSecretRef points at the Secret carrying the
+                      Cloudflare API token.
+                    properties:
+                      key:
+                        default: token
+                        description: Key inside the Secret holding the Cloudflare
+                          API token. Defaults to "token".
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Secret. Defaults to the referencing
+                          CR's namespace.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  txtRegistryKeySecretRef:
+                    description: |-
+                      TxtRegistryKeySecretRef references a Secret containing an AES-256 key
+                      used to encrypt the TXT-registry ownership records. Only meaningful on
+                      the top-level CloudflareOperator; ignored on per-CR overrides. When
+                      unset, the TXT registry runs in plaintext mode (encryption is opt-in).
+                    properties:
+                      key:
+                        default: token
+                        description: Key inside the Secret holding the Cloudflare
+                          API token. Defaults to "token".
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Secret. Defaults to the referencing
+                          CR's namespace.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - accountID
+                - tokenSecretRef
+                type: object
+              controllers:
+                description: Controllers toggles the zone and tunnel controller bundles.
+                properties:
+                  tunnel:
+                    description: ControllerSpec is the per-bundle knob set.
+                    properties:
+                      enabled:
+                        default: false
+                        description: Enabled toggles the bundle.
+                        type: boolean
+                      image:
+                        description: Image override; empty = use the meta-operator's
+                          own image.
+                        type: string
+                      logLevel:
+                        default: info
+                        description: LogLevel is the structured-log level (debug|info|warn|error).
+                        enum:
+                        - debug
+                        - info
+                        - warn
+                        - error
+                        type: string
+                      replicas:
+                        default: 1
+                        description: Replicas is the desired Deployment replica count.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                  zone:
+                    description: ControllerSpec is the per-bundle knob set.
+                    properties:
+                      enabled:
+                        default: false
+                        description: Enabled toggles the bundle.
+                        type: boolean
+                      image:
+                        description: Image override; empty = use the meta-operator's
+                          own image.
+                        type: string
+                      logLevel:
+                        default: info
+                        description: LogLevel is the structured-log level (debug|info|warn|error).
+                        enum:
+                        - debug
+                        - info
+                        - warn
+                        - error
+                        type: string
+                      replicas:
+                        default: 1
+                        description: Replicas is the desired Deployment replica count.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                type: object
+              observability:
+                description: Observability holds metrics / health / leader-election
+                  knobs.
+                properties:
+                  healthAddress:
+                    default: :8081
+                    description: HealthAddress is the bind address for /healthz and
+                      /readyz.
+                    minLength: 1
+                    type: string
+                  leaderElection:
+                    description: LeaderElection configures controller-runtime leader
+                      election.
+                    properties:
+                      enabled:
+                        default: true
+                        description: Enabled toggles leader election. Ignored when
+                          replicas == 1.
+                        type: boolean
+                    type: object
+                  metricsAddress:
+                    default: :8080
+                    description: MetricsAddress is the bind address for /metrics.
+                    minLength: 1
+                    type: string
+                type: object
+            required:
+            - cloudflare
+            - controllers
+            type: object
+          status:
+            description: CloudflareOperatorStatus is the observed state.
+            properties:
+              conditions:
+                description: Conditions reflects the current reconciliation state
+                  of the meta-operator.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              installedBundles:
+                description: InstalledBundles lists the bundles currently installed.
+                items:
+                  type: string
+                type: array
+              installedCRDs:
+                description: InstalledCRDs lists the CRDs the bootstrap reconciler
+                  has SSA'd.
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation last reconciled.
+                format: int64
+                type: integer
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: controllers.tunnel.enabled requires controllers.zone.enabled
+          rule: '!has(self.spec) || !has(self.spec.controllers) || !has(self.spec.controllers.tunnel)
+            || !has(self.spec.controllers.tunnel.enabled) || self.spec.controllers.tunnel.enabled
+            != true || (has(self.spec.controllers.zone) && has(self.spec.controllers.zone.enabled)
+            && self.spec.controllers.zone.enabled == true)'
+    served: true
+    storage: true
+    subresources:
+      status: {}

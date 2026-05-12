@@ -1,0 +1,32 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package reconcile
+
+import (
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+)
+
+// SetControllerOwner stamps a controller-style OwnerReference from owner onto
+// child. Both blockOwnerDeletion and controller are true.
+func SetControllerOwner(owner, child client.Object, scheme *runtime.Scheme) error {
+	return controllerutil.SetControllerReference(owner, child, scheme)
+}
+
+// Compile-time assertion that we depend on runtime.Object via the scheme.
+var _ runtime.Object = (client.Object)(nil)

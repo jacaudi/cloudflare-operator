@@ -1,0 +1,10 @@
+image:
+  repository: ghcr.io/jacaudi/cloudflare-operator
+  tag: ""           # empty → .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+namespace: cloudflare-system
+
+# Optional: bootstrap CloudflareOperator CR via post-install hook.
+# Disabled by default — users typically kubectl apply their own.
+createBootstrapCR: false

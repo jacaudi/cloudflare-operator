@@ -1,0 +1,7 @@
+apiVersion: v2
+name: cloudflare-operator
+description: Cloudflare operator — meta-operator + bundled controllers
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/jacaudi/cloudflare-operator

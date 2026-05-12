@@ -1,0 +1,6 @@
+domain: cloudflare.io
+layout:
+- go.kubebuilder.io/v4
+projectName: cloudflare-operator
+version: "3"
+repo: github.com/jacaudi/cloudflare-operator
