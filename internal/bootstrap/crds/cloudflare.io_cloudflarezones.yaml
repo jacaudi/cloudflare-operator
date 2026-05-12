@@ -14,11 +14,29 @@ spec:
     singular: cloudflarezone
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Domain
+      type: string
+    - jsonPath: .status.zoneID
+      name: Zone ID
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: CloudflareZone represents a Cloudflare DNS zone managed by the
-          operator.
+        description: CloudflareZone is the Schema for the cloudflarezones API.
         properties:
           apiVersion:
             description: |-
@@ -38,10 +56,15 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudflareZoneSpec is a scaffold; spec 2 populates fields.
+            description: CloudflareZoneSpec defines the desired state of a Cloudflare
+              Zone.
             properties:
               cloudflare:
-                description: Cloudflare overrides the top-level credential + account.
+                description: |-
+                  Cloudflare overrides the top-level credential + account from the
+                  CloudflareOperator CR. Per Foundation §5 the token and accountID
+                  are inherited or overridden as a unit; CEL on this CRD must reject
+                  setting only one. Omitted entirely → top-level default applies.
                 properties:
                   accountID:
                     description: AccountID is the Cloudflare account ID this credential
@@ -95,12 +118,50 @@ spec:
                 - accountID
                 - tokenSecretRef
                 type: object
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens when the CR is deleted.
+                  "Retain" (default) leaves the zone in Cloudflare; "Delete" removes it.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              interval:
+                default: 30m
+                description: Interval is the reconciliation interval.
+                type: string
+              name:
+                description: Name is the domain name to onboard (e.g., "example.com").
+                minLength: 1
+                type: string
+              paused:
+                description: Paused indicates whether the zone is paused (not serving
+                  traffic through Cloudflare).
+                type: boolean
+              type:
+                default: full
+                description: |-
+                  Type is the zone type. "full" means Cloudflare is authoritative DNS;
+                  "partial" is CNAME setup; "secondary" mirrors an upstream master.
+                  Immutable after creation.
+                enum:
+                - full
+                - partial
+                - secondary
+                type: string
+            required:
+            - deletionPolicy
+            - name
+            - type
             type: object
           status:
-            description: CloudflareZoneStatus is a scaffold.
+            description: CloudflareZoneStatus defines the observed state of a CloudflareZone.
             properties:
+              activatedOn:
+                format: date-time
+                type: string
               conditions:
-                description: Conditions reflects the current reconciliation state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -159,9 +220,43 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastSyncedAt:
+                format: date-time
+                type: string
+              nameServers:
+                items:
+                  type: string
+                type: array
               observedGeneration:
                 format: int64
                 type: integer
+              originalNameServers:
+                items:
+                  type: string
+                type: array
+              originalRegistrar:
+                type: string
+              phase:
+                allOf:
+                - enum:
+                  - Ready
+                  - Reconciling
+                  - Error
+                  - Pending
+                - enum:
+                  - Ready
+                  - Reconciling
+                  - Error
+                  - Pending
+                description: Phase is a coarse summary derived from the Ready condition
+                  (Foundation §8).
+                type: string
+              status:
+                description: Status is the zone status in Cloudflare (initializing,
+                  pending, active, moved).
+                type: string
+              zoneID:
+                type: string
             type: object
         type: object
     served: true

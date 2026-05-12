@@ -14,10 +14,33 @@ spec:
     singular: cloudflarednsrecord
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Record Name
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.currentContent
+      name: Content
+      type: string
+    - jsonPath: .spec.proxied
+      name: Proxied
+      type: boolean
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: CloudflareDNSRecord represents a single DNS record in a zone.
+        description: CloudflareDNSRecord is the Schema for the cloudflarednsrecords
+          API.
         properties:
           apiVersion:
             description: |-
@@ -37,10 +60,21 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudflareDNSRecordSpec is a scaffold; spec 2 populates fields.
+            description: CloudflareDNSRecordSpec defines the desired state of a Cloudflare
+              DNS record.
             properties:
+              adopt:
+                description: |-
+                  Adopt takes over an existing record matching (name, type) if found.
+                  No ownership verification is performed in this phase (the TXT companion
+                  registry is deferred) — only enable for records you are sure are not
+                  managed by another source.
+                type: boolean
               cloudflare:
-                description: Cloudflare overrides the top-level credential + account.
+                description: |-
+                  Cloudflare overrides the top-level credential + account from the
+                  CloudflareOperator CR. Per Foundation §5 the token and accountID are
+                  inherited or overridden as a unit; CEL rejects mixing.
                 properties:
                   accountID:
                     description: AccountID is the Cloudflare account ID this credential
@@ -94,12 +128,120 @@ spec:
                 - accountID
                 - tokenSecretRef
                 type: object
+              content:
+                description: Content is the record content (IP, hostname, etc.). XOR
+                  with DynamicIP.
+                type: string
+              dynamicIP:
+                description: |-
+                  DynamicIP enables automatic external IP resolution. Only valid for A/AAAA.
+                  XOR with Content.
+                type: boolean
+              interval:
+                default: 5m
+                description: Interval is the reconciliation interval for drift detection.
+                type: string
+              name:
+                description: Name is the DNS record name (e.g., "example.com", "sub.example.com").
+                minLength: 1
+                type: string
+              priority:
+                description: |-
+                  Priority is the MX record priority (lower = preferred). SRV records use
+                  srvData.priority instead.
+                type: integer
+              proxied:
+                description: Proxied indicates whether the record is proxied through
+                  Cloudflare.
+                type: boolean
+              srvData:
+                description: SRVData contains SRV-specific record fields. Required
+                  when Type=SRV.
+                properties:
+                  port:
+                    description: Port is the TCP/UDP port the service listens on.
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                  priority:
+                    description: Priority is the SRV priority (lower = preferred).
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                  proto:
+                    description: Proto is the transport protocol.
+                    enum:
+                    - _tcp
+                    - _udp
+                    - _tls
+                    type: string
+                  service:
+                    description: Service is the symbolic service name (e.g., "_satisfactory",
+                      "_minecraft").
+                    type: string
+                  target:
+                    description: Target is the canonical hostname of the machine providing
+                      the service.
+                    type: string
+                  weight:
+                    description: |-
+                      Weight is the SRV weight for records with the same priority
+                      (higher = more traffic).
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                required:
+                - port
+                - priority
+                - proto
+                - service
+                - target
+                - weight
+                type: object
+              ttl:
+                default: 1
+                description: TTL in seconds. Use 1 for automatic.
+                minimum: 1
+                type: integer
+              type:
+                description: Type is the DNS record type.
+                enum:
+                - A
+                - AAAA
+                - CNAME
+                - SRV
+                - MX
+                - TXT
+                - NS
+                type: string
+              zoneID:
+                description: ZoneID is the Cloudflare Zone ID. Mutually exclusive
+                  with ZoneRef.
+                minLength: 1
+                type: string
+              zoneRef:
+                description: ZoneRef references a CloudflareZone CR. Mutually exclusive
+                  with ZoneID.
+                properties:
+                  name:
+                    description: Name of the CloudflareZone CR.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the CloudflareZone CR. Defaults to the
+                      referencing CR's namespace.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - name
+            - type
             type: object
           status:
-            description: CloudflareDNSRecordStatus is a scaffold.
+            description: CloudflareDNSRecordStatus defines the observed state.
             properties:
               conditions:
-                description: Conditions reflects the current reconciliation state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -158,11 +300,51 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              currentContent:
+                description: |-
+                  CurrentContent is the most-recently-observed record content (post-resolve
+                  for DynamicIP).
+                type: string
+              lastSyncedAt:
+                description: LastSyncedAt is the timestamp of the most recent successful
+                  reconcile.
+                format: date-time
+                type: string
               observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation observed by the controller
+                  during its last reconcile. When this lags .metadata.generation the
+                  controller has not yet processed the latest spec.
                 format: int64
                 type: integer
+              phase:
+                description: Phase is a coarse summary derived from the Ready condition
+                  (Foundation §8).
+                enum:
+                - Ready
+                - Reconciling
+                - Error
+                - Pending
+                type: string
+              recordID:
+                description: RecordID is the Cloudflare ID of the managed DNS record.
+                type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: one of zoneID or zoneRef is required
+          rule: has(self.spec.zoneID) || has(self.spec.zoneRef)
+        - message: zoneID and zoneRef are mutually exclusive
+          rule: '!(has(self.spec.zoneID) && has(self.spec.zoneRef))'
+        - message: content and dynamicIP are mutually exclusive
+          rule: '!(has(self.spec.content) && self.spec.dynamicIP)'
+        - message: for SRV records use srvData.priority, not spec.priority
+          rule: '!(self.spec.type == ''SRV'' && has(self.spec.priority))'
+        - message: MX records require spec.priority
+          rule: 'self.spec.type == ''MX'' ? has(self.spec.priority) : true'
+        - message: dynamicIP is only valid for A or AAAA records
+          rule: 'self.spec.dynamicIP ? (self.spec.type == ''A'' || self.spec.type
+            == ''AAAA'') : true'
     served: true
     storage: true
     subresources:
