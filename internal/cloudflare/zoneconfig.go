@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	"github.com/cloudflare/cloudflare-go/v6/bot_management"
@@ -68,12 +69,14 @@ func (c *zoneConfigClient) UpdateSetting(ctx context.Context, zoneID, settingID 
 
 // GetBotManagement GETs /zones/{id}/bot_management and projects the response
 // onto the operator-side BotManagementConfig (EnableJS, FightMode pointers).
+// 403 responses are classified through classifyZoneConfigAPIErr so callers
+// receive ErrPlanTierInsufficient symmetrically with UpdateBotManagement.
 func (c *zoneConfigClient) GetBotManagement(ctx context.Context, zoneID string) (*BotManagementConfig, error) {
 	resp, err := c.cf.BotManagement.Get(ctx, bot_management.BotManagementGetParams{
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get bot management: %w", err)
+		return nil, fmt.Errorf("get bot management: %w", classifyZoneConfigAPIErr(err))
 	}
 	enableJS := resp.EnableJS
 	fightMode := resp.FightMode
@@ -83,11 +86,20 @@ func (c *zoneConfigClient) GetBotManagement(ctx context.Context, zoneID string) 
 	}, nil
 }
 
-// UpdateBotManagement PUTs /zones/{id}/bot_management with the provided pointers.
-// A 403 from this endpoint is classified as ErrPlanTierInsufficient: bot
-// management is a paid feature, and 403 on this endpoint in practice means
-// the zone's plan does not include it. Callers can match with errors.Is and
-// still inspect the wrapped *cfgo.Error for the underlying detail.
+// UpdateBotManagement PUTs the provided config to Cloudflare's
+// /zones/{id}/bot_management endpoint.
+//
+// Cloudflare's PUT semantics treat absent JSON fields as "leave unchanged";
+// cfgo's param.Field zero-omit means setting BotManagementConfig fields
+// (EnableJS, FightMode) to nil pointers will omit them from the request
+// body, preserving the existing zone-side values. To explicitly clear a
+// previously-set field, pass a pointer to its zero value.
+//
+// A 403 from this endpoint is classified as ErrPlanTierInsufficient (via
+// classifyZoneConfigAPIErr's message-keyword match): bot management is a
+// paid feature, and a plan-tier 403 is the dominant cause here. Callers
+// can match with errors.Is and still inspect the wrapped *cfgo.Error for
+// the underlying detail.
 func (c *zoneConfigClient) UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error {
 	body := bot_management.BotFightModeConfigurationParam{}
 	if config.EnableJS != nil {
@@ -106,21 +118,43 @@ func (c *zoneConfigClient) UpdateBotManagement(ctx context.Context, zoneID strin
 	return nil
 }
 
-// classifyZoneConfigAPIErr wraps a Cloudflare API error from a setting-update
-// or bot-management call with ErrPlanTierInsufficient when the status is 403.
-// This is intentionally scoped to endpoints where plan-tier gating is the
-// dominant cause of 403; do not reuse it on endpoints with other 403 modes
-// (e.g. token-scope errors on zone reads).
+// classifyZoneConfigAPIErr inspects a Cloudflare API error from a
+// setting-update or bot-management call. A 403 is wrapped with
+// ErrPlanTierInsufficient *only* when the response message looks like a
+// plan-tier rejection (vs. token-scope, IP-restriction, or account-
+// suspension 403s, which are also surfaced as 403 by the API).
+//
+// False negatives (a genuine plan-tier 403 returned with an unrecognized
+// message) fall through to the raw error — the operator's status will
+// still surface the underlying Cloudflare message, just not the typed
+// sentinel. This is preferred over false positives, which would
+// mis-label e.g. a token-scope problem as a plan limitation and steer
+// users toward the wrong fix.
 func classifyZoneConfigAPIErr(err error) error {
 	if err == nil {
 		return nil
 	}
 	var apiErr *cfgo.Error
-	if errors.As(err, &apiErr) {
-		switch apiErr.StatusCode {
-		case http.StatusForbidden:
+	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+		if isPlanTier403(apiErr) {
 			return fmt.Errorf("%w: %w", ErrPlanTierInsufficient, err)
 		}
 	}
 	return err
+}
+
+// isPlanTier403 decides whether a 403 from a zone-config endpoint is a
+// plan-tier rejection. We match on the Cloudflare error message keywords
+// because the numeric codes vary across endpoints and aren't reliably
+// distinct between plan-tier and other 403 causes.
+func isPlanTier403(apiErr *cfgo.Error) bool {
+	for _, e := range apiErr.Errors {
+		msg := strings.ToLower(e.Message)
+		if strings.Contains(msg, "plan") ||
+			strings.Contains(msg, "subscription") ||
+			strings.Contains(msg, "upgrade") {
+			return true
+		}
+	}
+	return false
 }
