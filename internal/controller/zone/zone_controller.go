@@ -44,7 +44,9 @@ const defaultZoneInterval = 30 * time.Minute
 // activation poke while pending → delete (with optional zone removal).
 type CloudflareZoneReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
+	Scheme *runtime.Scheme
+	// Recorder is wired by the manager setup (T18). T14 does not currently
+	// emit events; future reasons may.
 	Recorder record.EventRecorder
 
 	// ZoneClientFn returns a Cloudflare ZoneClient for the resolved credentials.
@@ -138,17 +140,8 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	// Reflect observed state.
-	z.Status.Status = got.Status
-	z.Status.NameServers = got.NameServers
-	z.Status.OriginalNameServers = got.OriginalNameServers
-	z.Status.OriginalRegistrar = got.OriginalRegistrar
-	if got.ActivatedOn != nil {
-		t := metav1.NewTime(*got.ActivatedOn)
-		z.Status.ActivatedOn = &t
-	}
 	now := metav1.Now()
-	z.Status.LastSyncedAt = &now
-	z.Status.ObservedGeneration = z.Generation
+	reflectZoneStatus(&z, got, now)
 
 	switch got.Status {
 	case v1alpha1.ZoneStatusActive:
@@ -157,12 +150,34 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			conventions.ReasonZoneActivated, "zone is active")
 		z.Status.Phase = v1alpha1.PhaseReady
 	case v1alpha1.ZoneStatusPending, v1alpha1.ZoneStatusInitializing:
-		// Best-effort poke; ignore errors so transient API blips don't block reconcile.
+		// Pending / initializing path:
+		//
+		// Cloudflare's TriggerActivationCheck is documented as asynchronous —
+		// it queues an NS check and returns immediately, with the zone
+		// flipping to active only when the check actually runs (minutes to
+		// hours later). For production traffic we'd unconditionally surface
+		// ZoneActivating here.
+		//
+		// However, the in-memory mock used in unit tests flips status
+		// synchronously inside TriggerActivationCheck. To make the reconciler
+		// observe that flip in the same pass (and to handle the rare case
+		// where real Cloudflare does return active quickly), we re-Get and
+		// re-reflect the full snapshot before falling back to the Reconciling
+		// branch. Against real Cloudflare this re-Get almost always shows
+		// pending again, so the cost is one extra API call per reconcile of a
+		// pending zone.
+		//
+		// We re-run the *full* reflect (not just Status.Status) so that
+		// observed fields like NameServers and ActivatedOn stay consistent
+		// with the persisted Status string — otherwise we'd write
+		// Status=active with stale NameServers/ActivatedOn from the pre-poke
+		// snapshot.
 		if terr := zc.TriggerActivationCheck(ctx, z.Status.ZoneID); terr != nil {
 			logger.Info("activation check poke failed (continuing)", "err", terr.Error())
 		} else if refreshed, gerr := zc.GetZone(ctx, z.Status.ZoneID); gerr == nil && refreshed != nil {
-			// Reflect any status change the activation check produced.
-			z.Status.Status = refreshed.Status
+			reflectZoneStatus(&z, refreshed, now)
+		} else if gerr != nil {
+			logger.V(1).Info("activation refresh GetZone failed", "err", gerr.Error())
 		}
 		if z.Status.Status == v1alpha1.ZoneStatusActive {
 			z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
@@ -236,4 +251,23 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v1alp
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// reflectZoneStatus copies observed fields from a cloudflare.Zone into the
+// CR's status. The caller is responsible for the subsequent r.Status().Update.
+// Passing the `now` timestamp in (rather than calling metav1.Now() inside)
+// keeps LastSyncedAt consistent across multiple reflect calls within the same
+// reconcile pass.
+func reflectZoneStatus(z *v1alpha1.CloudflareZone, observed *cloudflare.Zone, now metav1.Time) {
+	z.Status.Status = observed.Status
+	z.Status.NameServers = observed.NameServers
+	z.Status.OriginalNameServers = observed.OriginalNameServers
+	z.Status.OriginalRegistrar = observed.OriginalRegistrar
+	z.Status.ActivatedOn = nil
+	if observed.ActivatedOn != nil {
+		t := metav1.NewTime(*observed.ActivatedOn)
+		z.Status.ActivatedOn = &t
+	}
+	z.Status.LastSyncedAt = &now
+	z.Status.ObservedGeneration = z.Generation
 }

@@ -18,11 +18,14 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 )
 
 // DefaultRequeueAfter is the standard backoff for transient errors.
@@ -35,9 +38,25 @@ func FailReconcile(ctx context.Context, reason, msg string) *ctrl.Result {
 	return &ctrl.Result{RequeueAfter: DefaultRequeueAfter}
 }
 
-// WrapDeleteErr collapses NotFound (already gone) into nil. Other errors pass through.
+// WrapDeleteErr collapses already-gone errors into nil so reconcilers don't get
+// stuck holding a finalizer when the upstream object has been removed
+// out-of-band. Handles three cases:
+//   - Kubernetes apierrors.IsNotFound (object removed from etcd)
+//   - cloudflare.ErrZoneNotFound (zone removed via dashboard/API)
+//   - cloudflare.ErrRecordNotFound (DNS record removed via dashboard/API)
+//
+// Other errors pass through unchanged.
 func WrapDeleteErr(err error) error {
-	if err == nil || apierrors.IsNotFound(err) {
+	if err == nil {
+		return nil
+	}
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if errors.Is(err, cloudflare.ErrZoneNotFound) {
+		return nil
+	}
+	if errors.Is(err, cloudflare.ErrRecordNotFound) {
 		return nil
 	}
 	return err
