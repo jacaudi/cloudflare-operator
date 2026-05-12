@@ -145,9 +145,12 @@ func (c *dnsClient) DeleteRecord(ctx context.Context, zoneID, recordID string) e
 }
 
 // mapRecordResponse converts a Cloudflare SDK RecordResponse to our internal
-// DNSRecord. The Priority field on DNSRecord is populated only when the SDK
-// surfaces a non-zero Priority (MX / SRV / URI records). For other record
-// types Priority is left nil.
+// DNSRecord. The Priority field on DNSRecord is populated only for record
+// types that carry a top-level Priority on the Cloudflare API: MX and URI.
+// Gating on r.Type (rather than r.Priority != 0) preserves legitimate
+// priority-0 records — notably RFC 7505 null MX (`. MX 0 "."`) — which
+// would otherwise round-trip as nil and cause spurious drift in the
+// reconciler. SRV's priority lives inside Data, not at the top level.
 func mapRecordResponse(r *dns.RecordResponse) *DNSRecord {
 	rec := &DNSRecord{
 		ID:      r.ID,
@@ -157,7 +160,8 @@ func mapRecordResponse(r *dns.RecordResponse) *DNSRecord {
 		Proxied: r.Proxied,
 		TTL:     int(r.TTL),
 	}
-	if r.Priority != 0 {
+	switch r.Type {
+	case dns.RecordResponseTypeMX, dns.RecordResponseTypeURI:
 		p := int(r.Priority)
 		rec.Priority = &p
 	}
