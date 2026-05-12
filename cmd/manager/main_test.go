@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -39,4 +41,23 @@ func TestParseFlags_ModeOverride(t *testing.T) {
 func TestParseFlags_InvalidMode(t *testing.T) {
 	_, err := parseFlags([]string{"--mode=bogus"})
 	require.Error(t, err)
+}
+
+func TestStubHealthHandlers(t *testing.T) {
+	// Build the same mux runStub would, exercise it via httptest.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "path=%s", path)
+		require.Equal(t, "ok", rec.Body.String(), "path=%s", path)
+	}
 }

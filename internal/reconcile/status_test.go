@@ -112,3 +112,37 @@ func TestSetUnstructuredCondition_UpdatesLastTransitionTimeOnStatusChange(t *tes
 	c := conds[0].(map[string]interface{})
 	require.NotEqual(t, earlier, c["lastTransitionTime"], "LastTransitionTime should advance on status change")
 }
+
+func TestSetUnstructuredCondition_PreservesLTT_OnMessageOnlyChange(t *testing.T) {
+	earlier := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	conds := []interface{}{
+		map[string]interface{}{
+			"type":               "Ready",
+			"status":             "True",
+			"reason":             "Ready",
+			"message":            "old message",
+			"lastTransitionTime": earlier,
+		},
+	}
+	conds = SetUnstructuredCondition(conds, "Ready", "True", "Ready", "new message")
+	c := conds[0].(map[string]interface{})
+	require.Equal(t, earlier, c["lastTransitionTime"], "LTT must be preserved when only message changes")
+	require.Equal(t, "new message", c["message"])
+}
+
+func TestSetUnstructuredCondition_PreservesLTT_OnReasonOnlyChange(t *testing.T) {
+	earlier := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	conds := []interface{}{
+		map[string]interface{}{
+			"type":               "Ready",
+			"status":             "True",
+			"reason":             "Ready",
+			"message":            "all good",
+			"lastTransitionTime": earlier,
+		},
+	}
+	conds = SetUnstructuredCondition(conds, "Ready", "True", "PartialReady", "all good")
+	c := conds[0].(map[string]interface{})
+	require.Equal(t, earlier, c["lastTransitionTime"], "LTT must be preserved when status is unchanged, even if reason changes (matches metav1.Condition convention)")
+	require.Equal(t, "PartialReady", c["reason"], "reason must still be updated")
+}

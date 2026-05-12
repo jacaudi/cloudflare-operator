@@ -252,6 +252,8 @@ func (r *Reconciler) markIgnored(ctx context.Context, op *v1alpha1.CloudflareOpe
 func (r *Reconciler) markFailure(ctx context.Context, op *v1alpha1.CloudflareOperator, reason, msg string) (ctrl.Result, error) {
 	op.Status.Conditions = reconcile.SetReady(op.Status.Conditions, metav1.ConditionFalse, reason, msg)
 	op.Status.ObservedGeneration = op.Generation
-	_ = r.Client.Status().Update(ctx, op)
+	if err := r.Client.Status().Update(ctx, op); err != nil {
+		log.FromContext(ctx).Error(err, "status update failed in markFailure", "reason", reason)
+	}
 	return *reconcile.FailReconcile(ctx, reason, msg), nil
 }

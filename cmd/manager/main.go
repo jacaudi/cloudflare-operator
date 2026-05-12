@@ -20,9 +20,12 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
@@ -157,11 +160,40 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 	}
 }
 
-// runStub is the no-op for zone/tunnel modes in Foundation; specs 2 and 3 fill them in.
+// runStub is the placeholder for zone/tunnel modes in Foundation. It binds the
+// health/readyz HTTP server (so spawned controller pods can pass their probes)
+// and blocks on SIGTERM. Specs 2 and 3 replace this with the real reconcilers.
 func runStub(opts Options) {
-	fmt.Printf(`{"level":"info","msg":"%s controller stub running","mode":"%s"}`+"\n",
-		opts.Mode, opts.Mode)
-	<-ctrl.SetupSignalHandler().Done()
+	logger := log.FromContext(context.Background()).WithValues("mode", opts.Mode)
+	logger.Info("stub controller starting", "healthAddress", opts.HealthAddress)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	srv := &http.Server{
+		Addr:              opts.HealthAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	ctx := ctrl.SetupSignalHandler()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Error(err, "health server failed")
+		os.Exit(1)
+	}
+	logger.Info("stub controller stopped")
 }
 
 func newProductionLogger(level string) *zap.Logger {

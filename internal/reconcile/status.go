@@ -78,7 +78,8 @@ func DerivePhase(status metav1.ConditionStatus, reason string) v1alpha1.Phase {
 }
 
 // SetUnstructuredCondition is the unstructured-slice equivalent of SetCondition.
-// It upserts by `type` and only updates `lastTransitionTime` when `status` changes.
+// It upserts by `type` and only updates `lastTransitionTime` when `status` changes
+// (matches metav1.Condition convention used by SetCondition).
 // Used by callers that operate on *unstructured.Unstructured for domain-agnostic code paths.
 func SetUnstructuredCondition(conds []interface{}, condType, status, reason, msg string) []interface{} {
 	now := metav1.Now().UTC().Format(time.RFC3339)
@@ -95,8 +96,9 @@ func SetUnstructuredCondition(conds []interface{}, condType, status, reason, msg
 			continue
 		}
 		if m["type"] == condType {
-			// Preserve LastTransitionTime if status (and reason) unchanged.
-			if m["status"] == status && m["reason"] == reason {
+			// Preserve LastTransitionTime when status is unchanged (matches K8s
+			// metav1.Condition convention used by SetCondition).
+			if m["status"] == status {
 				newC["lastTransitionTime"] = m["lastTransitionTime"]
 			}
 			conds[i] = newC

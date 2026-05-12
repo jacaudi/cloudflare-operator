@@ -18,10 +18,9 @@ rules:
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Read Secrets cluster-wide (per-CR credentialRef resolution).
-  # Foundation §5: this grant is intentionally cluster-wide so per-CR Secret
-  # references can resolve to any namespace. Security-minded deployments can
-  # swap this for a Role-per-namespace pattern; see docs/installation.md
-  # (not yet written) for a hardening playbook.
+  # This grant is intentionally cluster-wide so per-CR Secret references can
+  # resolve to any namespace. Security-minded deployments can swap this for a
+  # Role-per-namespace pattern.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
