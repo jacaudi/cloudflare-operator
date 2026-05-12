@@ -32,7 +32,7 @@ func TestDNSRecord_TypesEnumerated(t *testing.T) {
 	}
 }
 
-func TestDNSRecord_ContentXorDynamicIP(t *testing.T) {
+func TestDNSRecord_DynamicIPDefaultsFalse(t *testing.T) {
 	content := "192.0.2.1"
 	r := CloudflareDNSRecord{Spec: CloudflareDNSRecordSpec{
 		Name:    "apex.example.com",

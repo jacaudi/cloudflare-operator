@@ -62,7 +62,8 @@ type CloudflareDNSRecordSpec struct {
 	// +optional
 	SRVData *SRVData `json:"srvData,omitempty"`
 
-	// Priority for MX / SRV records.
+	// Priority is the MX record priority (lower = preferred). SRV records use
+	// srvData.priority instead.
 	// +optional
 	Priority *int `json:"priority,omitempty"`
 
@@ -87,20 +88,32 @@ type CloudflareDNSRecordSpec struct {
 
 // SRVData contains SRV-specific record fields.
 type SRVData struct {
+	// Service is the symbolic service name (e.g., "_satisfactory", "_minecraft").
 	// +kubebuilder:validation:Required
 	Service string `json:"service"`
+
+	// Proto is the transport protocol.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=_tcp;_udp;_tls
 	Proto string `json:"proto"`
+
+	// Priority is the SRV priority (lower = preferred).
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=65535
 	Priority int `json:"priority"`
+
+	// Weight is the SRV weight for records with the same priority
+	// (higher = more traffic).
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=65535
 	Weight int `json:"weight"`
+
+	// Port is the TCP/UDP port the service listens on.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=65535
 	Port int `json:"port"`
+
+	// Target is the canonical hostname of the machine providing the service.
 	// +kubebuilder:validation:Required
 	Target string `json:"target"`
 }
@@ -121,8 +134,12 @@ type CloudflareDNSRecordStatus struct {
 	// for DynamicIP).
 	// +optional
 	CurrentContent string `json:"currentContent,omitempty"`
+	// LastSyncedAt is the timestamp of the most recent successful reconcile.
 	// +optional
 	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+	// ObservedGeneration is the .metadata.generation observed by the controller
+	// during its last reconcile. When this lags .metadata.generation the
+	// controller has not yet processed the latest spec.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
@@ -140,6 +157,9 @@ type CloudflareDNSRecordStatus struct {
 // +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.zoneID) && has(self.spec.zoneRef))",message="zoneID and zoneRef are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.content) && self.spec.dynamicIP)",message="content and dynamicIP are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(self.spec.type == 'SRV' && has(self.spec.priority))",message="for SRV records use srvData.priority, not spec.priority"
+// +kubebuilder:validation:XValidation:rule="self.spec.type == 'MX' ? has(self.spec.priority) : true",message="MX records require spec.priority"
+// +kubebuilder:validation:XValidation:rule="self.spec.dynamicIP ? (self.spec.type == 'A' || self.spec.type == 'AAAA') : true",message="dynamicIP is only valid for A or AAAA records"
 // CloudflareDNSRecord is the Schema for the cloudflarednsrecords API.
 type CloudflareDNSRecord struct {
 	metav1.TypeMeta   `json:",inline"`
