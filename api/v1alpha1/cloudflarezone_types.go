@@ -88,7 +88,6 @@ type CloudflareZoneStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Phase is a coarse summary derived from the Ready condition (Foundation §8).
-	// +kubebuilder:validation:Enum=Ready;Reconciling;Error;Pending
 	// +optional
 	Phase Phase `json:"phase,omitempty"`
 }

@@ -237,19 +237,13 @@ spec:
               originalRegistrar:
                 type: string
               phase:
-                allOf:
-                - enum:
-                  - Ready
-                  - Reconciling
-                  - Error
-                  - Pending
-                - enum:
-                  - Ready
-                  - Reconciling
-                  - Error
-                  - Pending
                 description: Phase is a coarse summary derived from the Ready condition
                   (Foundation §8).
+                enum:
+                - Ready
+                - Reconciling
+                - Error
+                - Pending
                 type: string
               status:
                 description: Status is the zone status in Cloudflare (initializing,
