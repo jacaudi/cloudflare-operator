@@ -60,11 +60,10 @@ type ZoneRefResult struct {
 // Result contract:
 //   - On `ZoneID` input path: result.ZoneID is the literal input; ZoneObject is nil.
 //   - On `ZoneRef` input path: result.ZoneObject is the fetched CloudflareZone.
-//     result.ZoneID is read from status.zoneID — which is populated by spec 2's
-//     CloudflareZone reconciler. **In Foundation, status.zoneID does not exist
-//     yet**, so result.ZoneID is always "" on this path. Callers should treat
-//     "ZoneID == "" && ZoneObject != nil" as "zone exists, status not yet
-//     populated — requeue."
+//     As of spec 2, result.ZoneID is populated from z.Status.ZoneID. An empty
+//     value still means "zone CR exists but reconciler hasn't populated status
+//     yet — requeue." Callers should treat "ZoneID == "" && ZoneObject != nil"
+//     as that requeue case.
 //   - On `ZoneRef` input path with the target CR missing: returns ErrZoneRefNotFound.
 func ResolveZoneID(ctx context.Context, c client.Client, in ZoneRefInputs, defaultNamespace string) (ZoneRefResult, error) {
 	switch {
@@ -91,8 +90,8 @@ func ResolveZoneID(ctx context.Context, c client.Client, in ZoneRefInputs, defau
 		return ZoneRefResult{}, fmt.Errorf("get CloudflareZone %s/%s: %w", ns, in.ZoneRef.Name, err)
 	}
 	// status.zoneID is populated by spec 2's CloudflareZone reconciler.
-	// Foundation returns whatever is there; an unset value means "not ready yet"
-	// — caller should requeue. We surface that via the empty string.
+	// An unset value means "not ready yet" — caller should requeue. We surface
+	// that via the empty string.
 	return ZoneRefResult{
 		ZoneID:     zoneStatusID(&zone),
 		ZoneName:   in.ZoneRef.Name,
@@ -100,11 +99,9 @@ func ResolveZoneID(ctx context.Context, c client.Client, in ZoneRefInputs, defau
 	}, nil
 }
 
-// zoneStatusID is a forward-compatible accessor. Spec 2 will populate
-// CloudflareZoneStatus.ZoneID; until then this returns "".
+// zoneStatusID returns the Cloudflare zone ID recorded by the CloudflareZone
+// reconciler in status. An empty string means the reconciler has not yet
+// populated status; callers should treat that as a requeue signal.
 func zoneStatusID(z *v1alpha1.CloudflareZone) string {
-	// The scaffold status (T3) has no ZoneID field yet; spec 2's plan adds it.
-	// Foundation returns "" so callers know to requeue.
-	_ = z
-	return ""
+	return z.Status.ZoneID
 }
