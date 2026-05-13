@@ -337,14 +337,14 @@ spec:
         - message: zoneID and zoneRef are mutually exclusive
           rule: '!(has(self.spec.zoneID) && has(self.spec.zoneRef))'
         - message: content and dynamicIP are mutually exclusive
-          rule: '!(has(self.spec.content) && self.spec.dynamicIP)'
+          rule: '!(has(self.spec.content) && has(self.spec.dynamicIP) && self.spec.dynamicIP)'
         - message: for SRV records use srvData.priority, not spec.priority
           rule: '!(self.spec.type == ''SRV'' && has(self.spec.priority))'
         - message: MX records require spec.priority
           rule: 'self.spec.type == ''MX'' ? has(self.spec.priority) : true'
         - message: dynamicIP is only valid for A or AAAA records
-          rule: 'self.spec.dynamicIP ? (self.spec.type == ''A'' || self.spec.type
-            == ''AAAA'') : true'
+          rule: '!has(self.spec.dynamicIP) || !self.spec.dynamicIP || (self.spec.type
+            == ''A'' || self.spec.type == ''AAAA'')'
     served: true
     storage: true
     subresources:

@@ -156,10 +156,10 @@ type CloudflareDNSRecordStatus struct {
 // +kubebuilder:printcolumn:name=Age,type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="has(self.spec.zoneID) || has(self.spec.zoneRef)",message="one of zoneID or zoneRef is required"
 // +kubebuilder:validation:XValidation:rule="!(has(self.spec.zoneID) && has(self.spec.zoneRef))",message="zoneID and zoneRef are mutually exclusive"
-// +kubebuilder:validation:XValidation:rule="!(has(self.spec.content) && self.spec.dynamicIP)",message="content and dynamicIP are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(has(self.spec.content) && has(self.spec.dynamicIP) && self.spec.dynamicIP)",message="content and dynamicIP are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(self.spec.type == 'SRV' && has(self.spec.priority))",message="for SRV records use srvData.priority, not spec.priority"
 // +kubebuilder:validation:XValidation:rule="self.spec.type == 'MX' ? has(self.spec.priority) : true",message="MX records require spec.priority"
-// +kubebuilder:validation:XValidation:rule="self.spec.dynamicIP ? (self.spec.type == 'A' || self.spec.type == 'AAAA') : true",message="dynamicIP is only valid for A or AAAA records"
+// +kubebuilder:validation:XValidation:rule="!has(self.spec.dynamicIP) || !self.spec.dynamicIP || (self.spec.type == 'A' || self.spec.type == 'AAAA')",message="dynamicIP is only valid for A or AAAA records"
 // CloudflareDNSRecord is the Schema for the cloudflarednsrecords API.
 type CloudflareDNSRecord struct {
 	metav1.TypeMeta   `json:",inline"`

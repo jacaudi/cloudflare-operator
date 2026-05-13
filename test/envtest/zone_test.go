@@ -155,21 +155,6 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 	})
 
 	t.Run("§10.4 DNSRecord adopt by bare (name, type) match", func(t *testing.T) {
-		// CEL bug surfaced by T20: the CloudflareDNSRecord CRD validation
-		// rules reference `self.spec.dynamicIP` without a `has()` guard. The
-		// API server rejects creation with `no such key: dynamicIP` when the
-		// bool field is omitted (Go json:omitempty on the false default).
-		// Unit tests with the controller-runtime fake client don't see this
-		// (fake client bypasses CEL). The fix lives in production CRD
-		// validation (api/v1alpha1/cloudflarednsrecord_types.go XValidation
-		// markers) and is OUT OF SCOPE for T20 — tracked separately.
-		//
-		// Adoption semantics are still covered by the unit suite (see
-		// internal/controller/zone/dnsrecord_controller_test.go
-		// TestDNS_AdoptBareTakeover); §10.4 will be re-enabled here once the
-		// CRD rules are guarded with has().
-		t.Skip("blocked on CRD CEL has()-guard bug; see comment above")
-
 		// Seed mock with a pre-existing record at the same (name, type) so
 		// the adopt path takes it over (rather than falling through to
 		// Create). Use the zoneID assigned in §10.2 (first zone created → "z1"
