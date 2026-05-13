@@ -124,6 +124,11 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 
 	c := mgr.GetClient()
 
+	// zoneID is captured by §10.2 from Status.ZoneID and reused by the
+	// downstream sub-tests (§10.3/§10.4/§10.5) to decouple them from the
+	// mock's internal ID-generation scheme.
+	var zoneID string
+
 	t.Run("§10.1 CRDs install + sample CRs listable", func(t *testing.T) {
 		var zl v1alpha1.CloudflareZoneList
 		require.NoError(t, c.List(ctx, &zl))
@@ -150,68 +155,21 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 			if err := c.Get(ctx, types.NamespacedName{Name: "example", Namespace: "default"}, &got); err != nil {
 				return false
 			}
-			return got.Status.ZoneID != ""
+			if got.Status.ZoneID == "" {
+				return false
+			}
+			zoneID = got.Status.ZoneID
+			return true
 		}, 10*time.Second, 200*time.Millisecond, "Status.ZoneID populated")
 	})
 
-	t.Run("§10.4 DNSRecord adopt by bare (name, type) match", func(t *testing.T) {
-		// Seed mock with a pre-existing record at the same (name, type) so
-		// the adopt path takes it over (rather than falling through to
-		// Create). Use the zoneID assigned in §10.2 (first zone created → "z1"
-		// per mock sequence).
-		_, err := m.DNS.CreateRecord(ctx, "z1", cloudflare.DNSRecordParams{
-			Name: "app.example.com", Type: "A", Content: "192.0.2.10", TTL: 1,
-		})
-		require.NoError(t, err)
-		content := "192.0.2.20"
-		rec := &v1alpha1.CloudflareDNSRecord{
-			ObjectMeta: metav1.ObjectMeta{Name: "rec-adopt", Namespace: "default"},
-			Spec: v1alpha1.CloudflareDNSRecordSpec{
-				Name:    "app.example.com",
-				Type:    "A",
-				Content: &content,
-				ZoneID:  "z1",
-				Adopt:   true,
-			},
-		}
-		require.NoError(t, c.Create(ctx, rec))
-		require.Eventually(t, func() bool {
-			var got v1alpha1.CloudflareDNSRecord
-			if err := c.Get(ctx, types.NamespacedName{Name: "rec-adopt", Namespace: "default"}, &got); err != nil {
-				return false
-			}
-			// Adoption + drift correction: Status.RecordID populated and
-			// CurrentContent matches the spec content.
-			return got.Status.RecordID != "" && got.Status.CurrentContent == "192.0.2.20"
-		}, 10*time.Second, 200*time.Millisecond, "adopted + drift corrected")
-	})
-
-	t.Run("§10.5 Ruleset PUT-entrypoint creates rules", func(t *testing.T) {
-		rs := &v1alpha1.CloudflareRuleset{
-			ObjectMeta: metav1.ObjectMeta{Name: "waf", Namespace: "default"},
-			Spec: v1alpha1.CloudflareRulesetSpec{
-				ZoneID: "z1",
-				Name:   "waf",
-				Phase:  "http_request_firewall_custom",
-				Rules: []v1alpha1.RulesetRuleSpec{{
-					Action:     "block",
-					Expression: `(ip.src eq 192.0.2.4)`,
-				}},
-			},
-		}
-		require.NoError(t, c.Create(ctx, rs))
-		require.Eventually(t, func() bool {
-			got, err := m.Ruleset.GetPhaseEntrypoint(ctx, "z1", "http_request_firewall_custom")
-			return err == nil && got != nil && len(got.Rules) == 1
-		}, 10*time.Second, 200*time.Millisecond, "ruleset entrypoint created with 1 rule")
-	})
-
 	t.Run("§10.3 ZoneConfig group condition", func(t *testing.T) {
+		require.NotEmpty(t, zoneID, "§10.2 must populate zoneID before downstream tests")
 		mode := "strict"
 		cfg := &v1alpha1.CloudflareZoneConfig{
 			ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
 			Spec: v1alpha1.CloudflareZoneConfigSpec{
-				ZoneID: "z1",
+				ZoneID: zoneID,
 				SSL:    &v1alpha1.SSLSettings{Mode: &mode},
 			},
 		}
@@ -228,5 +186,58 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 			}
 			return false
 		}, 10*time.Second, 200*time.Millisecond, "SSLApplied=True")
+	})
+
+	t.Run("§10.4 DNSRecord adopt by bare (name, type) match", func(t *testing.T) {
+		require.NotEmpty(t, zoneID, "§10.2 must populate zoneID before downstream tests")
+		// Seed mock with a pre-existing record at the same (name, type) so
+		// the adopt path takes it over (rather than falling through to
+		// Create). Use the zoneID captured from §10.2.
+		_, err := m.DNS.CreateRecord(ctx, zoneID, cloudflare.DNSRecordParams{
+			Name: "app.example.com", Type: "A", Content: "192.0.2.10", TTL: 1,
+		})
+		require.NoError(t, err)
+		content := "192.0.2.20"
+		rec := &v1alpha1.CloudflareDNSRecord{
+			ObjectMeta: metav1.ObjectMeta{Name: "rec-adopt", Namespace: "default"},
+			Spec: v1alpha1.CloudflareDNSRecordSpec{
+				Name:    "app.example.com",
+				Type:    "A",
+				Content: &content,
+				ZoneID:  zoneID,
+				Adopt:   true,
+			},
+		}
+		require.NoError(t, c.Create(ctx, rec))
+		require.Eventually(t, func() bool {
+			var got v1alpha1.CloudflareDNSRecord
+			if err := c.Get(ctx, types.NamespacedName{Name: "rec-adopt", Namespace: "default"}, &got); err != nil {
+				return false
+			}
+			// Adoption + drift correction: Status.RecordID populated and
+			// CurrentContent matches the spec content.
+			return got.Status.RecordID != "" && got.Status.CurrentContent == "192.0.2.20"
+		}, 10*time.Second, 200*time.Millisecond, "adopted + drift corrected")
+	})
+
+	t.Run("§10.5 Ruleset PUT-entrypoint creates rules", func(t *testing.T) {
+		require.NotEmpty(t, zoneID, "§10.2 must populate zoneID before downstream tests")
+		rs := &v1alpha1.CloudflareRuleset{
+			ObjectMeta: metav1.ObjectMeta{Name: "waf", Namespace: "default"},
+			Spec: v1alpha1.CloudflareRulesetSpec{
+				ZoneID: zoneID,
+				Name:   "waf",
+				Phase:  "http_request_firewall_custom",
+				Rules: []v1alpha1.RulesetRuleSpec{{
+					Action:     "block",
+					Expression: `(ip.src eq 192.0.2.4)`,
+				}},
+			},
+		}
+		require.NoError(t, c.Create(ctx, rs))
+		require.Eventually(t, func() bool {
+			got, err := m.Ruleset.GetPhaseEntrypoint(ctx, zoneID, "http_request_firewall_custom")
+			return err == nil && got != nil && len(got.Rules) == 1
+		}, 10*time.Second, 200*time.Millisecond, "ruleset entrypoint created with 1 rule")
 	})
 }
