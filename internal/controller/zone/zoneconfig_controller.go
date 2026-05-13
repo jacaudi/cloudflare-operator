@@ -210,13 +210,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 // message and requeues after a short interval. Used when zone resolution
 // can't proceed because the referenced CloudflareZone isn't ready yet.
 func (r *CloudflareZoneConfigReconciler) haltDependency(ctx context.Context, cfg *v1alpha1.CloudflareZoneConfig, msg string) (ctrl.Result, error) {
-	cfg.Status.Conditions = reconcile.SetReady(cfg.Status.Conditions, metav1.ConditionFalse,
-		conventions.ReasonDependencyMissing, msg)
-	cfg.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonDependencyMissing)
-	if err := r.Status().Update(ctx, cfg); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return reconcile.HaltDependency(ctx, r.Client, cfg, &cfg.Status.Conditions, &cfg.Status.Phase, msg, 30*time.Second)
 }
 
 // groupResult captures the outcome of applying a single settings group. It

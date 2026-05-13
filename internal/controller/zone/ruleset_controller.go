@@ -205,13 +205,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // haltDependency persists a DependencyMissing Ready=False and requeues; used
 // when the referenced CloudflareZone isn't ready yet.
 func (r *CloudflareRulesetReconciler) haltDependency(ctx context.Context, rs *v1alpha1.CloudflareRuleset, msg string) (ctrl.Result, error) {
-	rs.Status.Conditions = reconcile.SetReady(rs.Status.Conditions, metav1.ConditionFalse,
-		conventions.ReasonDependencyMissing, msg)
-	rs.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonDependencyMissing)
-	if err := r.Status().Update(ctx, rs); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+	return reconcile.HaltDependency(ctx, r.Client, rs, &rs.Status.Conditions, &rs.Status.Phase, msg, reconcile.DefaultRequeueAfter)
 }
 
 // specToCloudflareRules converts CRD-side RulesetRuleSpec slices to the

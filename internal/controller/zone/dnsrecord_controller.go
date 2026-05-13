@@ -213,13 +213,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 // message and requeues. Used when zone resolution can't proceed because the
 // referenced CloudflareZone isn't ready yet.
 func (r *CloudflareDNSRecordReconciler) haltDependency(ctx context.Context, rec *v1alpha1.CloudflareDNSRecord, msg string) (ctrl.Result, error) {
-	rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
-		conventions.ReasonDependencyMissing, msg)
-	rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonDependencyMissing)
-	if err := r.Status().Update(ctx, rec); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+	return reconcile.HaltDependency(ctx, r.Client, rec, &rec.Status.Conditions, &rec.Status.Phase, msg, reconcile.DefaultRequeueAfter)
 }
 
 // reconcileDelete handles the deletion path: best-effort remove the record on
