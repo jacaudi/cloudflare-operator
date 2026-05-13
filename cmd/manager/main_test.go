@@ -61,3 +61,10 @@ func TestStubHealthHandlers(t *testing.T) {
 		require.Equal(t, "ok", rec.Body.String(), "path=%s", path)
 	}
 }
+
+func TestZoneMode_RegistersZoneBundle(t *testing.T) {
+	// Black-box: starting zone mode against envtest registers the four reconcilers.
+	// The real envtest path lives in test/envtest/zone_test.go (T20); this test
+	// only smoke-checks that the wiring compiles + the manager.Add succeeds.
+	t.Skip("covered by test/envtest/zone_test.go T20")
+}

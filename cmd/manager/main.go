@@ -41,6 +41,7 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/bootstrap"
+	"github.com/jacaudi/cloudflare-operator/internal/controller/zone"
 )
 
 // Mode is the controller role this binary plays.
@@ -118,7 +119,9 @@ func main() {
 	switch opts.Mode {
 	case ModeMeta:
 		runMeta(opts, scheme)
-	case ModeZone, ModeTunnel:
+	case ModeZone:
+		runZone(opts, scheme)
+	case ModeTunnel:
 		runStub(opts)
 	}
 }
@@ -144,6 +147,46 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 		OperatorImage:     opts.OperatorImage,
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintln(os.Stderr, "setup bootstrap reconciler:", err)
+		os.Exit(1)
+	}
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		fmt.Fprintln(os.Stderr, "add healthz check:", err)
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		fmt.Fprintln(os.Stderr, "add readyz check:", err)
+		os.Exit(1)
+	}
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		fmt.Fprintln(os.Stderr, "manager exited with error:", err)
+		os.Exit(1)
+	}
+}
+
+// runZone starts the controller-runtime manager with the zone-bundle reconcilers
+// (CloudflareZone, CloudflareZoneConfig, CloudflareDNSRecord, CloudflareRuleset).
+// Per-reconcile credentials are resolved via reconcile.LoadCredentialsHierarchical;
+// the env vars below are smoke-checked here as a fail-fast.
+func runZone(opts Options, scheme *runtime.Scheme) {
+	if os.Getenv("CLOUDFLARE_API_TOKEN") == "" || os.Getenv("CLOUDFLARE_ACCOUNT_ID") == "" {
+		fmt.Fprintln(os.Stderr, "zone mode requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars")
+		os.Exit(1)
+	}
+
+	leaderID := "cloudflare-operator-" + string(opts.Mode)
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
+		HealthProbeBindAddress: opts.HealthAddress,
+		LeaderElection:         opts.LeaderElection,
+		LeaderElectionID:       leaderID,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create manager:", err)
+		os.Exit(1)
+	}
+	if err := zone.AddToManager(mgr, zone.Options{}); err != nil {
+		fmt.Fprintln(os.Stderr, "register zone bundle:", err)
 		os.Exit(1)
 	}
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
