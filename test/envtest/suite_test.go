@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -37,6 +38,10 @@ import (
 
 // sharedClient is set up once in TestMain and shared across all tests in the package.
 var sharedClient client.Client
+
+// sharedConfig is the envtest *rest.Config, exported so per-test files can
+// build their own managers (e.g. zone bundle wiring with mock-backed clients).
+var sharedConfig *rest.Config
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
@@ -65,6 +70,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("envtest Start: " + err.Error())
 	}
+	sharedConfig = cfg
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
