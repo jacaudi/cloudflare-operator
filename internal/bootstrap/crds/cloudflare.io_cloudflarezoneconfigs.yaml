@@ -509,8 +509,6 @@ spec:
                   whether the spec used zoneID or zoneRef.
                 type: string
             type: object
-        required:
-        - spec
         type: object
         x-kubernetes-validations:
         - message: one of zoneID or zoneRef is required

@@ -89,6 +89,7 @@ type CloudflareZoneStatus struct {
 
 	// Phase is a coarse summary derived from the Ready condition (Foundation §8).
 	// +optional
+	// +kubebuilder:default=Pending
 	Phase Phase `json:"phase,omitempty"`
 }
 

@@ -237,6 +237,7 @@ spec:
               originalRegistrar:
                 type: string
               phase:
+                default: Pending
                 description: Phase is a coarse summary derived from the Ready condition
                   (Foundation §8).
                 enum:

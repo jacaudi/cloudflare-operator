@@ -231,6 +231,15 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v1alp
 		}
 
 		// Best-effort: drain any hold before delete.
+		//
+		// Test gap (deferred): unit-test coverage of this branch is not
+		// exercised by TestZone_DeleteWithDelete_RemovesZone because that
+		// fixture sets CFClientFn=nil. Adding coverage requires either (a)
+		// injecting a DrainZoneHold stub (refactor: a new DrainHoldFn field
+		// on the reconciler), or (b) wiring a real *cloudflare.Client backed
+		// by httptest. Tracked for a future task; the behaviour is itself
+		// best-effort and the error is logged-not-returned, so leaving the
+		// branch uncovered is bounded.
 		if r.CFClientFn != nil {
 			if cf, cerr := r.CFClientFn(creds); cerr == nil && cf != nil {
 				if derr := cloudflare.DrainZoneHold(ctx, cf.CF(), z.Status.ZoneID); derr != nil {

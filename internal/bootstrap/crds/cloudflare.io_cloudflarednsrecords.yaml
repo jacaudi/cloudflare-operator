@@ -318,6 +318,7 @@ spec:
                 format: int64
                 type: integer
               phase:
+                default: Pending
                 description: Phase is a coarse summary derived from the Ready condition
                   (Foundation §8).
                 enum:

@@ -351,8 +351,8 @@ type CloudflareZoneConfig struct {
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// spec defines the desired state of CloudflareZoneConfig
-	// +required
-	Spec CloudflareZoneConfigSpec `json:"spec"`
+	// +optional
+	Spec CloudflareZoneConfigSpec `json:"spec,omitempty"`
 
 	// status defines the observed state of CloudflareZoneConfig
 	// +optional

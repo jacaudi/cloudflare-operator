@@ -126,6 +126,7 @@ type CloudflareDNSRecordStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Phase is a coarse summary derived from the Ready condition (Foundation §8).
 	// +optional
+	// +kubebuilder:default=Pending
 	Phase Phase `json:"phase,omitempty"`
 	// RecordID is the Cloudflare ID of the managed DNS record.
 	// +optional
