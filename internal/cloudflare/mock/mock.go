@@ -124,7 +124,7 @@ func (z *zoneMock) GetZone(ctx context.Context, zoneID string) (*cloudflare.Zone
 	defer z.mu.Unlock()
 	got, ok := z.zones[zoneID]
 	if !ok {
-		return nil, fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return nil, fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrZoneNotFound, zoneID)
 	}
 	return got, nil
 }
@@ -152,7 +152,7 @@ func (z *zoneMock) EditZone(ctx context.Context, zoneID string, params cloudflar
 	defer z.mu.Unlock()
 	got, ok := z.zones[zoneID]
 	if !ok {
-		return nil, fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return nil, fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrZoneNotFound, zoneID)
 	}
 	if params.Paused != nil {
 		got.Paused = *params.Paused
@@ -167,7 +167,7 @@ func (z *zoneMock) DeleteZone(ctx context.Context, zoneID string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
 	if _, ok := z.zones[zoneID]; !ok {
-		return fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrZoneNotFound, zoneID)
 	}
 	name := z.zones[zoneID].Name
 	delete(z.zones, zoneID)
@@ -189,7 +189,7 @@ func (z *zoneMock) TriggerActivationCheck(ctx context.Context, zoneID string) er
 	defer z.mu.Unlock()
 	got, ok := z.zones[zoneID]
 	if !ok {
-		return fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrZoneNotFound, zoneID)
 	}
 	got.Status = "active"
 	return nil
@@ -212,11 +212,11 @@ func (d *dnsMock) GetRecord(ctx context.Context, zoneID, recordID string) (*clou
 	defer d.mu.Unlock()
 	z, ok := d.records[zoneID]
 	if !ok {
-		return nil, fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return nil, fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrRecordNotFound, zoneID)
 	}
 	r, ok := z[recordID]
 	if !ok {
-		return nil, fmt.Errorf("%w: record %s", ErrNotFound, recordID)
+		return nil, fmt.Errorf("%w: %w: record %s", ErrNotFound, cloudflare.ErrRecordNotFound, recordID)
 	}
 	return r, nil
 }
@@ -266,11 +266,11 @@ func (d *dnsMock) UpdateRecord(ctx context.Context, zoneID, recordID string, par
 	defer d.mu.Unlock()
 	z, ok := d.records[zoneID]
 	if !ok {
-		return nil, fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return nil, fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrRecordNotFound, zoneID)
 	}
 	r, ok := z[recordID]
 	if !ok {
-		return nil, fmt.Errorf("%w: record %s", ErrNotFound, recordID)
+		return nil, fmt.Errorf("%w: %w: record %s", ErrNotFound, cloudflare.ErrRecordNotFound, recordID)
 	}
 	r.Name = params.Name
 	r.Type = params.Type
@@ -292,10 +292,10 @@ func (d *dnsMock) DeleteRecord(ctx context.Context, zoneID, recordID string) err
 	defer d.mu.Unlock()
 	z, ok := d.records[zoneID]
 	if !ok {
-		return fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrRecordNotFound, zoneID)
 	}
 	if _, ok := z[recordID]; !ok {
-		return fmt.Errorf("%w: record %s", ErrNotFound, recordID)
+		return fmt.Errorf("%w: %w: record %s", ErrNotFound, cloudflare.ErrRecordNotFound, recordID)
 	}
 	delete(z, recordID)
 	return nil
@@ -318,11 +318,11 @@ func (r *rulesetMock) GetPhaseEntrypoint(ctx context.Context, zoneID, phase stri
 	defer r.mu.Unlock()
 	z, ok := r.entries[zoneID]
 	if !ok {
-		return nil, fmt.Errorf("%w: zone %s", ErrNotFound, zoneID)
+		return nil, fmt.Errorf("%w: %w: zone %s", ErrNotFound, cloudflare.ErrPhaseEntrypointNotFound, zoneID)
 	}
 	rs, ok := z[phase]
 	if !ok {
-		return nil, fmt.Errorf("%w: phase %s", ErrNotFound, phase)
+		return nil, fmt.Errorf("%w: %w: phase %s", ErrNotFound, cloudflare.ErrPhaseEntrypointNotFound, phase)
 	}
 	return rs, nil
 }

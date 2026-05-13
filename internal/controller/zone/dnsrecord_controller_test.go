@@ -202,6 +202,40 @@ func TestDNS_DynamicIP_ResolvesAndWritesA(t *testing.T) {
 	require.Equal(t, "198.51.100.7", got.Status.CurrentContent)
 }
 
+// TestDNS_NoDrift_NoUpdate locks in the contract that when an observed
+// record exactly matches the spec, the reconciler does NOT call
+// UpdateRecord. We assert this by injecting a countingErr on UpdateRecord:
+// any invocation increments the counter (and would surface as a non-nil
+// reconcile error).
+func TestDNS_NoDrift_NoUpdate(t *testing.T) {
+	s := zoneTestScheme(t)
+	content := "192.0.2.1"
+	proxied := false
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default", Finalizers: []string{conventions.FinalizerName}},
+		Spec:       v1alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1", TTL: 1, Proxied: &proxied},
+	}
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	m := mock.New()
+	// Seed the mock with a record that exactly matches spec (name, type,
+	// content, TTL, proxied).
+	existing, _ := m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{Name: "app.example.com", Type: "A", Content: "192.0.2.1", TTL: 1, Proxied: &proxied})
+	rec.Status.RecordID = existing.ID
+	rec.Status.CurrentContent = "192.0.2.1"
+	require.NoError(t, c.Status().Update(context.Background(), rec))
+
+	// Inject an error into UpdateRecord. If the reconciler tries to update,
+	// the error fires and increments the counter.
+	calls := 0
+	m.InjectError("DNS.UpdateRecord", &countingErr{calls: &calls})
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err, "reconcile with no drift should not call UpdateRecord")
+	require.Zero(t, calls, "UpdateRecord must not be called when observed matches spec")
+}
+
 func TestDNS_Delete_RemovesUpstream(t *testing.T) {
 	now := metav1.Now()
 	s := zoneTestScheme(t)

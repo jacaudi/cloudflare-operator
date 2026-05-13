@@ -325,12 +325,19 @@ func buildParams(rec *v1alpha1.CloudflareDNSRecord, content string) cloudflare.D
 }
 
 // needsUpdate reports whether the observed record diverges from the desired
-// spec. SRV records skip the content comparison because their content is
-// computed server-side from Data; for those types we conservatively trigger
-// an update on any other-field drift only.
+// spec. SRV records skip the top-level Content comparison because their
+// content is computed server-side from Data; instead they get a per-field
+// comparison against the structured SRVData.
 func needsUpdate(observed *cloudflare.DNSRecord, spec *v1alpha1.CloudflareDNSRecordSpec, content string) bool {
 	if observed.Name != spec.Name {
 		return true
+	}
+	// SRV records: compare structured Data fields and short-circuit out
+	// before the Content branch (their Content is server-computed).
+	if spec.Type == v1alpha1.DNSRecordTypeSRV && spec.SRVData != nil {
+		if srvDriftDetected(observed.Data, spec.SRVData) {
+			return true
+		}
 	}
 	if spec.Type != v1alpha1.DNSRecordTypeSRV && observed.Content != content {
 		return true
@@ -342,11 +349,53 @@ func needsUpdate(observed *cloudflare.DNSRecord, spec *v1alpha1.CloudflareDNSRec
 		return true
 	}
 	// MX/URI priority drift (top-level). SRV priority lives in Data and is
-	// handled by Cloudflare-side reconciliation of the SRV data map.
+	// compared inside srvDriftDetected above.
 	if spec.Priority != nil {
 		if observed.Priority == nil || *observed.Priority != *spec.Priority {
 			return true
 		}
 	}
 	return false
+}
+
+// srvDriftDetected compares an observed Cloudflare SRV record's Data map
+// against the operator-side structured SRVData. Returns true if any
+// user-controlled field differs. Number fields may come back from the SDK
+// as float64 (JSON-decoded) — normalize before comparing. The "name" key
+// mirrors rec.Spec.Name and is already validated by the top-level Name
+// comparison in needsUpdate; it is excluded here.
+func srvDriftDetected(observed map[string]any, spec *v1alpha1.SRVData) bool {
+	if observed == nil {
+		// Observed has no Data — either freshly created or missing fields.
+		// Treat as drift to force a re-PUT and converge upstream state.
+		return true
+	}
+	if observed["service"] != spec.Service ||
+		observed["proto"] != spec.Proto ||
+		observed["target"] != spec.Target {
+		return true
+	}
+	if intField(observed["priority"]) != spec.Priority ||
+		intField(observed["weight"]) != spec.Weight ||
+		intField(observed["port"]) != spec.Port {
+		return true
+	}
+	return false
+}
+
+// intField normalizes any-typed numeric values (float64 from JSON, int from
+// direct map literals) to int for comparison against operator-side int spec
+// fields.
+func intField(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	}
+	return 0
 }
