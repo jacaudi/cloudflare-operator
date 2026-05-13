@@ -101,7 +101,7 @@ func (c *zoneClient) DeleteZone(ctx context.Context, zoneID string) error {
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		return fmt.Errorf("delete zone %s: %w", zoneID, err)
+		return fmt.Errorf("delete zone %s: %w", zoneID, classifyZoneAPIErr(err))
 	}
 	return nil
 }
