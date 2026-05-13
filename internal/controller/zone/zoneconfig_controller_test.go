@@ -18,6 +18,7 @@ package zone
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -108,6 +109,35 @@ func TestZoneConfig_FastSkipOnUnchangedHash(t *testing.T) {
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"}})
 	require.NoError(t, err)
 	require.Zero(t, calls, "fast-skip skips API calls on unchanged hash")
+}
+
+func TestZoneConfig_FastSkipSkipsClientConstruction(t *testing.T) {
+	mode := "strict"
+	cfg := &v1alpha1.CloudflareZoneConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
+		Spec:       v1alpha1.CloudflareZoneConfigSpec{ZoneID: "z1", SSL: &v1alpha1.SSLSettings{Mode: &mode}},
+	}
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	s := zoneTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v1alpha1.CloudflareZoneConfig{}).Build()
+
+	// Converge to Ready state so AppliedSpecHash is set.
+	m := mock.New()
+	r := &CloudflareZoneConfigReconciler{Client: c, Scheme: s,
+		ZoneConfigClientFn: func(_ cloudflare.Credentials) (cloudflare.ZoneConfigClient, error) { return m.ZoneConfig, nil },
+	}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"}})
+	require.NoError(t, err)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"}})
+	require.NoError(t, err)
+
+	// Now swap ZoneConfigClientFn to one that errors. Fast-skip must not call it.
+	r.ZoneConfigClientFn = func(_ cloudflare.Credentials) (cloudflare.ZoneConfigClient, error) {
+		return nil, errors.New("client construction should not happen on fast-skip")
+	}
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"}})
+	require.NoError(t, err, "fast-skip must not call ZoneConfigClientFn")
 }
 
 func condMap(cs []metav1.Condition) map[string]metav1.ConditionStatus {

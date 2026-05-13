@@ -108,12 +108,9 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		return *halt, nil
 	}
 
-	zcc, err := r.ZoneConfigClientFn(creds)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Resolve zone identity (zoneID or zoneRef).
+	// Resolve zone identity (zoneID or zoneRef). We always resolve fresh so
+	// Status.ZoneID reflects the current resolution even on the fast-skip
+	// pass (e.g. if the user retargeted ZoneRef between reconciles).
 	zres, err := reconcile.ResolveZoneID(ctx, r.Client, reconcile.ZoneRefInputs{
 		ZoneID: cfg.Spec.ZoneID, ZoneRef: cfg.Spec.ZoneRef,
 	}, cfg.Namespace)
@@ -138,11 +135,17 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// Fast-skip: if the settings-relevant spec hash matches the last
 	// applied hash AND we're already Ready, skip all per-setting API calls.
 	// Out-of-band dashboard edits won't be reverted until the K8s spec
-	// itself changes.
+	// itself changes. Exit BEFORE constructing the Cloudflare client
+	// (pre-flight contract: no client construction on the fast-skip path).
 	desiredHash := hashZoneConfigSpec(&cfg.Spec)
 	if cfg.Status.AppliedSpecHash == desiredHash && cfg.Status.Phase == v1alpha1.PhaseReady {
 		logger.V(1).Info("zoneconfig spec unchanged, fast-skip", "hash", desiredHash)
 		return ctrl.Result{RequeueAfter: interval}, nil
+	}
+
+	zcc, err := r.ZoneConfigClientFn(creds)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Snapshot prior per-group condition statuses so we can emit transition events.
