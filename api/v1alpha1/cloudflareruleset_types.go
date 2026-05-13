@@ -32,8 +32,12 @@ import (
 // every reconcile because Cloudflare's response shape can't distinguish that
 // case from "no logging configured".
 type RuleLogging struct {
-	// Enabled opts the rule into per-action logging. Useful for actions
-	// (e.g. skip) where logging is off by default.
+	// Enabled enables per-rule logging.
+	//
+	// Note: due to Cloudflare API semantics, setting Enabled=false is
+	// indistinguishable from omitting the Logging block entirely. The
+	// operator normalizes both forms to "logging unset" on write to avoid
+	// spurious drift loops. To enable logging, set true.
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 }
