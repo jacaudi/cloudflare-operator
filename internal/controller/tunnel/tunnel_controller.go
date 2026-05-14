@@ -33,6 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cloudflare "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
@@ -52,9 +54,8 @@ const drainRequeueInterval = 2 * time.Second
 
 // CloudflareTunnelReconciler drives the lifecycle of a CloudflareTunnel CR:
 // credentials → tunnel create-or-adopt on Cloudflare → connector token
-// Secret → cloudflared Deployment + metrics Service (+ optional Service-
-// Monitor) → remote-config PUT (with drift-skip) → connector health
-// observation → status rollup.
+// Secret → cloudflared Deployment + metrics Service → remote-config PUT
+// (with drift-skip) → connector health observation → status rollup.
 //
 // All status writes are persisted by the OUTER Reconcile function only;
 // inner helpers mutate the in-memory CR and return errors. The single
@@ -78,10 +79,6 @@ type CloudflareTunnelReconciler struct {
 	// DefaultImage is the operator's compile-time pinned cloudflared image.
 	// Used as the default for spec.connector.image's unset half.
 	DefaultImage string
-
-	// HasServiceMonitor is the CRD-discovery gate set once at manager setup.
-	// When false, ServiceMonitor SSA is skipped.
-	HasServiceMonitor bool
 }
 
 // +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflaretunnels,verbs=get;list;watch;create;update;patch;delete
@@ -132,8 +129,16 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	priorTunnelID := tn.Status.TunnelID
 	if err := r.ensureTunnel(ctx, &tn, tc, creds.AccountID); err != nil {
 		return ctrl.Result{}, r.failStatus(ctx, &tn, conventions.ReasonTunnelCreating, err)
+	}
+	if priorTunnelID == "" && tn.Status.TunnelID != "" && r.Recorder != nil {
+		// First-time create-or-adopt transition. Emit a single Event so
+		// operators can correlate the cluster object with the Cloudflare-side
+		// tunnel id without tailing logs.
+		r.Recorder.Eventf(&tn, corev1.EventTypeNormal, conventions.ReasonTunnelCreated,
+			"tunnel %q created (id=%s)", tn.Spec.Name, tn.Status.TunnelID)
 	}
 	if err := r.ensureTokenSecret(ctx, &tn, tc, creds.AccountID); err != nil {
 		return ctrl.Result{}, r.failStatus(ctx, &tn, conventions.ReasonTunnelCreating, err)
@@ -250,6 +255,13 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v1
 		if err := r.Update(ctx, tn); err != nil {
 			return ctrl.Result{}, err
 		}
+		if r.Recorder != nil {
+			// Drain succeeded and the finalizer was just released. Surface a
+			// terminal Event so operators see the drain completed cleanly
+			// rather than guessing from the CR's absence.
+			r.Recorder.Eventf(tn, corev1.EventTypeNormal, "TunnelDeleted",
+				"tunnel %q drained and removed from Cloudflare", tn.Spec.Name)
+		}
 	}
 	return ctrl.Result{}, nil
 }
@@ -307,9 +319,9 @@ func (r *CloudflareTunnelReconciler) ensureTokenSecret(
 	return reconcilelib.Apply(ctx, r.Client, sec)
 }
 
-// ensureDataplane SSAs the cloudflared Deployment + metrics Service (+
-// optional ServiceMonitor). All owner-reffed to the tunnel so cascade
-// delete cleans them up if the finalizer drain is short-circuited.
+// ensureDataplane SSAs the cloudflared Deployment + metrics Service. All
+// owner-reffed to the tunnel so cascade delete cleans them up if the
+// finalizer drain is short-circuited.
 func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v1alpha1.CloudflareTunnel) error {
 	dep := BuildDeployment(tn, r.resolvedDefaultImage())
 	if err := reconcilelib.SetControllerOwner(tn, dep, r.Scheme); err != nil {
@@ -322,22 +334,7 @@ func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v1
 	if err := reconcilelib.SetControllerOwner(tn, svc, r.Scheme); err != nil {
 		return err
 	}
-	if err := reconcilelib.Apply(ctx, r.Client, svc); err != nil {
-		return err
-	}
-	if r.HasServiceMonitor {
-		if err := r.applyServiceMonitor(ctx, tn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// applyServiceMonitor is a placeholder. The real implementation lands
-// alongside the CRD-discovery probe in the manager setup; until then this
-// keeps Reconcile compiled when HasServiceMonitor=false.
-func (r *CloudflareTunnelReconciler) applyServiceMonitor(_ context.Context, _ *v1alpha1.CloudflareTunnel) error {
-	return nil
+	return reconcilelib.Apply(ctx, r.Client, svc)
 }
 
 // applyRemoteConfig: compute effective ingress from the shared cache, append
@@ -372,6 +369,13 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 				"loserName", conflict.Loser.Name,
 				"loserNamespace", conflict.Loser.Namespace,
 			)
+			// Acceptance §12.9 — stamp a DuplicateHostname Event on the loser
+			// source object so users see the conflict on the object they own,
+			// not just on the tunnel CR. Best-effort: a NotFound (loser
+			// deleted between cache-write and conflict-emit) is swallowed.
+			if err := r.emitDuplicateHostnameEvent(ctx, conflict); err != nil && !apierrors.IsNotFound(err) {
+				logger.V(1).Info("emit DuplicateHostname event failed", "err", err.Error())
+			}
 		}
 	}
 
@@ -384,6 +388,59 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	}
 	tn.Status.ObservedIngress = wantSnap
 	return nil
+}
+
+// emitDuplicateHostnameEvent stamps a Warning Event on the loser source
+// object naming the winner. Best-effort — the caller swallows IsNotFound
+// (loser deleted between cache-write and emit) and logs anything else at
+// V(1) without failing the reconcile.
+func (r *CloudflareTunnelReconciler) emitDuplicateHostnameEvent(ctx context.Context, c tunnelsynth.Conflict) error {
+	if r.Recorder == nil {
+		return nil
+	}
+	loser, err := r.fetchSource(ctx, c.Loser)
+	if err != nil {
+		return err
+	}
+	r.Recorder.Eventf(loser, corev1.EventTypeWarning, conventions.ReasonDuplicateHostname,
+		"hostname %q already claimed by %s %s/%s",
+		c.Hostname, c.Winner.Kind, c.Winner.Namespace, c.Winner.Name)
+	return nil
+}
+
+// fetchSource resolves a tunnelsynth.SourceKey to its concrete typed object
+// so the EventRecorder can attach Events to the right kind. Returns the
+// concrete pointer (Service / Gateway / HTTPRoute / TLSRoute) and any Get
+// error verbatim (IsNotFound is the caller's responsibility).
+func (r *CloudflareTunnelReconciler) fetchSource(ctx context.Context, src tunnelsynth.SourceKey) (client.Object, error) {
+	key := types.NamespacedName{Namespace: src.Namespace, Name: src.Name}
+	switch src.Kind {
+	case "Service":
+		var s corev1.Service
+		if err := r.Get(ctx, key, &s); err != nil {
+			return nil, err
+		}
+		return &s, nil
+	case "Gateway":
+		var g gwv1.Gateway
+		if err := r.Get(ctx, key, &g); err != nil {
+			return nil, err
+		}
+		return &g, nil
+	case "HTTPRoute":
+		var h gwv1.HTTPRoute
+		if err := r.Get(ctx, key, &h); err != nil {
+			return nil, err
+		}
+		return &h, nil
+	case "TLSRoute":
+		var t gwv1a2.TLSRoute
+		if err := r.Get(ctx, key, &t); err != nil {
+			return nil, err
+		}
+		return &t, nil
+	}
+	return nil, fmt.Errorf("unknown source kind %q", src.Kind)
 }
 
 // snapshotFromConfig converts a cf.TunnelConfig into the status-side

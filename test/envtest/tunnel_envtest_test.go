@@ -92,8 +92,6 @@ func setupTunnelEnv(t *testing.T) *tunnelEnvFixture {
 		},
 		Cache:        tunnelsynth.NewCache(),
 		DefaultImage: tunnel.DefaultCloudflaredImage,
-		// HasServiceMonitor false — the metrics ServiceMonitor SSA stays off
-		// in envtest because monitoring.coreos.com/v1 isn't installed.
 	}
 	// Unique controller name per test — the controller-runtime metrics
 	// registry is global to the process and rejects duplicate names. t.Name()

@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -445,4 +446,73 @@ func TestTunnelReconciler_CredentialsHaltUpdatesStatus(t *testing.T) {
 		}
 	}
 	require.True(t, sawCredsUnavailable, "credentials halt must surface as Ready=False/CredentialsUnavailable")
+}
+
+func TestTunnelReconciler_DuplicateHostname_EmitsEventOnLoser(t *testing.T) {
+	// Two Services in the same namespace both claim foo.example.com. The
+	// resolver picks the lex-lower source (Name="a") as winner; the loser
+	// (Name="b") must receive a DuplicateHostname Warning Event on the
+	// source object so users see the conflict on the resource they own.
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name:      "cf-ns",
+			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+	}
+	winnerSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
+	loserSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}}
+	base := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(tn, winnerSvc, loserSvc).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := ssaTranslatingClient(t, base)
+
+	cache := tunnelsynth.NewCache()
+	tk := tunnelsynth.TunnelKey{Namespace: "ns", Name: "tnl"}
+	cache.Set(tk, tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "a"},
+		[]tunnelsynth.IngressContribution{{Hostname: "foo.example.com", Service: "http://a.ns.svc.cluster.local:80"}})
+	cache.Set(tk, tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "b"},
+		[]tunnelsynth.IngressContribution{{Hostname: "foo.example.com", Service: "http://b.ns.svc.cluster.local:80"}})
+
+	rec := record.NewFakeRecorder(16)
+	r := newTunnelReconciler(t, c, s, m, cache)
+	r.Recorder = rec
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// Drain the channel and look for a DuplicateHostname Event referencing
+	// the loser. Other events (TunnelCreated) are also expected — we just
+	// need to see at least one DuplicateHostname.
+	var sawDuplicate bool
+	close(rec.Events)
+	for ev := range rec.Events {
+		if containsAll(ev, conventions.ReasonDuplicateHostname, "foo.example.com") {
+			sawDuplicate = true
+		}
+	}
+	require.True(t, sawDuplicate, "lex-loser Service must receive DuplicateHostname Event")
+}
+
+// containsAll returns true when s contains every substring.
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		found := false
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

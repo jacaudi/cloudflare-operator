@@ -27,11 +27,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -66,11 +62,6 @@ type Options struct {
 	// CRs by the source reconcilers. Empty fields fall back to internal
 	// defaults (Replicas=2, Protocol="auto", LogLevel="info", GracePeriod=30s).
 	DefaultConnector v1alpha1.ConnectorSpec
-
-	// RestConfig is the manager's REST config, used here to probe whether
-	// monitoring.coreos.com/v1 is installed (gates ServiceMonitor SSA). When
-	// nil, mgr.GetConfig() is used.
-	RestConfig *rest.Config
 }
 
 // AddToManager registers all five tunnel-bundle reconcilers with mgr.
@@ -111,28 +102,14 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	// reconciler (reader).
 	cache := tunnelsynth.NewCache()
 
-	// Discovery probe for the optional ServiceMonitor CRD. Failure to probe
-	// is logged but non-fatal — we conservatively assume "not installed".
-	cfg := opts.RestConfig
-	if cfg == nil {
-		cfg = mgr.GetConfig()
-	}
-	hasServiceMonitor, err := hasServiceMonitorCRD(cfg)
-	if err != nil {
-		ctrl.Log.WithName("tunnel-setup").Info("ServiceMonitor CRD discovery failed; ServiceMonitor SSA disabled",
-			"err", err.Error())
-		hasServiceMonitor = false
-	}
-
 	// --- CloudflareTunnel reconciler ----------------------------------------
 	tunnelR := &CloudflareTunnelReconciler{
-		Client:            c,
-		Scheme:            scheme,
-		Recorder:          rec,
-		TunnelClientFn:    opts.TunnelClientFn,
-		Cache:             cache,
-		DefaultImage:      opts.DefaultImage,
-		HasServiceMonitor: hasServiceMonitor,
+		Client:         c,
+		Scheme:         scheme,
+		Recorder:       rec,
+		TunnelClientFn: opts.TunnelClientFn,
+		Cache:          cache,
+		DefaultImage:   opts.DefaultImage,
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.CloudflareTunnel{}).
@@ -403,41 +380,4 @@ func tunnelToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 		}
 		return out
 	}
-}
-
-// hasServiceMonitorCRD probes the API server for the monitoring.coreos.com/v1
-// group/version. Returns:
-//   - (true, nil) if the API group is present and serves a ServiceMonitor kind.
-//   - (false, nil) if a NoMatchError or group-discovery failure is returned for
-//     the specific group/version (CRD absent — operationally normal), or when
-//     the group is present but does not expose ServiceMonitor.
-//   - (false, err) on any other error (e.g. permission denied, network failure
-//     during startup discovery). Callers should LOG the error but still
-//     continue manager startup; the operator's behavior degrades to
-//     "ServiceMonitor SSA disabled" which is recoverable on a future probe.
-func hasServiceMonitorCRD(cfg *rest.Config) (bool, error) {
-	if cfg == nil {
-		return false, nil
-	}
-	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
-	if err != nil {
-		return false, fmt.Errorf("build discovery client: %w", err)
-	}
-	gv := schema.GroupVersion{Group: "monitoring.coreos.com", Version: "v1"}
-	resources, err := dc.ServerResourcesForGroupVersion(gv.String())
-	if err != nil {
-		if meta.IsNoMatchError(err) || discovery.IsGroupDiscoveryFailedError(err) {
-			// CRD absent — operationally normal.
-			return false, nil
-		}
-		// Other errors (auth, network, transient API server issues):
-		// propagate so the caller logs and continues with HasServiceMonitor=false.
-		return false, fmt.Errorf("probe monitoring.coreos.com/v1: %w", err)
-	}
-	for _, r := range resources.APIResources {
-		if r.Kind == "ServiceMonitor" {
-			return true, nil
-		}
-	}
-	return false, nil
 }
