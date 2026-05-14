@@ -115,6 +115,46 @@ func TestServiceSource_OptInCreatesTunnelAndDNSRecord(t *testing.T) {
 	require.Equal(t, "foo.example.com", snap[0].Hostname)
 }
 
+// TestServiceSource_AutoCreateStampsSourceLabels is a regression for the bug
+// where EnsureTunnelCR called owner.GetObjectKind().GroupVersionKind().Kind to
+// derive the source-kind label. The typed controller-runtime client clears
+// TypeMeta on Get, so that returns "" — the auto-created CloudflareTunnel
+// would land with cloudflare.io/source-kind="", defeating Foundation §7
+// auditability. Fixed by passing an explicit ownerKind parameter to
+// EnsureTunnelCR; this test asserts all three source labels are present on
+// the auto-created CR.
+func TestServiceSource_AutoCreateStampsSourceLabels(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: "app-foo",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "payments",
+				conventions.AnnotationHostnames:  "foo.example.com",
+			},
+		},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	// NO pre-created tunnel — exercise the auto-create path through
+	// EnsureTunnelCR so the source-labels stamp is observable.
+	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+
+	r := &ServiceSourceReconciler{
+		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
+	require.NoError(t, err)
+
+	var tn v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app-foo", Name: "cf-app-foo-payments"}, &tn))
+	require.Equal(t, "Service", tn.Labels[conventions.LabelSourceKind],
+		"source-kind label must be the literal 'Service', not '' (typed client clears TypeMeta on Get)")
+	require.Equal(t, "svc", tn.Labels[conventions.LabelSourceName])
+	require.Equal(t, "app-foo", tn.Labels[conventions.LabelSourceNamespace])
+}
+
 func TestServiceSource_NoTunnelNameAttachesToNamespacePool(t *testing.T) {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -385,10 +425,123 @@ func TestServiceSource_ZoneRefAnnotation_ThreadedToDNSRecord(t *testing.T) {
 	require.Equal(t, "app-foo", dnsList.Items[0].Spec.ZoneRef.Namespace)
 }
 
+// TestServiceSource_ServiceDeletedSweepsCache verifies the NotFound branch of
+// Reconcile: when the Service is deleted, the in-memory lastAttached entry
+// and the corresponding cache slot for the source must be swept clean.
+func TestServiceSource_ServiceDeletedSweepsCache(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "payments",
+				conventions.AnnotationHostnames:  "foo.example.com",
+			},
+		},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	preTun := preCreatedTunnel("cf-ns-payments", "ns")
+	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	cache := tunnelsynth.NewCache()
+	r := &ServiceSourceReconciler{
+		Client: c, Scheme: srcScheme(t), Cache: cache,
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	tunKey := tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-payments"}
+
+	// First reconcile populates lastAttached + the cache.
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
+	require.NoError(t, err)
+	require.Len(t, cache.Snapshot(tunKey), 1)
+
+	// Delete the Service so the next reconcile hits the NotFound branch.
+	require.NoError(t, c.Delete(context.Background(), svc))
+
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
+	require.NoError(t, err)
+	require.Empty(t, cache.Snapshot(tunKey),
+		"NotFound branch must sweep the cache entry for the deleted Service")
+}
+
+// TestServiceSource_InvalidName_StatusEventOnly verifies that DeriveTunnelName
+// failure (uppercase / underscore in annotation) surfaces as an Event with
+// Reason=InvalidName and a nil error return — no CR is created.
+func TestServiceSource_InvalidName_StatusEventOnly(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "Invalid_Name", // uppercase + underscore
+				conventions.AnnotationHostnames:  "x.example.com",
+			},
+		},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	rec := record.NewFakeRecorder(10)
+	r := &ServiceSourceReconciler{
+		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
+	}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
+	require.NoError(t, err)
+
+	var list v1alpha1.CloudflareTunnelList
+	require.NoError(t, c.List(context.Background(), &list))
+	require.Empty(t, list.Items)
+
+	select {
+	case ev := <-rec.Events:
+		require.Contains(t, ev, conventions.ReasonInvalidName)
+	default:
+		t.Fatal("expected an InvalidName event")
+	}
+}
+
+// TestServiceSource_TranslatorWarningsEmitEvents verifies that warnings
+// returned by tunnelsynth.TranslateService (e.g. MissingHostnames) are
+// fanned out as Warning Events on the Service.
+func TestServiceSource_TranslatorWarningsEmitEvents(t *testing.T) {
+	// Opted in, but no hostnames annotation — translator emits a
+	// MissingHostnames warning. Pre-populate the tunnel so the test reaches
+	// the translator-warnings emit path (which runs after EnsureTunnelCR).
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "payments",
+				// no Hostnames annotation
+			},
+		},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	preTun := preCreatedTunnel("cf-ns-payments", "ns")
+	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	rec := record.NewFakeRecorder(10)
+	r := &ServiceSourceReconciler{
+		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-rec.Events:
+		require.Contains(t, ev, "MissingHostnames")
+	default:
+		t.Fatal("expected a translator-warning event")
+	}
+}
+
 // TestEmittedDNSRecordNameDNS1123Compliant exercises edge-case hostnames
-// against the sanitize() suffix logic. Every emitted DNSRecord CR name must be
+// against the hash-suffix logic. Every emitted DNSRecord CR name must be
 // a valid DNS-1123 subdomain — labels of [a-z0-9] with optional internal
-// hyphens, ≤63 chars per label.
+// hyphens, ≤63 chars per label — AND must end in an alphanumeric character
+// (the SHA-256 hex hash guarantees this).
 func TestEmittedDNSRecordNameDNS1123Compliant(t *testing.T) {
 	// Top-level CR-name regex: lowercase a-z0-9 + internal hyphens, no
 	// leading/trailing hyphens, ≤63 chars.
@@ -406,14 +559,38 @@ func TestEmittedDNSRecordNameDNS1123Compliant(t *testing.T) {
 		{"already-clean", "svc", "foo.example.com"},
 		{"hyphen-prefix", "svc", "-leading.example.com"},
 		{"underscore", "svc", "foo_bar.example.com"},
+		{"all-non-alnum", "svc", "..--..--..--"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := emittedDNSRecordName(tc.svcName, tc.hostname)
 			require.LessOrEqual(t, len(got), 63, "name must fit DNS-1123 label limit: %q", got)
 			require.True(t, dns1123Subdomain.MatchString(got), "name must be DNS-1123 valid: %q", got)
+			// Hash suffix is always 8 hex chars at the tail.
+			require.Regexp(t, `-[0-9a-f]{8}$`, got, "name must end with -<8-hex-hash>: %q", got)
 		})
 	}
+}
+
+// TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias verifies that two
+// hostnames which sanitize to the same prefix (because the only difference
+// is non-alphanumeric punctuation) still produce distinct CR names. Without
+// the hash suffix, the second hostname's DNSRecord would be silently dropped
+// because emitDNSRecord swallows IsAlreadyExists.
+func TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias(t *testing.T) {
+	a := emittedDNSRecordName("svc", "foo.example.com")
+	b := emittedDNSRecordName("svc", "foo-example-com")
+	require.NotEqual(t, a, b, "alias hostnames must produce distinct CR names")
+}
+
+// TestEmittedDNSRecordName_NoCollisionOnTruncation verifies that two long
+// hostnames sharing the same first N chars (where N is past the truncation
+// budget) still produce distinct CR names via the hash suffix.
+func TestEmittedDNSRecordName_NoCollisionOnTruncation(t *testing.T) {
+	prefix := strings.Repeat("a", 60)
+	a := emittedDNSRecordName("svc", prefix+".one.example.com")
+	b := emittedDNSRecordName("svc", prefix+".two.example.com")
+	require.NotEqual(t, a, b, "long hostnames sharing a prefix must produce distinct CR names")
 }
 
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.

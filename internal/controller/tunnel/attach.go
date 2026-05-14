@@ -90,6 +90,13 @@ func DeriveTunnelName(sourceNamespace, tunnelNameAnnotation string) (string, err
 // Returns the resulting CR. defaults is the operator-level ConnectorSpec
 // applied to auto-created CRs.
 //
+// ownerKind is the source kind ("Service", "HTTPRoute", etc.) used for the
+// source-kind label on the auto-created CR. The caller must pass a literal
+// because the typed controller-runtime client clears TypeMeta on Get —
+// reading the kind off the live object via its ObjectKind / GVK accessor
+// returns the empty string for objects fetched through the typed cache.
+// Foundation §7 auditability requires the label be set correctly.
+//
 // TODO: Owner-transfer on owner deletion is design §6.4 territory. The
 // lexicographically-first remaining attacher should be promoted via an
 // ownerReferences Patch when the original owner is deleted. Deferred until
@@ -103,6 +110,7 @@ func EnsureTunnelCR(
 	c client.Client,
 	scheme *runtime.Scheme,
 	owner client.Object,
+	ownerKind string,
 	derivedName string,
 	defaults v1alpha1.ConnectorSpec,
 ) (*v1alpha1.CloudflareTunnel, error) {
@@ -121,7 +129,7 @@ func EnsureTunnelCR(
 			Connector: defaults,
 		},
 	}
-	reconcilelib.StampSourceLabels(tn, owner.GetObjectKind().GroupVersionKind().Kind, owner.GetName(), owner.GetNamespace())
+	reconcilelib.StampSourceLabels(tn, ownerKind, owner.GetName(), owner.GetNamespace())
 	if err := reconcilelib.SetControllerOwner(owner, tn, scheme); err != nil {
 		return nil, err
 	}

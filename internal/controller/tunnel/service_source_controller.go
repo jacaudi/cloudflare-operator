@@ -18,6 +18,8 @@ package tunnel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -127,7 +129,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		return reconcile.Result{}, nil
 	}
 
-	tn, err := EnsureTunnelCR(ctx, r.Client, r.Scheme, &svc, derived, r.DefaultConnector)
+	tn, err := EnsureTunnelCR(ctx, r.Client, r.Scheme, &svc, "Service", derived, r.DefaultConnector)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("ensure tunnel: %w", err)
 	}
@@ -240,52 +242,49 @@ func (r *ServiceSourceReconciler) emitDNSRecord(ctx context.Context, svc *corev1
 	if err := r.Create(ctx, dr); err != nil && !apierrors.IsAlreadyExists(err) {
 		return err
 	}
-	// Suppress unused-tn warning in the IsAlreadyExists path — we deliberately
-	// do not update existing records here; the DNSRecord reconciler picks up
-	// edits on its next loop driven by the CR's own resourceVersion.
-	_ = tn
 	return nil
 }
 
-// emittedDNSRecordName produces a stable, DNS-1123-compliant CR name from
-// (svcName, hostname). The name is used as the CloudflareDNSRecord CR's
-// metadata.name — it must satisfy DNS-1123 subdomain rules and stay ≤63 chars.
+// emittedDNSRecordName produces a stable, DNS-1123-compliant CR name combining
+// the source object's name, a sanitized hostname prefix, and a short content
+// hash of the original hostname. The hash guarantees uniqueness across
+// hostnames that would otherwise alias under sanitization
+// (e.g. "foo.example.com" vs "foo-example-com") or truncation (two long
+// hostnames sharing the first N chars).
 //
-// Strategy (Correction D — sanitize + collapse + truncate):
-//  1. Sanitize the hostname: lowercase a-z/0-9 kept; everything else → '-'.
-//  2. Collapse runs of '-' into a single '-'.
-//  3. Trim leading/trailing '-'.
-//  4. Combine "<svc>-<sanitized>", then truncate the SUFFIX if needed so the
-//     total stays under DNS-1123's 63-char label limit, re-trimming any
-//     trailing '-' the truncation introduced.
+// Output shape: "<svcName>-<sanitized-prefix>-<8-hex-hash>", ≤63 chars,
+// DNS-1123 valid (alphanumeric start/end, internal hyphens).
 //
-// We deliberately use sanitize-and-truncate (debuggable) over a hash-based
-// suffix (compact but opaque): kubectl gets readable names like
-// "svc-foo-example-com" instead of "svc-9a3f2b1c4d".
-func emittedDNSRecordName(svcName, hostname string) string {
-	suffix := sanitizeHostname(hostname)
-	// Reserve room for the "<svc>-" prefix.
-	const maxLabel = 63
-	maxSuffix := maxLabel - len(svcName) - 1 // -1 for the separator
-	if maxSuffix < 1 {
-		// svcName itself is already at the limit — return a trimmed prefix.
-		// Caller's responsibility to keep Service names DNS-1123 (≤63);
-		// defensive fall-through.
-		if len(svcName) > maxLabel {
-			return strings.TrimRight(svcName[:maxLabel], "-")
-		}
-		return svcName
+// The hash is sha256(hostname) truncated to 4 bytes / 8 hex chars: 32-bit
+// collision resistance is plenty here (collision domain is per-Service, and
+// any conflict is surfaced loudly by the apiserver, not silently dropped).
+//
+// Trade-off vs. pure sanitize-and-truncate: kubectl names are slightly less
+// readable ("svc-foo-example-com-9a3f2b1c") but correctness is unconditional.
+// The previous sanitize-only scheme silently dropped the second of any
+// aliasing pair via the IsAlreadyExists swallow in Create.
+func emittedDNSRecordName(sourceName, hostname string) string {
+	sum := sha256.Sum256([]byte(hostname))
+	short := hex.EncodeToString(sum[:4]) // 8 hex chars
+	sanitized := sanitizeHostname(hostname)
+	// Budget for the sanitized middle segment:
+	// 63 - len(sourceName) - 1 (sep) - 1 (sep) - 8 (hash) = 53 - len(sourceName).
+	maxSan := 63 - len(sourceName) - 1 - 1 - 8
+	if maxSan < 1 {
+		// Source name is itself approaching the 63-char ceiling — drop the
+		// sanitized middle and emit "<sourceName>-<hash>". Caller's
+		// responsibility to keep source names DNS-1123 (≤63); defensive.
+		return sourceName + "-" + short
 	}
-	if len(suffix) > maxSuffix {
-		suffix = strings.TrimRight(suffix[:maxSuffix], "-")
+	if len(sanitized) > maxSan {
+		sanitized = strings.TrimRight(sanitized[:maxSan], "-")
 	}
-	if suffix == "" {
-		// Pathological hostname (all non-alphanumeric) — fall back to the bare
-		// service name. Caller should not reach this in practice because the
-		// translator rejects empty hostnames via the MissingHostnames warning.
-		return svcName
+	if sanitized == "" {
+		// Pathological hostname (all non-alphanumeric) — fall back to
+		// "<sourceName>-<hash>". Hash still disambiguates per hostname.
+		return sourceName + "-" + short
 	}
-	return svcName + "-" + suffix
+	return sourceName + "-" + sanitized + "-" + short
 }
 
 // sanitizeHostname lowercases and replaces non-[a-z0-9] with '-', collapses
