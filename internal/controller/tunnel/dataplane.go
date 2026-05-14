@@ -188,8 +188,7 @@ func BuildTokenSecret(tunnelName, namespace, token string) *corev1.Secret {
 }
 
 // BuildMetricsService renders the operator-owned metrics ClusterIP Service
-// fronting cloudflared's :2000 metrics endpoint. Used as the ServiceMonitor
-// scrape target once the optional ServiceMonitor lands.
+// fronting cloudflared's :2000 metrics endpoint.
 func BuildMetricsService(tunnelName, namespace string) *corev1.Service {
 	labels := map[string]string{
 		"app.kubernetes.io/name":     "cloudflared",
