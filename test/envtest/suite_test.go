@@ -63,8 +63,13 @@ var sharedConfig *rest.Config
 // though the build resolved the gateway-api dependency cleanly).
 //
 // The Standard channel ships Gateway, HTTPRoute, GatewayClass, GRPCRoute, and
-// ReferenceGrant. TLSRoute (v1alpha2) lives only in the experimental channel;
-// T18's TLSRoute envtest will extend this helper to include it.
+// ReferenceGrant. TLSRoute (v1alpha2) lives only in the experimental channel,
+// so we install BOTH directories. The experimental channel is a superset of
+// Standard for the CRDs we install — envtest tolerates duplicate CRD declarations
+// across paths because each CRD's Kubernetes object is name-keyed and applied
+// idempotently. The experimental directory also ships TCPRoute / UDPRoute /
+// GRPCRoute / ReferenceGrant / BackendLBPolicy / BackendTLSPolicy — none of
+// which the reconcilers touch, but installing them is harmless.
 func resolveGatewayAPICRDPaths() ([]string, error) {
 	listOut, err := exec.Command("go", "list", "-m", "-json", "sigs.k8s.io/gateway-api").Output()
 	if err != nil {
@@ -94,6 +99,7 @@ func resolveGatewayAPICRDPaths() ([]string, error) {
 	base := filepath.Join(dir, "config", "crd")
 	return []string{
 		filepath.Join(base, "standard"),
+		filepath.Join(base, "experimental"),
 	}, nil
 }
 
@@ -116,11 +122,12 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
-	// Resolve the gateway-api CRD path from the Go module cache so the envtest
-	// API server can install Gateway / HTTPRoute CRDs without vendoring them
-	// into the repo. The Standard channel ships every CRD T17 needs (Gateway,
-	// HTTPRoute). TLSRoute is experimental-channel-only and T18 will extend
-	// resolveGatewayAPICRDPaths when its envtest lands. Resolution sources:
+	// Resolve the gateway-api CRD paths from the Go module cache so the envtest
+	// API server can install Gateway / HTTPRoute / TLSRoute CRDs without
+	// vendoring them into the repo. The Standard channel ships Gateway +
+	// HTTPRoute; the Experimental channel ships TLSRoute (v1alpha2). Both
+	// directories are installed — see resolveGatewayAPICRDPaths. Resolution
+	// sources:
 	//   - $GOMODCACHE (via `go env GOMODCACHE`) — the local module cache root.
 	//   - sigs.k8s.io/gateway-api version (via runtime/debug.ReadBuildInfo) —
 	//     the version actually compiled into the test binary, so the CRDs on
