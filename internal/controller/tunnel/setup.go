@@ -79,7 +79,7 @@ type Options struct {
 func AddToManager(mgr ctrl.Manager, opts Options) error {
 	scheme := mgr.GetScheme()
 	c := mgr.GetClient()
-	rec := mgr.GetEventRecorderFor("cloudflare-tunnel-controller")
+	rec := mgr.GetEventRecorderFor("cloudflare-operator-tunnel")
 
 	// Defaults.
 	if opts.DefaultImage == "" {
@@ -242,6 +242,15 @@ func gatewayToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 		out := make([]reconcile.Request, 0)
 		for _, rt := range routes.Items {
 			for _, pr := range rt.Spec.ParentRefs {
+				// Gate on Gateway kind + gateway.networking.k8s.io group.
+				// parentRefs default to Kind=Gateway and Group=gateway.networking.k8s.io
+				// when nil, so nil-checks only reject explicit mismatches.
+				if pr.Kind != nil && *pr.Kind != "Gateway" {
+					continue
+				}
+				if pr.Group != nil && *pr.Group != "gateway.networking.k8s.io" {
+					continue
+				}
 				ns := rt.Namespace
 				if pr.Namespace != nil {
 					ns = string(*pr.Namespace)
@@ -273,6 +282,15 @@ func gatewayToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 		out := make([]reconcile.Request, 0)
 		for _, rt := range routes.Items {
 			for _, pr := range rt.Spec.ParentRefs {
+				// Gate on Gateway kind + gateway.networking.k8s.io group.
+				// parentRefs default to Kind=Gateway and Group=gateway.networking.k8s.io
+				// when nil, so nil-checks only reject explicit mismatches.
+				if pr.Kind != nil && *pr.Kind != "Gateway" {
+					continue
+				}
+				if pr.Group != nil && *pr.Group != "gateway.networking.k8s.io" {
+					continue
+				}
 				ns := rt.Namespace
 				if pr.Namespace != nil {
 					ns = string(*pr.Namespace)
@@ -387,10 +405,20 @@ func tunnelToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 	}
 }
 
-// hasServiceMonitorCRD probes the API server for monitoring.coreos.com/v1.
-// Returns (true, nil) when the group/version is served. A meta.NoMatchError
-// or absent group returns (false, nil); other errors return (false, err).
+// hasServiceMonitorCRD probes the API server for the monitoring.coreos.com/v1
+// group/version. Returns:
+//   - (true, nil) if the API group is present and serves a ServiceMonitor kind.
+//   - (false, nil) if a NoMatchError or group-discovery failure is returned for
+//     the specific group/version (CRD absent — operationally normal), or when
+//     the group is present but does not expose ServiceMonitor.
+//   - (false, err) on any other error (e.g. permission denied, network failure
+//     during startup discovery). Callers should LOG the error but still
+//     continue manager startup; the operator's behavior degrades to
+//     "ServiceMonitor SSA disabled" which is recoverable on a future probe.
 func hasServiceMonitorCRD(cfg *rest.Config) (bool, error) {
+	if cfg == nil {
+		return false, nil
+	}
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
 		return false, fmt.Errorf("build discovery client: %w", err)
@@ -399,12 +427,12 @@ func hasServiceMonitorCRD(cfg *rest.Config) (bool, error) {
 	resources, err := dc.ServerResourcesForGroupVersion(gv.String())
 	if err != nil {
 		if meta.IsNoMatchError(err) || discovery.IsGroupDiscoveryFailedError(err) {
+			// CRD absent — operationally normal.
 			return false, nil
 		}
-		// Treat 404 / not-found as "absent" rather than "broken cluster" —
-		// the caller logs the discovery error and proceeds without
-		// ServiceMonitor support.
-		return false, nil
+		// Other errors (auth, network, transient API server issues):
+		// propagate so the caller logs and continues with HasServiceMonitor=false.
+		return false, fmt.Errorf("probe monitoring.coreos.com/v1: %w", err)
 	}
 	for _, r := range resources.APIResources {
 		if r.Kind == "ServiceMonitor" {
