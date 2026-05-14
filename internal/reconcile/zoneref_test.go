@@ -84,9 +84,24 @@ func TestResolveZoneID_RefNotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrZoneRefNotFound)
 }
 
-func TestResolveZoneID_FromRef_FoundationContract(t *testing.T) {
-	// Foundation: zone exists but status.zoneID is unpopulated. Caller must
-	// distinguish this requeue-now case from the not-found case via ZoneObject.
+func TestResolveZoneID_FromRef_StatusZoneID(t *testing.T) {
+	// Spec 2 contract: when status.zoneID is populated, ResolveZoneID returns it.
+	zone := &v1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "media"},
+		Status:     v1alpha1.CloudflareZoneStatus{ZoneID: "abc123"},
+	}
+	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(zone).Build()
+	res, err := ResolveZoneID(context.Background(), c, ZoneRefInputs{
+		ZoneRef: &v1alpha1.ZoneReference{Name: "test", Namespace: "media"},
+	}, "default")
+	require.NoError(t, err)
+	require.Equal(t, "abc123", res.ZoneID)
+	require.NotNil(t, res.ZoneObject)
+}
+
+func TestResolveZoneID_FromRef_StatusZoneIDUnset(t *testing.T) {
+	// Spec-2 reconciler not yet populated status — caller requeues.
+	// ZoneObject must be non-nil so caller distinguishes from not-found.
 	zone := &v1alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "media"},
 	}
@@ -95,6 +110,6 @@ func TestResolveZoneID_FromRef_FoundationContract(t *testing.T) {
 		ZoneRef: &v1alpha1.ZoneReference{Name: "test", Namespace: "media"},
 	}, "default")
 	require.NoError(t, err)
-	require.Empty(t, res.ZoneID, "Foundation: status.zoneID not populated yet; spec 2 will fill it")
+	require.Empty(t, res.ZoneID, "status.zoneID not populated yet; caller should requeue")
 	require.NotNil(t, res.ZoneObject, "ZoneObject must be non-nil so caller can distinguish from not-found")
 }

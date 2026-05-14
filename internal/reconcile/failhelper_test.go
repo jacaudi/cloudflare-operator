@@ -19,11 +19,14 @@ package reconcile
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 )
 
 func TestWrapDeleteErr_NotFoundReturnsNil(t *testing.T) {
@@ -35,6 +38,20 @@ func TestWrapDeleteErr_NotFoundReturnsNil(t *testing.T) {
 func TestWrapDeleteErr_OtherErrorPasses(t *testing.T) {
 	err := errors.New("boom")
 	require.Error(t, WrapDeleteErr(err))
+}
+
+func TestWrapDeleteErr_CloudflareZoneNotFoundReturnsNil(t *testing.T) {
+	// Bare sentinel.
+	require.NoError(t, WrapDeleteErr(cloudflare.ErrZoneNotFound))
+	// Wrapped sentinel — matches how internal/cloudflare classifies API errors.
+	wrapped := fmt.Errorf("%w: upstream said 404", cloudflare.ErrZoneNotFound)
+	require.NoError(t, WrapDeleteErr(wrapped))
+}
+
+func TestWrapDeleteErr_CloudflareRecordNotFoundReturnsNil(t *testing.T) {
+	require.NoError(t, WrapDeleteErr(cloudflare.ErrRecordNotFound))
+	wrapped := fmt.Errorf("%w: upstream said 404", cloudflare.ErrRecordNotFound)
+	require.NoError(t, WrapDeleteErr(wrapped))
 }
 
 func TestFailReconcile_DefaultDelay(t *testing.T) {

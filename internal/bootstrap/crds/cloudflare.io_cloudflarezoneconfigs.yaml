@@ -14,11 +14,27 @@ spec:
     singular: cloudflarezoneconfig
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.zoneID
+      name: Zone ID
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.lastSyncedAt
+      name: Last Synced
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: CloudflareZoneConfig holds zone-level settings (DNSSEC, SSL,
-          security headers, etc.).
+        description: CloudflareZoneConfig is the Schema for the cloudflarezoneconfigs
+          API
         properties:
           apiVersion:
             description: |-
@@ -38,11 +54,25 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudflareZoneConfigSpec is a scaffold; spec 2 populates
-              fields.
+            description: spec defines the desired state of CloudflareZoneConfig
             properties:
+              botManagement:
+                description: BotManagement defines bot management settings for the
+                  zone.
+                properties:
+                  enableJS:
+                    description: EnableJS enables JavaScript detections.
+                    type: boolean
+                  fightMode:
+                    description: FightMode enables bot fight mode.
+                    type: boolean
+                type: object
               cloudflare:
-                description: Cloudflare overrides the top-level credential + account.
+                description: |-
+                  Cloudflare overrides the top-level credential + account from the
+                  CloudflareOperator CR. Per Foundation §5 the token and accountID
+                  are inherited or overridden as a unit. Omitted entirely → top-level
+                  default applies.
                 properties:
                   accountID:
                     description: AccountID is the Cloudflare account ID this credential
@@ -96,12 +126,304 @@ spec:
                 - accountID
                 - tokenSecretRef
                 type: object
+              dns:
+                description: DNS defines DNS-related settings for the zone.
+                properties:
+                  cnameFlattening:
+                    description: |-
+                      CNAMEFlattening controls how the zone resolves CNAME records.
+                      flatten_at_root: only flatten the apex (default Cloudflare behavior).
+                      flatten_all: flatten every CNAME.
+                      flatten_none: never flatten.
+                    enum:
+                    - flatten_at_root
+                    - flatten_all
+                    - flatten_none
+                    type: string
+                type: object
+              interval:
+                default: 30m
+                description: Interval is the reconciliation interval.
+                type: string
+              network:
+                description: Network defines network settings for the zone.
+                properties:
+                  ipGeolocation:
+                    description: IPGeolocation enables IP geolocation.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  ipv6:
+                    description: IPv6 enables IPv6 support.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  opportunisticOnion:
+                    description: OpportunisticOnion enables onion routing.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  pseudoIPv4:
+                    description: PseudoIPv4 controls Pseudo IPv4 behavior.
+                    enum:
+                    - "off"
+                    - add_header
+                    - overwrite_header
+                    type: string
+                  websockets:
+                    description: WebSockets enables WebSocket support.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                type: object
+              performance:
+                description: Performance defines performance settings for the zone.
+                properties:
+                  alwaysOnline:
+                    description: AlwaysOnline serves cached pages when the origin
+                      is unreachable.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  brotli:
+                    description: Brotli enables brotli compression.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  browserCacheTTL:
+                    description: BrowserCacheTTL is the browser cache TTL in seconds.
+                      0 means respect existing headers.
+                    minimum: 0
+                    type: integer
+                  cacheLevel:
+                    description: CacheLevel controls the cache level.
+                    enum:
+                    - aggressive
+                    - basic
+                    - simplified
+                    type: string
+                  earlyHints:
+                    description: EarlyHints enables early hints.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  http2:
+                    description: HTTP2 enables HTTP/2.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  http3:
+                    description: HTTP3 enables HTTP/3.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  minify:
+                    description: Minify controls minification settings.
+                    properties:
+                      css:
+                        description: CSS enables CSS minification.
+                        enum:
+                        - "on"
+                        - "off"
+                        type: string
+                      html:
+                        description: HTML enables HTML minification.
+                        enum:
+                        - "on"
+                        - "off"
+                        type: string
+                      js:
+                        description: JS enables JavaScript minification.
+                        enum:
+                        - "on"
+                        - "off"
+                        type: string
+                    type: object
+                  polish:
+                    description: Polish controls image optimization.
+                    enum:
+                    - "off"
+                    - lossless
+                    - lossy
+                    type: string
+                  rocketLoader:
+                    description: |-
+                      RocketLoader defers JavaScript loading to improve perceived performance.
+                      Cloudflare is sunsetting Rocket Loader; the field will be removed when
+                      the API is retired.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                type: object
+              security:
+                description: Security defines security settings for the zone.
+                properties:
+                  browserCheck:
+                    description: BrowserCheck enables browser integrity check.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  challengeTTL:
+                    description: ChallengeTTL is the challenge TTL in seconds.
+                    enum:
+                    - 300
+                    - 900
+                    - 1800
+                    - 2700
+                    - 3600
+                    - 7200
+                    - 10800
+                    - 14400
+                    - 28800
+                    - 57600
+                    - 86400
+                    type: integer
+                  emailObfuscation:
+                    description: EmailObfuscation enables email obfuscation.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  hotlinkProtection:
+                    description: HotlinkProtection blocks hotlinking of images.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  securityHeader:
+                    description: SecurityHeader configures the zone's HSTS / Strict-Transport-Security
+                      header.
+                    properties:
+                      enabled:
+                        description: Enabled toggles HSTS for the zone.
+                        type: boolean
+                      includeSubdomains:
+                        description: IncludeSubdomains extends HSTS to subdomains.
+                        type: boolean
+                      maxAge:
+                        description: MaxAge is the HSTS max-age in seconds.
+                        maximum: 31536000
+                        minimum: 0
+                        type: integer
+                      nosniff:
+                        description: 'Nosniff enables the X-Content-Type-Options:
+                          nosniff response header.'
+                        type: boolean
+                      preload:
+                        description: Preload requests inclusion in browser HSTS preload
+                          lists.
+                        type: boolean
+                    type: object
+                  securityLevel:
+                    description: SecurityLevel controls the security level.
+                    enum:
+                    - essentially_off
+                    - low
+                    - medium
+                    - high
+                    - under_attack
+                    type: string
+                  serverSideExclude:
+                    description: ServerSideExclude hides sensitive content from suspicious
+                      visitors.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                type: object
+              ssl:
+                description: SSL defines SSL/TLS settings for the zone.
+                properties:
+                  alwaysUseHTTPS:
+                    description: AlwaysUseHTTPS redirects all HTTP requests to HTTPS.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  automaticHTTPSRewrites:
+                    description: AutomaticHTTPSRewrites rewrites HTTP URLs to HTTPS
+                      in page content.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  minTLSVersion:
+                    description: MinTLSVersion is the minimum TLS version.
+                    enum:
+                    - "1.0"
+                    - "1.1"
+                    - "1.2"
+                    - "1.3"
+                    type: string
+                  mode:
+                    description: Mode is the SSL mode.
+                    enum:
+                    - "off"
+                    - flexible
+                    - full
+                    - strict
+                    type: string
+                  opportunisticEncryption:
+                    description: OpportunisticEncryption enables opportunistic encryption.
+                    enum:
+                    - "on"
+                    - "off"
+                    type: string
+                  tls13:
+                    description: TLS13 controls TLS 1.3 setting.
+                    enum:
+                    - "on"
+                    - "off"
+                    - zrt
+                    type: string
+                type: object
+              zoneID:
+                description: |-
+                  ZoneID is the Cloudflare Zone ID.
+                  Mutually exclusive with ZoneRef.
+                minLength: 1
+                type: string
+              zoneRef:
+                description: |-
+                  ZoneRef references a CloudflareZone resource in the same namespace.
+                  The controller resolves the zone ID from the referenced resource's status.
+                  Mutually exclusive with ZoneID.
+                properties:
+                  name:
+                    description: Name of the CloudflareZone CR.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the CloudflareZone CR. Defaults to the
+                      referencing CR's namespace.
+                    type: string
+                required:
+                - name
+                type: object
             type: object
           status:
-            description: CloudflareZoneConfigStatus is a scaffold.
+            description: status defines the observed state of CloudflareZoneConfig
             properties:
+              appliedSpecHash:
+                description: |-
+                  AppliedSpecHash is a hash of the settings-relevant spec fields the last
+                  time reconciliation successfully applied them. When the current hash
+                  matches, the controller skips the per-setting API calls.
+                type: string
               conditions:
-                description: Conditions reflects the current reconciliation state.
+                description: Conditions represent the latest available observations
+                  of the resource's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -160,11 +482,39 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastSyncedAt:
+                description: LastSyncedAt is the last time the zone config was successfully
+                  synced.
+                format: date-time
+                type: string
               observedGeneration:
+                description: ObservedGeneration is the most recently observed generation
+                  of the CR.
                 format: int64
                 type: integer
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state.
+                  See cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Ready
+                - Reconciling
+                - Error
+                - Pending
+                type: string
+              zoneID:
+                description: |-
+                  ZoneID is the resolved Cloudflare Zone ID, populated regardless of
+                  whether the spec used zoneID or zoneRef.
+                type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: one of zoneID or zoneRef is required
+          rule: has(self.spec.zoneID) || has(self.spec.zoneRef)
+        - message: zoneID and zoneRef are mutually exclusive
+          rule: '!(has(self.spec.zoneID) && has(self.spec.zoneRef))'
     served: true
     storage: true
     subresources:

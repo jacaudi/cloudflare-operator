@@ -14,11 +14,29 @@ spec:
     singular: cloudflareruleset
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Ruleset Name
+      type: string
+    - jsonPath: .spec.phase
+      name: Ruleset Phase
+      type: string
+    - jsonPath: .status.ruleCount
+      name: Rules
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: CloudflareRuleset represents a Cloudflare ruleset for a phase
-          entrypoint.
+        description: CloudflareRuleset is the Schema for the cloudflarerulesets API.
         properties:
           apiVersion:
             description: |-
@@ -38,7 +56,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudflareRulesetSpec is a scaffold; spec 2 populates fields.
+            description: CloudflareRulesetSpec defines the desired state of CloudflareRuleset.
             properties:
               cloudflare:
                 description: Cloudflare overrides the top-level credential + account.
@@ -95,12 +113,132 @@ spec:
                 - accountID
                 - tokenSecretRef
                 type: object
+              description:
+                description: Description is an informative description of the ruleset.
+                type: string
+              interval:
+                default: 30m
+                description: Interval is the reconciliation interval.
+                type: string
+              name:
+                description: Name is the human-readable name for the ruleset.
+                minLength: 1
+                type: string
+              phase:
+                description: |-
+                  Phase is the Cloudflare ruleset entrypoint phase. This is the
+                  Cloudflare API surface (not the operator's lifecycle Phase).
+                enum:
+                - http_request_firewall_custom
+                - http_request_firewall_managed
+                - http_request_late_transform
+                - http_request_redirect
+                - http_request_transform
+                - http_response_headers_transform
+                - http_response_firewall_managed
+                - http_config_settings
+                - http_custom_errors
+                - http_ratelimit
+                - http_request_cache_settings
+                - http_request_origin
+                - http_request_dynamic_redirect
+                - http_response_compression
+                type: string
+              rules:
+                description: Rules is the list of rules in the ruleset.
+                items:
+                  description: RulesetRuleSpec defines a single rule within a Cloudflare
+                    Ruleset.
+                  properties:
+                    action:
+                      description: Action is the action to perform when the rule matches.
+                      enum:
+                      - block
+                      - challenge
+                      - js_challenge
+                      - managed_challenge
+                      - log
+                      - skip
+                      - execute
+                      - redirect
+                      - rewrite
+                      - route
+                      - score
+                      - serve_error
+                      - set_cache_settings
+                      - set_config
+                      - compress_response
+                      - force_connection_close
+                      type: string
+                    actionParameters:
+                      description: ActionParameters contains action-specific parameters
+                        as free-form JSON.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    description:
+                      description: Description is an informative description of the
+                        rule.
+                      type: string
+                    enabled:
+                      default: true
+                      description: Enabled indicates whether the rule is active.
+                      type: boolean
+                    expression:
+                      description: Expression is the filter expression for the rule.
+                      minLength: 1
+                      type: string
+                    logging:
+                      description: |-
+                        Logging configures per-rule logging behavior. Sibling of ActionParameters
+                        in the Cloudflare API; do not encode logging via ActionParameters.
+                      properties:
+                        enabled:
+                          description: |-
+                            Enabled enables per-rule logging.
+
+                            Note: due to Cloudflare API semantics, setting Enabled=false is
+                            indistinguishable from omitting the Logging block entirely. The
+                            operator normalizes both forms to "logging unset" on write to avoid
+                            spurious drift loops. To enable logging, set true.
+                          type: boolean
+                      type: object
+                  required:
+                  - action
+                  - expression
+                  type: object
+                minItems: 1
+                type: array
+              zoneID:
+                description: ZoneID is the Cloudflare Zone ID. Mutually exclusive
+                  with ZoneRef.
+                minLength: 1
+                type: string
+              zoneRef:
+                description: ZoneRef references a CloudflareZone CR. Mutually exclusive
+                  with ZoneID.
+                properties:
+                  name:
+                    description: Name of the CloudflareZone CR.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the CloudflareZone CR. Defaults to the
+                      referencing CR's namespace.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - name
+            - phase
+            - rules
             type: object
           status:
-            description: CloudflareRulesetStatus is a scaffold.
+            description: CloudflareRulesetStatus defines the observed state of CloudflareRuleset.
             properties:
               conditions:
-                description: Conditions reflects the current reconciliation state.
+                description: Conditions represent the latest available observations
+                  of the resource's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -159,11 +297,40 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastSyncedAt:
+                description: LastSyncedAt is the last time the ruleset was successfully
+                  synced.
+                format: date-time
+                type: string
               observedGeneration:
+                description: ObservedGeneration is the most recently observed generation
+                  of the CR.
                 format: int64
                 type: integer
+              phase:
+                default: Pending
+                description: |-
+                  Phase is a coarse summary of the reconciliation state. See
+                  cloudflarev1alpha1.Phase for the enum values.
+                enum:
+                - Ready
+                - Reconciling
+                - Error
+                - Pending
+                type: string
+              ruleCount:
+                description: RuleCount is the number of rules in the ruleset.
+                type: integer
+              rulesetID:
+                description: RulesetID is the Cloudflare Ruleset ID.
+                type: string
             type: object
         type: object
+        x-kubernetes-validations:
+        - message: one of zoneID or zoneRef is required
+          rule: has(self.spec.zoneID) || has(self.spec.zoneRef)
+        - message: zoneID and zoneRef are mutually exclusive
+          rule: '!(has(self.spec.zoneID) && has(self.spec.zoneRef))'
     served: true
     storage: true
     subresources:

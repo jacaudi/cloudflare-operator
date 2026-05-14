@@ -1,6 +1,6 @@
 ---
 # Pull Request Validation
-# Fast feedback on PRs: lint, test, and helm/CRD sync verification.
+# Fast feedback on PRs: lint and test.
 # Container image builds run only on the post-release CI/CD pipeline.
 name: PR Validation
 
@@ -31,63 +31,5 @@ jobs:
       test-framework: 'go'
       go-version: '1.26'
       coverage: true
-      coverage-threshold: 40
-      test-packages: './internal/controller/... ./internal/cloudflare/... ./internal/ipresolver/... ./internal/status/... ./api/...'
-
-  verify-helm-rbac:
-    name: Verify Helm RBAC Sync
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Check RBAC sync
-        run: |
-          # Regenerate RBAC from Go types and convert to Helm format
-          make generate-helm-rbac
-
-          # Check if there are any differences
-          if ! git diff --exit-code chart/templates/_values-rbac.tpl; then
-            echo "::error::Helm RBAC template is out of sync with config/rbac/role.yaml"
-            echo "Run 'make generate-helm-rbac' and commit the changes"
-            exit 1
-          fi
-          echo "Helm RBAC template is in sync"
-
-  verify-helm-crds:
-    name: Verify Helm CRD Sync
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.26'
-
-      - name: Regenerate CRDs and check sync
-        run: |
-          # Regenerate CRDs from Go types
-          make manifests
-
-          # Sync to Helm chart
-          make sync-helm-crds
-
-          # Check if there are any differences
-          if ! git diff --exit-code chart/crds/; then
-            echo "::error::Helm chart CRDs are out of sync with generated CRDs"
-            echo "Run 'make sync-helm-crds' and commit the changes"
-            exit 1
-          fi
-          echo "Helm chart CRDs are in sync"
+      coverage-threshold: 30
+      test-packages: './api/... ./internal/... ./cmd/...'

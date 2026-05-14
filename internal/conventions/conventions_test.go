@@ -51,3 +51,27 @@ func TestBaseReasonsAreUnique(t *testing.T) {
 		require.False(t, strings.Contains(r, " "), "reason must be CamelCase, no spaces: %q", r)
 	}
 }
+
+func TestZoneReasons_Registered(t *testing.T) {
+	want := []string{
+		ReasonZoneActivated, ReasonZoneActivating, ReasonAdoptedExistingRecord,
+		ReasonDriftDetected, ReasonSSLApplied, ReasonSecurityApplied,
+		ReasonPerformanceApplied, ReasonNetworkApplied, ReasonDNSApplied,
+		ReasonBotManagementApplied,
+	}
+	for _, r := range want {
+		require.NotEmpty(t, r)
+		require.False(t, strings.Contains(r, " "))
+	}
+	all := append(BaseReasons(), ZoneReasons()...)
+	seen := map[string]struct{}{}
+	for _, r := range all {
+		require.NotContains(t, seen, r, "duplicate reason across base + zone: %s", r)
+		seen[r] = struct{}{}
+	}
+}
+
+func TestZoneConditionTypes(t *testing.T) {
+	require.Equal(t, "SSLApplied", ConditionTypeSSLApplied)
+	require.Equal(t, "SecurityApplied", ConditionTypeSecurityApplied)
+}

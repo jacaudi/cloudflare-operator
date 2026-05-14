@@ -59,3 +59,46 @@ func BaseReasons() []string {
 		ReasonDeploymentsReady,
 	}
 }
+
+// --- Spec 2 zone bundle (append-only per Foundation §6.1.1) ---
+
+// Condition types specific to the zone bundle.
+const (
+	ConditionTypeSSLApplied           = "SSLApplied"
+	ConditionTypeSecurityApplied      = "SecurityApplied"
+	ConditionTypePerformanceApplied   = "PerformanceApplied"
+	ConditionTypeNetworkApplied       = "NetworkApplied"
+	ConditionTypeDNSApplied           = "DNSApplied"
+	ConditionTypeBotManagementApplied = "BotManagementApplied"
+)
+
+// Reasons specific to the zone bundle (spec 2 §8).
+const (
+	ReasonZoneActivated         = "ZoneActivated"
+	ReasonZoneActivating        = "ZoneActivating"
+	ReasonAdoptedExistingRecord = "AdoptedExistingRecord"
+	ReasonDriftDetected         = "DriftDetected"
+	ReasonSSLApplied            = "SSLApplied"
+	ReasonSecurityApplied       = "SecurityApplied"
+	ReasonPerformanceApplied    = "PerformanceApplied"
+	ReasonNetworkApplied        = "NetworkApplied"
+	ReasonDNSApplied            = "DNSApplied"
+	ReasonBotManagementApplied  = "BotManagementApplied"
+)
+
+// ZoneReasons returns the reason vocabulary appended by spec 2.
+// Mirrors BaseReasons() for uniqueness testing.
+func ZoneReasons() []string {
+	return []string{
+		ReasonZoneActivated,
+		ReasonZoneActivating,
+		ReasonAdoptedExistingRecord,
+		ReasonDriftDetected,
+		ReasonSSLApplied,
+		ReasonSecurityApplied,
+		ReasonPerformanceApplied,
+		ReasonNetworkApplied,
+		ReasonDNSApplied,
+		ReasonBotManagementApplied,
+	}
+}
