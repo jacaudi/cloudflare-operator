@@ -65,7 +65,6 @@ type TunnelConfiguration struct {
 type TunnelConfig struct {
 	Ingress       []IngressEntry        `json:"ingress"`
 	OriginRequest *IngressOriginRequest `json:"originRequest,omitempty"`
-	WARPRouting   *WARPRouting          `json:"warp-routing,omitempty"`
 }
 
 // IngressEntry is one rule in the ingress list.
@@ -84,12 +83,6 @@ type IngressOriginRequest struct {
 	OriginServerName      *string `json:"originServerName,omitempty"`
 	CAPool                *string `json:"caPool,omitempty"`
 	ConnectTimeoutSeconds *int32  `json:"connectTimeout,omitempty"`
-}
-
-// WARPRouting toggles WARP egress. Carried in the type for round-trip
-// fidelity; the production wrapper does not write it.
-type WARPRouting struct {
-	Enabled bool `json:"enabled"`
 }
 
 // TunnelConnection is one connector connection summary. ColoName and
@@ -247,9 +240,10 @@ func (c *tunnelClient) ListConnections(ctx context.Context, accountID, tunnelID 
 	out := make([]TunnelConnection, 0, len(page.Result))
 	for _, cli := range page.Result {
 		conn := TunnelConnection{ID: cli.ID}
-		// ColoName / IsPendingReconnect live on the inner ClientConn entries;
-		// flatten by taking the first connection's view. Sufficient for the
-		// finalizer-drain use case (any presence implies traffic).
+		// Flattens the SDK's per-connector connection list to a single
+		// representative ColoName/IsPendingReconnect pair (taken from the
+		// first underlying ClientConn). Callers needing the full list
+		// should iterate the SDK response directly.
 		if len(cli.Conns) > 0 {
 			conn.ColoName = cli.Conns[0].ColoName
 			conn.IsPendingReconnect = cli.Conns[0].IsPendingReconnect
@@ -272,16 +266,40 @@ func (c *tunnelClient) DeleteConnections(ctx context.Context, accountID, tunnelI
 // --- mapping helpers (SDK <-> plain Go) ---
 
 // mapConfigurationGetResponse maps the GET /configurations response.
+//
+// Projects all four operator-modeled OriginRequest fields symmetrically
+// with toSDKConfig's write path. The SDK uses plain (non-pointer) bool/
+// string/int64 fields, so we can't distinguish "explicitly false" from
+// "unset" on bool fields — NoTLSVerify is projected only when true (the
+// unset-vs-explicit-false ambiguity is unavoidable). String and numeric
+// fields are projected when non-zero. If any field is set, OriginRequest
+// is attached to the entry; otherwise it stays nil.
 func mapConfigurationGetResponse(resp *zero_trust.TunnelCloudflaredConfigurationGetResponse) *TunnelConfiguration {
 	out := &TunnelConfiguration{Version: int(resp.Version)}
 	for _, in := range resp.Config.Ingress {
 		entry := IngressEntry{Hostname: in.Hostname, Path: in.Path, Service: in.Service}
-		// The SDK response uses plain (non-pointer) bool/string fields; we
-		// only project NoTLSVerify when explicitly true to avoid synthesizing
-		// a non-nil OriginRequest from zero values.
+		or := IngressOriginRequest{}
+		hasAny := false
 		if in.OriginRequest.NoTLSVerify {
 			b := true
-			entry.OriginRequest = &IngressOriginRequest{NoTLSVerify: &b}
+			or.NoTLSVerify = &b
+			hasAny = true
+		}
+		if s := in.OriginRequest.OriginServerName; s != "" {
+			or.OriginServerName = &s
+			hasAny = true
+		}
+		if s := in.OriginRequest.CAPool; s != "" {
+			or.CAPool = &s
+			hasAny = true
+		}
+		if ct := in.OriginRequest.ConnectTimeout; ct != 0 {
+			v := int32(ct)
+			or.ConnectTimeoutSeconds = &v
+			hasAny = true
+		}
+		if hasAny {
+			entry.OriginRequest = &or
 		}
 		out.Config.Ingress = append(out.Config.Ingress, entry)
 	}
@@ -291,14 +309,36 @@ func mapConfigurationGetResponse(resp *zero_trust.TunnelCloudflaredConfiguration
 // mapConfigurationUpdateResponse maps the PUT /configurations response.
 // The Update response type is structurally identical to the Get response
 // for the fields we project, but the SDK exposes them as a distinct named
-// type; keep a dedicated mapper so we do not couple the two.
+// type; keep a dedicated mapper so we do not couple the two. Projection
+// rules match mapConfigurationGetResponse exactly — see that doc for
+// detail. The two mappers are kept symmetric so drift detection (T9)
+// reads back what PUT wrote.
 func mapConfigurationUpdateResponse(resp *zero_trust.TunnelCloudflaredConfigurationUpdateResponse) *TunnelConfiguration {
 	out := &TunnelConfiguration{Version: int(resp.Version)}
 	for _, in := range resp.Config.Ingress {
 		entry := IngressEntry{Hostname: in.Hostname, Path: in.Path, Service: in.Service}
+		or := IngressOriginRequest{}
+		hasAny := false
 		if in.OriginRequest.NoTLSVerify {
 			b := true
-			entry.OriginRequest = &IngressOriginRequest{NoTLSVerify: &b}
+			or.NoTLSVerify = &b
+			hasAny = true
+		}
+		if s := in.OriginRequest.OriginServerName; s != "" {
+			or.OriginServerName = &s
+			hasAny = true
+		}
+		if s := in.OriginRequest.CAPool; s != "" {
+			or.CAPool = &s
+			hasAny = true
+		}
+		if ct := in.OriginRequest.ConnectTimeout; ct != 0 {
+			v := int32(ct)
+			or.ConnectTimeoutSeconds = &v
+			hasAny = true
+		}
+		if hasAny {
+			entry.OriginRequest = &or
 		}
 		out.Config.Ingress = append(out.Config.Ingress, entry)
 	}
