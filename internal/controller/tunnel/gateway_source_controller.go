@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,7 +62,11 @@ import (
 // reconciles, the cache entry under the prior tunnel-key would otherwise be
 // orphaned. The shared cacheTracker (attach.go) tracks the last attached
 // tunnel-key per source so we can clear the prior key whenever the new key
-// differs. Lazily initialized inside Reconcile to keep the zero value useful.
+// differs. Initialized once via ensureTracker, called at the top of every
+// Reconcile and guarded by sync.Once so concurrent reconciles on the same
+// instance (MaxConcurrentReconciles > 1) cannot race to allocate competing
+// trackers — the first allocator wins and the rest see the same instance,
+// preserving prior-attachment state.
 type GatewaySourceReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -69,7 +74,19 @@ type GatewaySourceReconciler struct {
 	Recorder         record.EventRecorder
 	DefaultConnector v1alpha1.ConnectorSpec
 
-	tracker *cacheTracker
+	tracker     *cacheTracker
+	trackerOnce sync.Once
+}
+
+// ensureTracker initializes r.tracker exactly once. Safe against concurrent
+// callers (controller-runtime worker pool with MaxConcurrentReconciles > 1).
+// Idempotent: tests that pre-seed r.tracker keep their fixture untouched.
+func (r *GatewaySourceReconciler) ensureTracker() {
+	r.trackerOnce.Do(func() {
+		if r.tracker == nil {
+			r.tracker = newCacheTracker()
+		}
+	})
 }
 
 // +kubebuilder:rbac:groups="gateway.networking.k8s.io",resources=gateways,verbs=get;list;watch
@@ -81,9 +98,7 @@ type GatewaySourceReconciler struct {
 // Reconcile drives one iteration of the Gateway-source state machine.
 func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("gateway", req.NamespacedName)
-	if r.tracker == nil {
-		r.tracker = newCacheTracker()
-	}
+	r.ensureTracker()
 
 	var gw gwv1.Gateway
 	if err := r.Get(ctx, req.NamespacedName, &gw); err != nil {
@@ -217,8 +232,8 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	r.Cache.Set(tunnelKey, srcKey, contribs)
 
 	// Guard: defer DNSRecord emission until Status.TunnelCNAME populates.
-	// The Watches hook (T14) retriggers this reconciler on the tunnel CR's
-	// status update so we get a second pass without busy-waiting.
+	// The manager wires a Watch on the tunnel CR so its status update
+	// retriggers this reconciler — a second pass without busy-waiting.
 	if tn.Status.TunnelCNAME == "" {
 		logger.V(1).Info("tunnel CNAME not yet populated; deferring DNSRecord emission",
 			"tunnel", tunnelKey)

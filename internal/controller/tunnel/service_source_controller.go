@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -50,17 +51,20 @@ import (
 // tunnel-keys; emitted DNSRecord CRs are garbage-collected via OwnerReferences
 // stamped at emit time.
 //
-// Reconcile is triggered by Service events AND CloudflareTunnel events (T14
-// wires the Watches hook). The latter retriggers source reconciliation when
-// the tunnel CR's TunnelCNAME populates after Create — without this, the
-// first reconcile may early-return with no DNSRecord emitted because
-// Status.TunnelCNAME is empty.
+// Reconcile is triggered by Service events AND CloudflareTunnel events. The
+// latter retriggers source reconciliation when the tunnel CR's TunnelCNAME
+// populates after Create — without this, the first reconcile may early-return
+// with no DNSRecord emitted because Status.TunnelCNAME is empty.
 //
 // Stale-key sweep (Correction C): when a Service's tunnel-name annotation
 // changes between reconciles, the cache entry under the prior tunnel-key
 // would otherwise be orphaned. The shared cacheTracker (attach.go) tracks
 // the last attached tunnel-key per source so we can clear the prior key
-// whenever the new key differs. Lazily initialized inside Reconcile.
+// whenever the new key differs. Initialized once via ensureTracker, called
+// at the top of every Reconcile and guarded by sync.Once so concurrent
+// reconciles on the same instance (MaxConcurrentReconciles > 1) cannot
+// race to allocate competing trackers — the first allocator wins and the
+// rest see the same instance, preserving prior-attachment state.
 type ServiceSourceReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -68,7 +72,19 @@ type ServiceSourceReconciler struct {
 	Recorder         record.EventRecorder
 	DefaultConnector v1alpha1.ConnectorSpec
 
-	tracker *cacheTracker
+	tracker     *cacheTracker
+	trackerOnce sync.Once
+}
+
+// ensureTracker initializes r.tracker exactly once. Safe against concurrent
+// callers (controller-runtime worker pool with MaxConcurrentReconciles > 1).
+// Idempotent: tests that pre-seed r.tracker keep their fixture untouched.
+func (r *ServiceSourceReconciler) ensureTracker() {
+	r.trackerOnce.Do(func() {
+		if r.tracker == nil {
+			r.tracker = newCacheTracker()
+		}
+	})
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
@@ -79,9 +95,7 @@ type ServiceSourceReconciler struct {
 // Reconcile drives one iteration of the Service-source state machine.
 func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("service", req.NamespacedName)
-	if r.tracker == nil {
-		r.tracker = newCacheTracker()
-	}
+	r.ensureTracker()
 
 	var svc corev1.Service
 	if err := r.Get(ctx, req.NamespacedName, &svc); err != nil {
@@ -161,9 +175,9 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// Guard (Correction A): the DNSRecord CR's spec.content is a *string,
 	// and emitting Content=&"" would produce an invalid record. Defer
 	// emission until the tunnel reconciler populates Status.TunnelCNAME;
-	// the Watches hook (T14) retriggers this reconciler on the tunnel's
-	// status update. Cache write above still happens so the tunnel
-	// reconciler can compute its ingress list in parallel.
+	// the manager wires a Watch on the tunnel CR so its status update
+	// retriggers this reconciler. Cache write above still happens so the
+	// tunnel reconciler can compute its ingress list in parallel.
 	if tn.Status.TunnelCNAME == "" {
 		logger.V(1).Info("tunnel CNAME not yet populated; deferring DNSRecord emission",
 			"tunnel", tunnelKey)

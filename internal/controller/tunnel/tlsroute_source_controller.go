@@ -19,6 +19,7 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,7 +54,7 @@ import (
 // reachable only via `cloudflared access tcp` or WARP — a hard fact about
 // the access surface that operators need to see before pointing DNS.
 //
-// Differs from HTTPRouteSourceReconciler (T12) only in:
+// Differs from the HTTPRoute source reconciler only in:
 //   - works on *gwv1a2.TLSRoute instead of *gwv1.HTTPRoute;
 //   - tcp:// service URL instead of http(s)://;
 //   - translator call: TranslateTLSRoute always returns the
@@ -67,14 +68,30 @@ import (
 // via the shared resolveGatewayService helper — no label fallback.
 //
 // Stale-key sweep: uses the shared cacheTracker (attach.go) — on annotation
-// change or Route delete the prior tunnel-key's cache entry is cleared.
+// change or Route delete the prior tunnel-key's cache entry is cleared. The
+// tracker is initialized once via ensureTracker, called at the top of every
+// Reconcile and guarded by sync.Once so concurrent reconciles on the same
+// instance (MaxConcurrentReconciles > 1) cannot race to allocate competing
+// trackers and lose prior-attachment state.
 type TLSRouteSourceReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Cache    *tunnelsynth.Cache
 	Recorder record.EventRecorder
 
-	tracker *cacheTracker
+	tracker     *cacheTracker
+	trackerOnce sync.Once
+}
+
+// ensureTracker initializes r.tracker exactly once. Safe against concurrent
+// callers (controller-runtime worker pool with MaxConcurrentReconciles > 1).
+// Idempotent: tests that pre-seed r.tracker keep their fixture untouched.
+func (r *TLSRouteSourceReconciler) ensureTracker() {
+	r.trackerOnce.Do(func() {
+		if r.tracker == nil {
+			r.tracker = newCacheTracker()
+		}
+	})
 }
 
 // +kubebuilder:rbac:groups="gateway.networking.k8s.io",resources=tlsroutes,verbs=get;list;watch
@@ -88,9 +105,7 @@ type TLSRouteSourceReconciler struct {
 // Reconcile drives one iteration of the TLSRoute-source state machine.
 func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tlsroute", req.NamespacedName)
-	if r.tracker == nil {
-		r.tracker = newCacheTracker()
-	}
+	r.ensureTracker()
 	srcKey := tunnelsynth.SourceKey{Kind: "TLSRoute", Namespace: req.Namespace, Name: req.Name}
 
 	var rt gwv1a2.TLSRoute
@@ -171,7 +186,7 @@ func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.
 	// tn.Status.TunnelCNAME (the upstream chain hop) are populated. The
 	// per-Route DNSRecord (route-hostname → gateway-apex) only resolves end
 	// to end after the Gateway-source reconciler has emitted its own
-	// (gateway-apex → tunnel-CNAME) record. Mirrors T12's guard exactly.
+	// (gateway-apex → tunnel-CNAME) record. Mirrors the HTTPRoute guard.
 	if gwApex == "" || tn.Status.TunnelCNAME == "" {
 		logger.V(1).Info("deferring DNSRecord emission until Gateway apex + tunnel CNAME populate",
 			"tunnel", tunnelKey, "gwApex", gwApex, "tunnelCNAME", tn.Status.TunnelCNAME)
@@ -260,7 +275,7 @@ func (r *TLSRouteSourceReconciler) findTunnelTargetedParent(
 //   - spec.content = gateway apex (caller guards non-empty);
 //   - spec.adopt threaded from cloudflare.io/adopt.
 //
-// Uses emittedDNSRecordName (T10) for collision-safe CR naming.
+// Uses emittedDNSRecordName (attach.go) for collision-safe CR naming.
 func (r *TLSRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1a2.TLSRoute, hostname, gwApex string) error {
 	content := gwApex // copy so we can take its address (Spec.Content is *string)
 	dr := &v1alpha1.CloudflareDNSRecord{

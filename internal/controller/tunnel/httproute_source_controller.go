@@ -19,6 +19,7 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -66,13 +67,29 @@ const tunnelControllerName gwv1.GatewayController = "cloudflare.io/tunnel-contro
 //
 // Stale-key sweep: uses the shared cacheTracker (attach.go). On annotation
 // change or Route delete the prior tunnel-key's cache entry is cleared.
+// The tracker is initialized once via ensureTracker, called at the top of
+// every Reconcile and guarded by sync.Once so concurrent reconciles on the
+// same instance (MaxConcurrentReconciles > 1) cannot race to allocate
+// competing trackers and lose prior-attachment state.
 type HTTPRouteSourceReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Cache    *tunnelsynth.Cache
 	Recorder record.EventRecorder
 
-	tracker *cacheTracker
+	tracker     *cacheTracker
+	trackerOnce sync.Once
+}
+
+// ensureTracker initializes r.tracker exactly once. Safe against concurrent
+// callers (controller-runtime worker pool with MaxConcurrentReconciles > 1).
+// Idempotent: tests that pre-seed r.tracker keep their fixture untouched.
+func (r *HTTPRouteSourceReconciler) ensureTracker() {
+	r.trackerOnce.Do(func() {
+		if r.tracker == nil {
+			r.tracker = newCacheTracker()
+		}
+	})
 }
 
 // +kubebuilder:rbac:groups="gateway.networking.k8s.io",resources=httproutes,verbs=get;list;watch
@@ -86,9 +103,7 @@ type HTTPRouteSourceReconciler struct {
 // Reconcile drives one iteration of the HTTPRoute-source state machine.
 func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("httproute", req.NamespacedName)
-	if r.tracker == nil {
-		r.tracker = newCacheTracker()
-	}
+	r.ensureTracker()
 	srcKey := tunnelsynth.SourceKey{Kind: "HTTPRoute", Namespace: req.Namespace, Name: req.Name}
 
 	var rt gwv1.HTTPRoute
@@ -270,7 +285,7 @@ func firstListenerHostname(gw *gwv1.Gateway) string {
 //   - spec.content = gateway apex (caller guards non-empty)
 //   - spec.adopt threaded from cloudflare.io/adopt
 //
-// Uses emittedDNSRecordName (T10) for collision-safe CR naming.
+// Uses emittedDNSRecordName (attach.go) for collision-safe CR naming.
 func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, gwApex string) error {
 	content := gwApex // copy so we can take its address (Spec.Content is *string)
 	dr := &v1alpha1.CloudflareDNSRecord{
@@ -309,8 +324,7 @@ func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *
 // its Status.Parents, then full Update. Re-fetching guards against the
 // stale-spec-from-cache pitfall (the Reconcile caller may have an
 // arbitrarily-old copy). This is the "merge-in-memory then full Update"
-// approach noted in the T12 corrections — preferred over SSA here for
-// testability with the fake client.
+// approach — preferred over SSA here for testability with the fake client.
 //
 // Identity match for parent entries: same Name AND same Namespace pointer
 // content (both nil, or both non-nil with equal strings). Section / Port

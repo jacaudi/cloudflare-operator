@@ -107,8 +107,8 @@ func DeriveTunnelName(sourceNamespace, tunnelNameAnnotation string) (string, err
 // TODO: Owner-transfer on owner deletion is design §6.4 territory. The
 // lexicographically-first remaining attacher should be promoted via an
 // ownerReferences Patch when the original owner is deleted. Deferred until
-// multiple source kinds exist (T11+) so the shared helper can be factored
-// against a real common shape — a generic ownerRef Patch without GVK+UID is
+// the shared helper can be factored against a real common shape across
+// multiple source kinds — a generic ownerRef Patch without GVK+UID is
 // guesswork. Until then, the owner CR remains owner-less once the original
 // owner Service is deleted; the controller still reconciles via the source
 // labels on cache entries.
@@ -164,9 +164,9 @@ func EnsureTunnelCR(
 // don't know what the "prior" key was from the source object alone after the
 // annotation has changed.
 //
-// Extracted to attach.go (from inline copies in T10 + T11) when T12 (HTTPRoute)
-// became the third call site — matches the Phase-2 reconcile.HaltDependency
-// precedent (extract on the third use, not the second).
+// Extracted to attach.go when a third call site appeared — matches the
+// Phase-2 reconcile.HaltDependency precedent (extract on the third use,
+// not the second).
 type cacheTracker struct {
 	mu           sync.Mutex
 	lastAttached map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey
@@ -232,8 +232,8 @@ var errGatewayServiceAnnotationMissing = errors.New("cloudflare.io/gateway-servi
 // IN-CLUSTER port cloudflared connects to, NOT the listener's public-facing
 // port. They are routinely different (e.g. listener 443 → Service 8443).
 //
-// Shared by GatewaySourceReconciler (T11), HTTPRouteSourceReconciler (T12),
-// and TLSRouteSourceReconciler (T13).
+// Shared by every source reconciler that needs to resolve a Gateway's
+// underlying Service for the cloudflared origin URL.
 func resolveGatewayService(ctx context.Context, c client.Client, gw *gwv1.Gateway) (*corev1.Service, int32, error) {
 	raw := gw.Annotations[conventions.AnnotationGatewayService]
 	if raw == "" {
