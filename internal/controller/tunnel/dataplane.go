@@ -20,6 +20,8 @@ limitations under the License.
 package tunnel
 
 import (
+	"strconv"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -84,7 +86,7 @@ func BuildDeployment(tn *v1alpha1.CloudflareTunnel, defaultImage string) *appsv1
 		"--loglevel=" + tn.Spec.Connector.LogLevel,
 		"--metrics=0.0.0.0:2000",
 		"--protocol=" + tn.Spec.Connector.Protocol,
-		"--grace-period=" + formatSeconds(grace),
+		"--grace-period=" + strconv.FormatInt(grace, 10) + "s",
 		"run",
 	}
 
@@ -265,36 +267,6 @@ func resolveResources(user corev1.ResourceRequirements) corev1.ResourceRequireme
 		}
 	}
 	return *out
-}
-
-// formatSeconds renders an int64 seconds value as "<n>s" for cloudflared's
-// --grace-period flag. Local helper to avoid pulling in fmt for one call.
-func formatSeconds(s int64) string {
-	// Hand-roll to keep the package import-light; the value is bounded and
-	// always non-negative (the CRD enforces minimum=0 on GracePeriodSeconds).
-	return itoa(s) + "s"
-}
-
-func itoa(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	var buf [20]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
 
 func ptrBool(b bool) *bool    { return &b }

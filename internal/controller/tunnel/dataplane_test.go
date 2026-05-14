@@ -123,6 +123,21 @@ func TestBuildDeployment_ResourceDefaults_Independent(t *testing.T) {
 	require.NotEmpty(t, res.Limits, "Limits default applied independently")
 }
 
+func TestBuildDeployment_ResourceDefaults_LimitsOnly(t *testing.T) {
+	// Symmetric to TestBuildDeployment_ResourceDefaults_Independent: user sets
+	// only Limits, default Requests must apply independently (pattern #10).
+	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) {
+		c.Spec.Connector.Resources = corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+		}
+	})
+	dep := BuildDeployment(tn, testDefaultImage)
+	res := dep.Spec.Template.Spec.Containers[0].Resources
+	require.Equal(t, "512Mi", res.Limits.Memory().String(), "user Memory limit preserved")
+	require.NotEmpty(t, res.Requests, "Requests default applied independently")
+	require.Equal(t, "50m", res.Requests.Cpu().String(), "default Requests CPU applied")
+}
+
 func TestBuildDeployment_ImageDefault_HalfOverride(t *testing.T) {
 	// Repository-only override; Tag from default (pattern #9).
 	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) {

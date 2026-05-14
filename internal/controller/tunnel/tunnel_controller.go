@@ -141,12 +141,17 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.ensureDataplane(ctx, &tn); err != nil {
 		return ctrl.Result{}, r.failStatus(ctx, &tn, conventions.ReasonConnectorDeploying, err)
 	}
+	// Observe the Deployment's Available condition before applying remote
+	// config so the rollup can gate Ready=True on dataplane readiness
+	// (design §8 step 9). A degraded Deployment must not report Ready=True
+	// even if connectors have lingered from a previous successful rollout.
+	depAvailable := r.isDeploymentAvailable(ctx, &tn)
 	if err := r.applyRemoteConfig(ctx, &tn, tc, creds.AccountID); err != nil {
 		return ctrl.Result{}, r.failStatus(ctx, &tn, conventions.ReasonRemoteConfigStale, err)
 	}
 	r.observeConnectors(ctx, &tn, tc, creds.AccountID)
 	r.observeAttachedSources(&tn)
-	r.rollupStatus(&tn)
+	r.rollupStatus(&tn, depAvailable)
 
 	now := metav1.Time{Time: time.Now()}
 	tn.Status.LastSyncedAt = &now
@@ -181,7 +186,9 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v1
 	// 1+2. Scale Deployment to 0, wait for Pods gone.
 	dep := &appsv1.Deployment{}
 	depKey := types.NamespacedName{Name: dataplaneName(tn), Namespace: tn.Namespace}
+	depFound := false
 	if err := r.Get(ctx, depKey, dep); err == nil {
+		depFound = true
 		zero := int32(0)
 		if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 0 {
 			dep.Spec.Replicas = &zero
@@ -228,7 +235,7 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v1
 	// 5. Delete operator-owned dataplane resources (best-effort; errors are
 	// logged but do not block the finalizer drop, mirroring the zone
 	// bundle's approach to owned-children cleanup).
-	if dep.Name != "" {
+	if depFound {
 		_ = client.IgnoreNotFound(r.Delete(ctx, dep))
 	}
 	_ = client.IgnoreNotFound(r.Delete(ctx, &corev1.Secret{
@@ -352,7 +359,21 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 			catchAll = fmt.Sprintf("http_status:%d", *tn.Spec.Routing.Fallback.HTTPStatus)
 		}
 	}
-	cfg, _ := tunnelsynth.Resolve(contribs, tunnelsynth.ResolveOpts{CatchAllService: catchAll})
+	cfg, conflicts := tunnelsynth.Resolve(contribs, tunnelsynth.ResolveOpts{CatchAllService: catchAll})
+	if len(conflicts) > 0 {
+		logger := log.FromContext(ctx)
+		for _, conflict := range conflicts {
+			logger.V(1).Info("hostname contributed by multiple sources; winner chosen lexicographically",
+				"hostname", conflict.Hostname,
+				"winnerKind", conflict.Winner.Kind,
+				"winnerName", conflict.Winner.Name,
+				"winnerNamespace", conflict.Winner.Namespace,
+				"loserKind", conflict.Loser.Kind,
+				"loserName", conflict.Loser.Name,
+				"loserNamespace", conflict.Loser.Namespace,
+			)
+		}
+	}
 
 	wantSnap := snapshotFromConfig(cfg)
 	if reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) {
@@ -412,11 +433,24 @@ func (r *CloudflareTunnelReconciler) observeAttachedSources(tn *v1alpha1.Cloudfl
 // rollupStatus derives the Ready / ConnectorReady / RemoteConfigApplied
 // conditions plus Phase from the observed state. Inner-mutate only — the
 // outer Reconcile persists.
-func (r *CloudflareTunnelReconciler) rollupStatus(tn *v1alpha1.CloudflareTunnel) {
+//
+// Per design §8 step 9, Ready=True requires all of:
+//   - tunnel created (TunnelID set),
+//   - dataplane Deployment Available (depAvailable),
+//   - at least one connector connected (ConnectionsHealthy > 0),
+//   - remote-config applied (set by the rollup whenever the preceding gates
+//     hold or the dataplane / connector gates are the only obstacle).
+func (r *CloudflareTunnelReconciler) rollupStatus(tn *v1alpha1.CloudflareTunnel, depAvailable bool) {
 	switch {
 	case tn.Status.TunnelID == "":
 		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions,
 			metav1.ConditionFalse, conventions.ReasonTunnelCreating, "tunnel not yet created")
+	case !depAvailable:
+		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions,
+			metav1.ConditionFalse, conventions.ReasonConnectorDeploying, "cloudflared Deployment not yet Available")
+		tn.Status.Conditions = reconcilelib.SetCondition(tn.Status.Conditions,
+			conventions.ConditionTypeRemoteConfigApplied, metav1.ConditionTrue,
+			conventions.ReasonRemoteConfigApplied, "")
 	case tn.Status.ConnectionsHealthy == 0:
 		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions,
 			metav1.ConditionFalse, conventions.ReasonNoConnectors, "no active connectors yet")
@@ -435,6 +469,25 @@ func (r *CloudflareTunnelReconciler) rollupStatus(tn *v1alpha1.CloudflareTunnel)
 	}
 	readyStatus, readyReason := readyFromConditions(tn.Status.Conditions)
 	tn.Status.Phase = reconcilelib.DerivePhase(readyStatus, readyReason)
+}
+
+// isDeploymentAvailable reads the operator-managed cloudflared Deployment's
+// Status.Conditions and reports whether DeploymentAvailable=True. Returns
+// false when the Deployment doesn't exist yet, hasn't reported a status, or
+// the Get fails — a transient client error must not flip Ready in either
+// direction; the next reconcile re-checks.
+func (r *CloudflareTunnelReconciler) isDeploymentAvailable(ctx context.Context, tn *v1alpha1.CloudflareTunnel) bool {
+	var dep appsv1.Deployment
+	key := types.NamespacedName{Name: dataplaneName(tn), Namespace: tn.Namespace}
+	if err := r.Get(ctx, key, &dep); err != nil {
+		return false
+	}
+	for _, c := range dep.Status.Conditions {
+		if c.Type == appsv1.DeploymentAvailable {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // readyFromConditions extracts the Ready condition's status + reason. Used

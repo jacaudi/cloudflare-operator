@@ -310,8 +310,10 @@ func TestTunnelReconciler_StatusConditionsWrittenByOuterFunction(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 
-	// With zero healthy connectors, Ready=False/NoConnectors but
-	// RemoteConfigApplied=True is set by rollup.
+	// With the fake client never reporting DeploymentAvailable=True,
+	// Ready=False/ConnectorDeploying but RemoteConfigApplied=True is set by
+	// rollup (the Deployment-Available gate is checked before the
+	// connector-count gate).
 	var sawReady, sawRemoteCfg bool
 	for _, cond := range got.Status.Conditions {
 		if cond.Type == conventions.ConditionTypeReady {
@@ -324,6 +326,87 @@ func TestTunnelReconciler_StatusConditionsWrittenByOuterFunction(t *testing.T) {
 	require.True(t, sawReady, "outer Reconcile must persist Ready condition via Status().Update")
 	require.True(t, sawRemoteCfg, "rollup must persist RemoteConfigApplied condition")
 	require.NotEmpty(t, got.Status.Phase, "Phase must be derived and persisted")
+}
+
+func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
+	// Design §8 step 9: Ready=True requires the cloudflared Deployment to be
+	// Available, in addition to a healthy connector count. The fake client
+	// never simulates the deployment controller, so Status.Conditions stays
+	// empty and isDeploymentAvailable returns false — even with healthy
+	// connectors seeded into the mock, the rollup must report
+	// Ready=False/ConnectorDeploying.
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns"},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name:      "cf-ns",
+			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := ssaTranslatingClient(t, base)
+	m := mockcf.New()
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+
+	// First pass: finalizer.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// Seed connectors into the mock so ConnectionsHealthy > 0 after pass 2.
+	// Without the Deployment-Available gate, the rollup would now report
+	// Ready=True; the gate must override that and force ReasonConnectorDeploying.
+	var afterPass1 v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &afterPass1))
+
+	// Second pass: creates tunnel; status.TunnelID becomes set during this
+	// reconcile, so seed connectors AFTER the first reconcile creates the
+	// tunnel. Run a 2nd reconcile to make sure tunnel is created.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	var afterPass2 v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &afterPass2))
+	require.NotEmpty(t, afterPass2.Status.TunnelID, "tunnel must be created by pass 2")
+
+	// Seed connectors against the now-known tunnel ID.
+	m.Tunnel.SeedConnections(afterPass2.Status.TunnelID, []cloudflare.TunnelConnection{
+		{ID: "c1", ColoName: "DEN"},
+		{ID: "c2", ColoName: "DEN"},
+	})
+
+	// Third pass: ConnectionsHealthy>0 but the Deployment still has no
+	// DeploymentAvailable condition (fake client never runs the deployment
+	// controller), so isDeploymentAvailable returns false.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	var got v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Equal(t, int32(2), got.Status.ConnectionsHealthy,
+		"mock must have reported the seeded connectors")
+
+	var ready *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == conventions.ConditionTypeReady {
+			ready = &got.Status.Conditions[i]
+		}
+	}
+	require.NotNil(t, ready, "Ready condition must be set")
+	require.Equal(t, metav1.ConditionFalse, ready.Status,
+		"Ready must be False when Deployment is not Available, even with healthy connectors")
+	require.Equal(t, conventions.ReasonConnectorDeploying, ready.Reason,
+		"Reason must be ConnectorDeploying when the Deployment-Available gate fails")
 }
 
 func TestTunnelReconciler_CredentialsHaltUpdatesStatus(t *testing.T) {
