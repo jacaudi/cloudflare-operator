@@ -104,14 +104,8 @@ func DeriveTunnelName(sourceNamespace, tunnelNameAnnotation string) (string, err
 // returns the empty string for objects fetched through the typed cache.
 // Foundation §7 auditability requires the label be set correctly.
 //
-// TODO: Owner-transfer on owner deletion is design §6.4 territory. The
-// lexicographically-first remaining attacher should be promoted via an
-// ownerReferences Patch when the original owner is deleted. Deferred until
-// the shared helper can be factored against a real common shape across
-// multiple source kinds — a generic ownerRef Patch without GVK+UID is
-// guesswork. Until then, the owner CR remains owner-less once the original
-// owner Service is deleted; the controller still reconciles via the source
-// labels on cache entries.
+// Owner transfer on original-owner deletion: see docs/follow/tunnel-deferred.md
+// "Follow-up A".
 func EnsureTunnelCR(
 	ctx context.Context,
 	c client.Client,
