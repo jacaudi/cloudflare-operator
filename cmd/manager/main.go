@@ -20,12 +20,9 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
@@ -39,8 +36,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/bootstrap"
+	"github.com/jacaudi/cloudflare-operator/internal/controller/tunnel"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/zone"
 )
 
@@ -122,7 +123,9 @@ func main() {
 	case ModeZone:
 		runZone(opts, scheme)
 	case ModeTunnel:
-		runStub(opts)
+		utilruntime.Must(gwv1.Install(scheme))
+		utilruntime.Must(gwv1a2.Install(scheme))
+		runTunnel(opts, scheme)
 	}
 }
 
@@ -203,40 +206,46 @@ func runZone(opts Options, scheme *runtime.Scheme) {
 	}
 }
 
-// runStub is the placeholder for zone/tunnel modes in Foundation. It binds the
-// health/readyz HTTP server (so spawned controller pods can pass their probes)
-// and blocks on SIGTERM. Specs 2 and 3 replace this with the real reconcilers.
-func runStub(opts Options) {
-	logger := log.FromContext(context.Background()).WithValues("mode", opts.Mode)
-	logger.Info("stub controller starting", "healthAddress", opts.HealthAddress)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	})
-
-	srv := &http.Server{
-		Addr:              opts.HealthAddress,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	ctx := ctrl.SetupSignalHandler()
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error(err, "health server failed")
+// runTunnel starts the controller-runtime manager with the tunnel-bundle
+// reconcilers (CloudflareTunnel + Service / Gateway / HTTPRoute / TLSRoute
+// sources). Mirrors runZone: per-reconcile credentials resolve via
+// reconcile.LoadCredentialsHierarchical; the env vars below are smoke-checked
+// here as a fail-fast (the bootstrap reconciler injects them into the tunnel
+// controller Deployment, but a hand-rolled deployment could omit them).
+func runTunnel(opts Options, scheme *runtime.Scheme) {
+	if os.Getenv("CLOUDFLARE_API_TOKEN") == "" || os.Getenv("CLOUDFLARE_ACCOUNT_ID") == "" {
+		fmt.Fprintln(os.Stderr, "tunnel mode requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars")
 		os.Exit(1)
 	}
-	logger.Info("stub controller stopped")
+
+	leaderID := "cloudflare-operator-" + string(opts.Mode)
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
+		HealthProbeBindAddress: opts.HealthAddress,
+		LeaderElection:         opts.LeaderElection,
+		LeaderElectionID:       leaderID,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create manager:", err)
+		os.Exit(1)
+	}
+	if err := tunnel.AddToManager(mgr, tunnel.Options{}); err != nil {
+		fmt.Fprintln(os.Stderr, "register tunnel bundle:", err)
+		os.Exit(1)
+	}
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		fmt.Fprintln(os.Stderr, "add healthz check:", err)
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		fmt.Fprintln(os.Stderr, "add readyz check:", err)
+		os.Exit(1)
+	}
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		fmt.Fprintln(os.Stderr, "manager exited with error:", err)
+		os.Exit(1)
+	}
 }
 
 func newProductionLogger(level string) *zap.Logger {
