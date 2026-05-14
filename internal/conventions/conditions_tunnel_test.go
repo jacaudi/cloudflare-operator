@@ -34,6 +34,7 @@ func TestTunnelReasons_AllDefined(t *testing.T) {
 		ReasonNoListenerHostname, ReasonClientSideClientRequired,
 		ReasonNameTooLong, ReasonInvalidName,
 		ReasonGatewayServiceUnspecified,
+		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,
 	}
 	for _, r := range want {
 		require.NotEmpty(t, r)
@@ -53,6 +54,7 @@ func TestTunnelReasons_NoDuplicatesWithBase(t *testing.T) {
 		ReasonOwnerTransferred, ReasonTunnelAttached, ReasonUnsupportedValue, ReasonIncompatibleFilters,
 		ReasonNoListenerHostname, ReasonClientSideClientRequired, ReasonNameTooLong, ReasonInvalidName,
 		ReasonGatewayServiceUnspecified,
+		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,
 	}
 	for _, r := range tunnel {
 		_, dup := base[r]

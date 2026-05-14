@@ -139,6 +139,11 @@ const (
 	ReasonNameTooLong               = "NameTooLong"               // hostname exceeds Cloudflare tunnel-config limits
 	ReasonInvalidName               = "InvalidName"               // hostname fails DNS-label / Cloudflare validity rules
 	ReasonGatewayServiceUnspecified = "GatewayServiceUnspecified" // Gateway annotated for tunnel but missing cloudflare.io/gateway-service
+
+	// Additional source-object reasons (T11+ surface these via Events because we
+	// cannot write Status on user-owned Gateway/HTTPRoute objects).
+	ReasonGatewayServiceUnresolved = "GatewayServiceUnresolved" // annotation present but Service Get/parse failed
+	ReasonUnsupportedProtocol      = "UnsupportedProtocol"      // listener protocol cloudflared cannot serve
 )
 
 // TunnelReasons returns the reason vocabulary appended by spec 3 for the
@@ -163,5 +168,7 @@ func TunnelReasons() []string {
 		ReasonNameTooLong,
 		ReasonInvalidName,
 		ReasonGatewayServiceUnspecified,
+		ReasonGatewayServiceUnresolved,
+		ReasonUnsupportedProtocol,
 	}
 }

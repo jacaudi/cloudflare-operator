@@ -67,3 +67,65 @@ func TestDeriveTunnelName_BoundaryAt52(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNameTooLong))
 }
+
+// TestParseGatewayServiceRef exercises every parse branch of the
+// cloudflare.io/gateway-service annotation parser. The function lives in the
+// tunnel package (T12 extraction); call it directly.
+//
+// Implementation reference (attach.go): port must be 1..65535 and numeric; the
+// hostPart must be either "<name>" (uses defaultNS) or "<ns>/<name>" with both
+// halves non-empty. Empty raw is rejected.
+func TestParseGatewayServiceRef(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		defaultNS string
+		wantNS    string
+		wantName  string
+		wantPort  int32
+		wantErr   bool
+	}{
+		// Happy paths — every supported annotation form.
+		{"bare name with defaultNS", "svc", "default", "default", "svc", 0, false},
+		{"bare name with port", "svc:8080", "default", "default", "svc", 8080, false},
+		{"ns slash name", "ns1/svc", "default", "ns1", "svc", 0, false},
+		{"ns slash name with port", "ns1/svc:8080", "default", "ns1", "svc", 8080, false},
+		{"port boundary 1", "svc:1", "default", "default", "svc", 1, false},
+		{"port boundary 65535", "svc:65535", "default", "default", "svc", 65535, false},
+
+		// Error paths — port validation.
+		{"invalid port non-numeric", "ns1/svc:abc", "default", "", "", 0, true},
+		{"invalid port out of range high", "ns1/svc:70000", "default", "", "", 0, true},
+		{"invalid port zero", "ns1/svc:0", "default", "", "", 0, true},
+		{"invalid port negative", "ns1/svc:-1", "default", "", "", 0, true},
+		{"empty port after colon", "ns1/svc:", "default", "", "", 0, true},
+
+		// Error paths — malformed host part.
+		// strings.Cut splits at the FIRST occurrence, so "ns/" yields ns="ns",
+		// nm="" which the parser rejects as malformed.
+		{"trailing slash empty name", "ns1/", "default", "", "", 0, true},
+		// "/<name>" yields ns="", nm="name" → malformed.
+		{"leading slash empty namespace", "/svc", "default", "", "", 0, true},
+		// Empty raw → strings.Cut returns hostPart="" with no port; the parser
+		// rejects it via the explicit hostPart=="" guard.
+		{"empty raw", "", "default", "", "", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ns, name, port, err := parseGatewayServiceRef(c.raw, c.defaultNS)
+			if c.wantErr {
+				require.Error(t, err)
+				// On error, the parser returns the zero value for every
+				// out-parameter — confirms the "half-set port" MINOR is fixed.
+				require.Equal(t, "", ns)
+				require.Equal(t, "", name)
+				require.Equal(t, int32(0), port)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, c.wantNS, ns)
+			require.Equal(t, c.wantName, name)
+			require.Equal(t, c.wantPort, port)
+		})
+	}
+}

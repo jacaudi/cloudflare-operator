@@ -268,6 +268,10 @@ func resolveGatewayService(ctx context.Context, c client.Client, gw *gwv1.Gatewa
 //
 // Returns port = 0 when omitted; the caller falls back to the Service's first
 // port.
+//
+// Case-sensitivity: the function does no normalization. Namespace and name
+// matching follows Kubernetes naming semantics (DNS-1123 labels are required
+// to be lowercase; uppercase input would fail downstream Get by exact match).
 func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port int32, err error) {
 	hostPart, portPart, hasPort := strings.Cut(raw, ":")
 	if hasPort {

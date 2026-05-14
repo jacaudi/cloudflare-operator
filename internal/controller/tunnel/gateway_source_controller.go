@@ -158,7 +158,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if !errors.Is(err, errGatewayServiceAnnotationMissing) {
 			// Annotation present but Service Get / parse failed. Use a
 			// distinct reason for observability.
-			reason = "GatewayServiceUnresolved"
+			reason = conventions.ReasonGatewayServiceUnresolved
 		}
 		if r.Recorder != nil {
 			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, reason, "%v", err)
@@ -198,7 +198,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			// separate contribution under the same tunnel-key without clash.
 		default:
 			if r.Recorder != nil {
-				r.Recorder.Eventf(&gw, corev1.EventTypeWarning, "UnsupportedProtocol",
+				r.Recorder.Eventf(&gw, corev1.EventTypeWarning, conventions.ReasonUnsupportedProtocol,
 					"listener %q protocol %s not supported on tunnel-apex Gateway", l.Name, l.Protocol)
 			}
 		}
