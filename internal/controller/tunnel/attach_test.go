@@ -1,0 +1,131 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package tunnel
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestDeriveTunnelName_WithName(t *testing.T) {
+	got, err := DeriveTunnelName("app-foo", "payments")
+	require.NoError(t, err)
+	require.Equal(t, "cf-app-foo-payments", got)
+}
+
+func TestDeriveTunnelName_WithoutName_PerNamespacePool(t *testing.T) {
+	got, err := DeriveTunnelName("app-foo", "")
+	require.NoError(t, err)
+	require.Equal(t, "cf-app-foo", got)
+}
+
+func TestDeriveTunnelName_NameTooLong(t *testing.T) {
+	// 52-char cap on the resulting CR name.
+	_, err := DeriveTunnelName("very-very-long-namespace-name", "very-very-long-tunnel-name-here")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNameTooLong))
+}
+
+func TestDeriveTunnelName_InvalidNamespace(t *testing.T) {
+	_, err := DeriveTunnelName("Bad_Namespace", "ok")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrInvalidName))
+}
+
+func TestDeriveTunnelName_InvalidAnnotation(t *testing.T) {
+	_, err := DeriveTunnelName("ok", "Has Space")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrInvalidName))
+}
+
+func TestDeriveTunnelName_BoundaryAt52(t *testing.T) {
+	// 52 exactly is OK; 53 is not. cf- (3) + ns (21) + - (1) + nm (27) = 52.
+	ns := "namespace-name-twelve"       // 21
+	nm := "tunnel-name-twenty-seven-ok" // 27
+	got, err := DeriveTunnelName(ns, nm)
+	require.NoError(t, err)
+	require.Len(t, got, 52)
+
+	// One char more pushes us to 53 → ErrNameTooLong.
+	_, err = DeriveTunnelName(ns, nm+"k")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNameTooLong))
+}
+
+// TestParseGatewayServiceRef exercises every parse branch of the
+// cloudflare.io/gateway-service annotation parser. The function lives in the
+// tunnel package (T12 extraction); call it directly.
+//
+// Implementation reference (attach.go): port must be 1..65535 and numeric; the
+// hostPart must be either "<name>" (uses defaultNS) or "<ns>/<name>" with both
+// halves non-empty. Empty raw is rejected.
+func TestParseGatewayServiceRef(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		defaultNS string
+		wantNS    string
+		wantName  string
+		wantPort  int32
+		wantErr   bool
+	}{
+		// Happy paths — every supported annotation form.
+		{"bare name with defaultNS", "svc", "default", "default", "svc", 0, false},
+		{"bare name with port", "svc:8080", "default", "default", "svc", 8080, false},
+		{"ns slash name", "ns1/svc", "default", "ns1", "svc", 0, false},
+		{"ns slash name with port", "ns1/svc:8080", "default", "ns1", "svc", 8080, false},
+		{"port boundary 1", "svc:1", "default", "default", "svc", 1, false},
+		{"port boundary 65535", "svc:65535", "default", "default", "svc", 65535, false},
+
+		// Error paths — port validation.
+		{"invalid port non-numeric", "ns1/svc:abc", "default", "", "", 0, true},
+		{"invalid port out of range high", "ns1/svc:70000", "default", "", "", 0, true},
+		{"invalid port zero", "ns1/svc:0", "default", "", "", 0, true},
+		{"invalid port negative", "ns1/svc:-1", "default", "", "", 0, true},
+		{"empty port after colon", "ns1/svc:", "default", "", "", 0, true},
+
+		// Error paths — malformed host part.
+		// strings.Cut splits at the FIRST occurrence, so "ns/" yields ns="ns",
+		// nm="" which the parser rejects as malformed.
+		{"trailing slash empty name", "ns1/", "default", "", "", 0, true},
+		// "/<name>" yields ns="", nm="name" → malformed.
+		{"leading slash empty namespace", "/svc", "default", "", "", 0, true},
+		// Empty raw → strings.Cut returns hostPart="" with no port; the parser
+		// rejects it via the explicit hostPart=="" guard.
+		{"empty raw", "", "default", "", "", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ns, name, port, err := parseGatewayServiceRef(c.raw, c.defaultNS)
+			if c.wantErr {
+				require.Error(t, err)
+				// On error, the parser returns the zero value for every
+				// out-parameter — confirms the "half-set port" MINOR is fixed.
+				require.Equal(t, "", ns)
+				require.Equal(t, "", name)
+				require.Equal(t, int32(0), port)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, c.wantNS, ns)
+			require.Equal(t, c.wantName, name)
+			require.Equal(t, c.wantPort, port)
+		})
+	}
+}

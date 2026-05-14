@@ -102,3 +102,73 @@ func ZoneReasons() []string {
 		ReasonBotManagementApplied,
 	}
 }
+
+// --- Spec 3 (tunnel) appends ---
+
+// Condition types specific to tunnel + source objects. Foundation owns the
+// generic Ready type via ConditionTypeReady; the types below are scoped to
+// the tunnel reconciler and source reconcilers and do NOT participate in
+// BaseReasons (they live alongside).
+const (
+	ConditionTypeConnectorReady      = "ConnectorReady"
+	ConditionTypeRemoteConfigApplied = "RemoteConfigApplied"
+	ConditionTypeAccepted            = "Accepted"         // on source objects (Gateway API contract)
+	ConditionTypePartiallyInvalid    = "PartiallyInvalid" // on source objects (Gateway API contract)
+)
+
+// Reasons appended by spec 3 for CloudflareTunnel and for source objects.
+// Per Foundation §6.1.1 append-only contract — no existing reason renamed.
+const (
+	// CloudflareTunnel-side reasons.
+	ReasonTunnelCreated       = "TunnelCreated"
+	ReasonTunnelCreating      = "TunnelCreating"
+	ReasonConnectorDeploying  = "ConnectorDeploying"
+	ReasonConnectorReady      = "ConnectorReady"
+	ReasonRemoteConfigApplied = "RemoteConfigApplied"
+	ReasonRemoteConfigStale   = "RemoteConfigStale"
+	ReasonConnectionsDraining = "ConnectionsDraining"
+	ReasonNoConnectors        = "NoConnectors"
+	ReasonOwnerTransferred    = "OwnerTransferred"
+
+	// Source-object reasons (Service, Gateway, HTTPRoute, TLSRoute).
+	ReasonTunnelAttached            = "TunnelAttached"
+	ReasonUnsupportedValue          = "UnsupportedValue"          // HTTPRoute matchers or weighted backends that cloudflared cannot express
+	ReasonIncompatibleFilters       = "IncompatibleFilters"       // HTTPRoute filter types cloudflared cannot enforce
+	ReasonNoListenerHostname        = "NoListenerHostname"        // Gateway with no listener hostname set
+	ReasonClientSideClientRequired  = "ClientSideClientRequired"  // TLSRoute hostname is browser-unreachable (mTLS / non-HTTPS client required)
+	ReasonNameTooLong               = "NameTooLong"               // hostname exceeds Cloudflare tunnel-config limits
+	ReasonInvalidName               = "InvalidName"               // hostname fails DNS-label / Cloudflare validity rules
+	ReasonGatewayServiceUnspecified = "GatewayServiceUnspecified" // Gateway annotated for tunnel but missing cloudflare.io/gateway-service
+
+	// Additional source-object reasons (T11+ surface these via Events because we
+	// cannot write Status on user-owned Gateway/HTTPRoute objects).
+	ReasonGatewayServiceUnresolved = "GatewayServiceUnresolved" // annotation present but Service Get/parse failed
+	ReasonUnsupportedProtocol      = "UnsupportedProtocol"      // listener protocol cloudflared cannot serve
+)
+
+// TunnelReasons returns the reason vocabulary appended by spec 3 for the
+// CloudflareTunnel reconciler and the four source reconcilers.
+// Mirrors BaseReasons() / ZoneReasons() for uniqueness testing.
+func TunnelReasons() []string {
+	return []string{
+		ReasonTunnelCreated,
+		ReasonTunnelCreating,
+		ReasonConnectorDeploying,
+		ReasonConnectorReady,
+		ReasonRemoteConfigApplied,
+		ReasonRemoteConfigStale,
+		ReasonConnectionsDraining,
+		ReasonNoConnectors,
+		ReasonOwnerTransferred,
+		ReasonTunnelAttached,
+		ReasonUnsupportedValue,
+		ReasonIncompatibleFilters,
+		ReasonNoListenerHostname,
+		ReasonClientSideClientRequired,
+		ReasonNameTooLong,
+		ReasonInvalidName,
+		ReasonGatewayServiceUnspecified,
+		ReasonGatewayServiceUnresolved,
+		ReasonUnsupportedProtocol,
+	}
+}

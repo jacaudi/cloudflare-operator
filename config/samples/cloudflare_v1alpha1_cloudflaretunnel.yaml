@@ -1,0 +1,45 @@
+# CloudflareTunnel — operator-managed Cloudflare Tunnel + cloudflared dataplane.
+#
+# Direct-create path: applying this CR creates the tunnel in Cloudflare via the
+# remote-config API and spawns the cloudflared Deployment in the same namespace.
+# For annotation-driven attachment, opt a Service or Gateway in via
+# `cloudflare.io/tunnel: "true"` instead — the operator auto-creates a tunnel
+# CR named cf-<namespace>[-<tunnel-name>] per design §6.
+apiVersion: cloudflare.io/v1alpha1
+kind: CloudflareTunnel
+metadata:
+  name: example-tunnel
+  namespace: default
+spec:
+  # Tunnel name in Cloudflare. Immutable after create; capped at 52 chars so
+  # derived resource names (cloudflared-<name>) fit the 63-char DNS-label limit.
+  name: cf-default-example
+
+  # Per-CR credential override. Omit entirely to inherit the operator-level
+  # default (Foundation §5). The token Secret must carry the API token at the
+  # named key; the apiserver enforces credential+accountID as a paired unit.
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-api-token
+      namespace: cloudflare-system
+      key: token
+    accountID: "REPLACE_WITH_ACCOUNT_ID"
+
+  # Reconciliation interval (default 30m).
+  interval: 30m
+
+  # cloudflared Deployment shape.
+  connector:
+    replicas: 2
+    protocol: auto         # auto | http2 | quic
+    logLevel: info         # debug | info | warn | error
+    gracePeriodSeconds: 30
+    # resources, nodeSelector, tolerations, affinity, topologySpreadConstraints,
+    # originCASecretRef are all optional pass-throughs.
+
+  # Tunnel-wide routing defaults.
+  routing:
+    fallback:
+      httpStatus: 404      # OR url: "http://default.svc.cluster.local"
+    originRequest:
+      connectTimeoutSeconds: 10

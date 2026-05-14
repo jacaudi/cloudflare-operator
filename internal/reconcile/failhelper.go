@@ -40,10 +40,13 @@ func FailReconcile(ctx context.Context, reason, msg string) *ctrl.Result {
 
 // WrapDeleteErr collapses already-gone errors into nil so reconcilers don't get
 // stuck holding a finalizer when the upstream object has been removed
-// out-of-band. Handles three cases:
+// out-of-band. Handles four cases:
 //   - Kubernetes apierrors.IsNotFound (object removed from etcd)
 //   - cloudflare.ErrZoneNotFound (zone removed via dashboard/API)
 //   - cloudflare.ErrRecordNotFound (DNS record removed via dashboard/API)
+//   - cloudflare.ErrTunnelNotFound (tunnel removed via dashboard/API; also
+//     covers the connectors sub-resource because DeleteConnections returns
+//     the same sentinel when the parent tunnel is gone)
 //
 // Other errors pass through unchanged.
 func WrapDeleteErr(err error) error {
@@ -57,6 +60,9 @@ func WrapDeleteErr(err error) error {
 		return nil
 	}
 	if errors.Is(err, cloudflare.ErrRecordNotFound) {
+		return nil
+	}
+	if errors.Is(err, cloudflare.ErrTunnelNotFound) {
 		return nil
 	}
 	return err

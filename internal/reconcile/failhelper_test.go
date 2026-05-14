@@ -54,6 +54,16 @@ func TestWrapDeleteErr_CloudflareRecordNotFoundReturnsNil(t *testing.T) {
 	require.NoError(t, WrapDeleteErr(wrapped))
 }
 
+func TestWrapDeleteErr_CloudflareTunnelNotFoundReturnsNil(t *testing.T) {
+	// Bare sentinel.
+	require.NoError(t, WrapDeleteErr(cloudflare.ErrTunnelNotFound))
+	// Wrapped sentinel — matches classifyTunnelAPIErr's wrapping shape so
+	// the tunnel reconciler's finalizer drain stays tolerant of 404s from
+	// either DeleteConnections or DeleteTunnel.
+	wrapped := fmt.Errorf("%w: upstream said 404", cloudflare.ErrTunnelNotFound)
+	require.NoError(t, WrapDeleteErr(wrapped))
+}
+
 func TestFailReconcile_DefaultDelay(t *testing.T) {
 	r := FailReconcile(context.Background(), "X", "boom")
 	require.NotNil(t, r)
