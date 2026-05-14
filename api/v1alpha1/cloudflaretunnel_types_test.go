@@ -62,7 +62,7 @@ func TestCloudflareTunnel_NoDroppedFields(t *testing.T) {
 	_ = s
 	// Document the intentional absences for readers:
 	// - s.ApexHostname  (dropped — Gateway-as-tunnel-apex replaces it)
-	// - s.GeneratedSecretName  (dropped — remote-config uses TUNNEL_TOKEN Secret named by convention)
+	// - s.GeneratedSecretName  (dropped — the operator-managed cloudflared Deployment uses TUNNEL_TOKEN Secret named by convention)
 	// - s.Ingress[]  (dropped — synthesized only)
 }
 

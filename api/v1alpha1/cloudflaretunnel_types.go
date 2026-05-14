@@ -25,12 +25,18 @@ import (
 type CloudflareTunnelSpec struct {
 	// Name is the tunnel name in Cloudflare. Immutable after create — the
 	// Cloudflare API treats config_src as write-once; renames would orphan
-	// the dataplane Secret and DNS targets.
+	// the cloudflared credential Secret and DNS targets. Capped at 52
+	// characters so derived resource names (cloudflared-<tunnel-name>) fit
+	// the 63-character DNS-1123 label limit.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=52
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.name is immutable"
 	Name string `json:"name"`
+
+	// Connector configures the operator-managed cloudflared Deployment.
+	// +kubebuilder:validation:Required
+	Connector ConnectorSpec `json:"connector"`
 
 	// Cloudflare overrides the operator-level credential + accountID.
 	// Per Foundation §5: credential and accountID inherited or overridden as
@@ -42,10 +48,6 @@ type CloudflareTunnelSpec struct {
 	// +kubebuilder:default="30m"
 	// +optional
 	Interval *metav1.Duration `json:"interval,omitempty"`
-
-	// Connector configures the operator-managed cloudflared Deployment.
-	// +kubebuilder:validation:Required
-	Connector ConnectorSpec `json:"connector"`
 
 	// Routing configures tunnel-wide originRequest defaults + the catch-all
 	// default backend. The catch-all is auto-appended by the reconciler;
@@ -167,7 +169,7 @@ type TunnelOriginRequest struct {
 // CloudflareTunnelStatus is the observed state.
 type CloudflareTunnelStatus struct {
 	// Conditions: Ready, ConnectorReady, RemoteConfigApplied, plus reason
-	// strings drawn from internal/conventions/conditions.go (spec-3 reasons).
+	// strings drawn from internal/conventions/conditions.go.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -187,7 +189,8 @@ type CloudflareTunnelStatus struct {
 	TunnelCNAME string `json:"tunnelCNAME,omitempty"`
 
 	// ConnectionsHealthy is the count of active connectors observed via
-	// GET /cfd_tunnel/{id}/connections.
+	// GET /cfd_tunnel/{id}/connections. Zero is a meaningful value (no
+	// healthy connectors yet) and is always serialized.
 	// +optional
 	ConnectionsHealthy int32 `json:"connectionsHealthy"`
 
@@ -253,6 +256,7 @@ type AttachedSource struct {
 // +kubebuilder:printcolumn:name="Tunnel ID",type=string,JSONPath=`.status.tunnelID`
 // +kubebuilder:printcolumn:name="CNAME",type=string,JSONPath=`.status.tunnelCNAME`
 // +kubebuilder:printcolumn:name="Connectors",type=integer,JSONPath=`.status.connectionsHealthy`
+// +kubebuilder:printcolumn:name=Phase,type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="!has(self.spec.routing) || !has(self.spec.routing.fallback) || (has(self.spec.routing.fallback.url) ? 1 : 0) + (has(self.spec.routing.fallback.httpStatus) ? 1 : 0) == 1",message="routing.fallback: exactly one of url or httpStatus must be set"
@@ -266,7 +270,6 @@ type CloudflareTunnel struct {
 }
 
 // +kubebuilder:object:root=true
-
 // CloudflareTunnelList contains a list of CloudflareTunnel.
 type CloudflareTunnelList struct {
 	metav1.TypeMeta `json:",inline"`
