@@ -23,6 +23,7 @@ import (
 	stderrors "errors"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -90,14 +91,14 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	if halt != nil {
-		z.Status.Conditions = reconcile.SetReady(z.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
-		z.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
-		if uerr := r.Status().Update(ctx, &z); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return *halt, nil
+		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &z, &z.Status.Conditions, &z.Status.Phase, halt)
 	}
+
+	// Snapshot status before reconcile work so the trailing Status().Update
+	// can be skipped when nothing material changed. reflectZoneStatus stamps
+	// LastSyncedAt + ObservedGeneration each pass; we mask those for the
+	// comparison below.
+	originalStatus := z.Status.DeepCopy()
 
 	zc, err := r.ZoneClientFn(creds)
 	if err != nil {
@@ -197,8 +198,19 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		z.Status.Phase = v1alpha1.PhasePending
 	}
 
-	if err := r.Status().Update(ctx, &z); err != nil {
-		return ctrl.Result{}, err
+	candidate := z.Status.DeepCopy()
+	candidate.LastSyncedAt = originalStatus.LastSyncedAt
+	candidate.ObservedGeneration = originalStatus.ObservedGeneration
+	if z.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
+		if err := r.Status().Update(ctx, &z); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		// No material change: roll back the LastSyncedAt + ObservedGeneration
+		// stamps reflectZoneStatus applied so the in-memory status mirrors what
+		// is in etcd.
+		z.Status.LastSyncedAt = originalStatus.LastSyncedAt
+		z.Status.ObservedGeneration = originalStatus.ObservedGeneration
 	}
 
 	interval := defaultZoneInterval

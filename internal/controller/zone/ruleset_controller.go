@@ -25,6 +25,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -101,14 +102,12 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	if halt != nil {
-		rs.Status.Conditions = reconcile.SetReady(rs.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
-		rs.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
-		if uerr := r.Status().Update(ctx, &rs); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return *halt, nil
+		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &rs, &rs.Status.Conditions, &rs.Status.Phase, halt)
 	}
+
+	// Snapshot status so the trailing Status().Update can be skipped when
+	// nothing material changed; LastSyncedAt/ObservedGeneration are masked.
+	originalStatus := rs.Status.DeepCopy()
 
 	rc, err := r.RulesetClientFn(creds)
 	if err != nil {
@@ -187,12 +186,17 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	rs.Status.Conditions = reconcile.SetReady(rs.Status.Conditions, metav1.ConditionTrue,
 		conventions.ReasonReady, "ruleset synced")
 	rs.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonReady)
-	now := metav1.Now()
-	rs.Status.LastSyncedAt = &now
-	rs.Status.ObservedGeneration = rs.Generation
 
-	if err := r.Status().Update(ctx, &rs); err != nil {
-		return ctrl.Result{}, err
+	candidate := rs.Status.DeepCopy()
+	candidate.LastSyncedAt = originalStatus.LastSyncedAt
+	candidate.ObservedGeneration = originalStatus.ObservedGeneration
+	if rs.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
+		now := metav1.Now()
+		rs.Status.LastSyncedAt = &now
+		rs.Status.ObservedGeneration = rs.Generation
+		if err := r.Status().Update(ctx, &rs); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	interval := defaultRulesetInterval

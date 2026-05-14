@@ -18,6 +18,8 @@ package tunnelsynth
 
 import (
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
 // TranslateTLSRoute converts a TLSRoute attached to a tunnel-targeted Gateway
@@ -36,7 +38,7 @@ import (
 // before calling the translator.
 func TranslateTLSRoute(_ *gwv1a2.TLSRoute, hostnames []string, gw GatewayOrigin, defaults Defaults) ([]IngressContribution, []TranslateWarning) {
 	warns := []TranslateWarning{{
-		Reason:  "ClientSideClientRequired",
+		Reason:  conventions.ReasonClientSideClientRequired,
 		Message: "TLSRoute hostnames are reachable only via cloudflared access tcp or WARP",
 	}}
 	contribs := make([]IngressContribution, 0, len(hostnames))

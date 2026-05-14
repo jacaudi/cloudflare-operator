@@ -26,6 +26,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -99,14 +100,12 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, err
 	}
 	if halt != nil {
-		cfg.Status.Conditions = reconcile.SetReady(cfg.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
-		cfg.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
-		if uerr := r.Status().Update(ctx, &cfg); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return *halt, nil
+		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &cfg, &cfg.Status.Conditions, &cfg.Status.Phase, halt)
 	}
+
+	// Snapshot status so the trailing Status().Update can be skipped when
+	// nothing material changed; LastSyncedAt/ObservedGeneration are masked.
+	originalStatus := cfg.Status.DeepCopy()
 
 	// Resolve zone identity (zoneID or zoneRef). We always resolve fresh so
 	// Status.ZoneID reflects the current resolution even on the fast-skip
@@ -195,12 +194,16 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// the new status against the snapshot taken before this pass.
 	r.emitGroupTransitionEvents(&cfg, prior, results)
 
-	now := metav1.Now()
-	cfg.Status.LastSyncedAt = &now
-	cfg.Status.ObservedGeneration = cfg.Generation
-
-	if err := r.Status().Update(ctx, &cfg); err != nil {
-		return ctrl.Result{}, err
+	candidate := cfg.Status.DeepCopy()
+	candidate.LastSyncedAt = originalStatus.LastSyncedAt
+	candidate.ObservedGeneration = originalStatus.ObservedGeneration
+	if cfg.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
+		now := metav1.Now()
+		cfg.Status.LastSyncedAt = &now
+		cfg.Status.ObservedGeneration = cfg.Generation
+		if err := r.Status().Update(ctx, &cfg); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{RequeueAfter: interval}, nil

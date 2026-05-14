@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
 // GatewayOrigin is the tunnel-facing origin derived from a Gateway. The
@@ -68,7 +70,7 @@ func TranslateHTTPRoute(rt *gwv1.HTTPRoute, gw GatewayOrigin, defaults Defaults)
 	for _, rule := range rt.Spec.Rules {
 		if len(rule.Filters) > 0 {
 			warns = append(warns, TranslateWarning{
-				Reason:  "IncompatibleFilters",
+				Reason:  conventions.ReasonIncompatibleFilters,
 				Message: "HTTPRoute filters are not supported; rule dropped",
 			})
 			continue
@@ -89,7 +91,7 @@ func TranslateHTTPRoute(rt *gwv1.HTTPRoute, gw GatewayOrigin, defaults Defaults)
 		for _, m := range rule.Matches {
 			if len(m.Headers) > 0 {
 				warns = append(warns, TranslateWarning{
-					Reason:  "UnsupportedValue",
+					Reason:  conventions.ReasonUnsupportedValue,
 					Message: "header match ignored (cloudflared has no equivalent)",
 				})
 				break
@@ -98,7 +100,7 @@ func TranslateHTTPRoute(rt *gwv1.HTTPRoute, gw GatewayOrigin, defaults Defaults)
 		for _, m := range rule.Matches {
 			if len(m.QueryParams) > 0 {
 				warns = append(warns, TranslateWarning{
-					Reason:  "UnsupportedValue",
+					Reason:  conventions.ReasonUnsupportedValue,
 					Message: "queryParam match ignored",
 				})
 				break
@@ -106,7 +108,7 @@ func TranslateHTTPRoute(rt *gwv1.HTTPRoute, gw GatewayOrigin, defaults Defaults)
 		}
 		if len(rule.BackendRefs) > 1 {
 			warns = append(warns, TranslateWarning{
-				Reason:  "UnsupportedValue",
+				Reason:  conventions.ReasonUnsupportedValue,
 				Message: "weighted backends not supported; first backend wins",
 			})
 		}
