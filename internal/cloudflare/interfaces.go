@@ -160,3 +160,34 @@ type RulesetClient interface {
 	GetPhaseEntrypoint(ctx context.Context, zoneID, phase string) (*Ruleset, error)
 	UpsertPhaseEntrypoint(ctx context.Context, zoneID, phase string, params RulesetParams) (*Ruleset, error)
 }
+
+// --- Spec 3 append: TunnelClient + supporting types ---
+
+// TunnelClient is the spec-3 surface over the Cloudflare cfd_tunnel API.
+// All per-tunnel-ID methods classify 404 responses into ErrTunnelNotFound
+// via errors.Is so callers can branch on the not-found case without
+// inspecting the underlying SDK error type.
+//
+// The plain-Go request/response types (Tunnel, CreateTunnelParams,
+// PatchTunnelParams, TunnelToken, TunnelConfiguration, TunnelConfig,
+// TunnelConnection) live in tunnel.go alongside the production wrapper so
+// callers do not depend on cloudflare-go SDK types directly.
+type TunnelClient interface {
+	// Lifecycle.
+	GetTunnel(ctx context.Context, accountID, tunnelID string) (*Tunnel, error)
+	ListTunnelsByName(ctx context.Context, accountID, name string) ([]Tunnel, error)
+	CreateTunnel(ctx context.Context, accountID string, params CreateTunnelParams) (*Tunnel, error)
+	PatchTunnel(ctx context.Context, accountID, tunnelID string, params PatchTunnelParams) (*Tunnel, error)
+	DeleteTunnel(ctx context.Context, accountID, tunnelID string) error
+
+	// Remote-config (PUT is full replace; no merge semantics).
+	GetConfiguration(ctx context.Context, accountID, tunnelID string) (*TunnelConfiguration, error)
+	PutConfiguration(ctx context.Context, accountID, tunnelID string, cfg TunnelConfig) (*TunnelConfiguration, error)
+
+	// Connector token + connection lifecycle. DeleteConnections must run
+	// before DeleteTunnel; the API rejects tunnel deletion while any
+	// connection is registered.
+	GetToken(ctx context.Context, accountID, tunnelID string) (TunnelToken, error)
+	ListConnections(ctx context.Context, accountID, tunnelID string) ([]TunnelConnection, error)
+	DeleteConnections(ctx context.Context, accountID, tunnelID string) error
+}
