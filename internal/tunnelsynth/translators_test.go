@@ -275,6 +275,58 @@ func TestHTTPRouteTranslator_WeightedBackends(t *testing.T) {
 	require.NotEmpty(t, warns)
 }
 
+func TestPathToRegex(t *testing.T) {
+	exact := gwv1.PathMatchExact
+	prefix := gwv1.PathMatchPathPrefix
+	regex := gwv1.PathMatchRegularExpression
+	cases := []struct {
+		name, value, want string
+		typ               *gwv1.PathMatchType
+	}{
+		{"nil_type_returns_empty", "/foo", "", nil},
+		{"exact_anchors_and_quotes_meta", "/foo.bar", `^/foo\.bar$`, &exact},
+		{"prefix_anchors_and_quotes_meta", "/foo.bar", `^/foo\.bar`, &prefix},
+		{"regex_passes_through_with_anchor_when_missing", "/x.*", "^/x.*", &regex},
+		{"regex_preserves_existing_anchor", "^/x.*", "^/x.*", &regex},
+		{"unrecognized_type_returns_empty", "/foo", "", ptrPathMatchType(gwv1.PathMatchType("UnknownThing"))},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			require.Equal(t, c.want, pathToRegex(c.typ, c.value))
+		})
+	}
+}
+
+func ptrPathMatchType(p gwv1.PathMatchType) *gwv1.PathMatchType { return &p }
+
+// TestHTTPRouteTranslator_MultiplePathMatchesEmitPerPath is the regression
+// guard for the dropped-match bug fixed in this commit: Gateway API rule
+// matches are OR-ed, so a rule with two path matches must emit two
+// contributions per hostname, not one.
+func TestHTTPRouteTranslator_MultiplePathMatchesEmitPerPath(t *testing.T) {
+	prefix := gwv1.PathMatchPathPrefix
+	pa := "/api"
+	pb := "/v2"
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"x.example.com"},
+			Rules: []gwv1.HTTPRouteRule{{
+				Matches: []gwv1.HTTPRouteMatch{
+					{Path: &gwv1.HTTPPathMatch{Type: &prefix, Value: &pa}},
+					{Path: &gwv1.HTTPPathMatch{Type: &prefix, Value: &pb}},
+				},
+			}},
+		},
+	}
+	contribs, _ := TranslateHTTPRoute(rt, GatewayOrigin{Service: "http://gw.ns:80"}, Defaults{})
+	require.Len(t, contribs, 2, "two paths -> two contributions")
+
+	paths := []string{contribs[0].Path, contribs[1].Path}
+	require.Contains(t, paths, "^/api")
+	require.Contains(t, paths, "^/v2")
+}
+
 func TestTLSRouteTranslator_SurfacesClientSideRequired(t *testing.T) {
 	rt := &gwv1a2.TLSRoute{ // sigs.k8s.io/gateway-api/apis/v1alpha2
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns"},

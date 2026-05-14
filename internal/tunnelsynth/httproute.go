@@ -73,12 +73,18 @@ func TranslateHTTPRoute(rt *gwv1.HTTPRoute, gw GatewayOrigin, defaults Defaults)
 			})
 			continue
 		}
-		path := ""
+		// Gateway API rule.Matches are OR-ed; each path-bearing match must
+		// reach the wire. Collect every path produced by the rule's matches.
+		// Rules with no path-bearing match still emit one contribution per
+		// hostname with empty Path.
+		paths := []string{}
 		for _, m := range rule.Matches {
 			if m.Path != nil && m.Path.Value != nil {
-				path = pathToRegex(m.Path.Type, *m.Path.Value)
-				break
+				paths = append(paths, pathToRegex(m.Path.Type, *m.Path.Value))
 			}
+		}
+		if len(paths) == 0 {
+			paths = []string{""}
 		}
 		for _, m := range rule.Matches {
 			if len(m.Headers) > 0 {
@@ -105,16 +111,39 @@ func TranslateHTTPRoute(rt *gwv1.HTTPRoute, gw GatewayOrigin, defaults Defaults)
 			})
 		}
 		for _, h := range hostnames {
-			contribs = append(contribs, IngressContribution{
-				Hostname:         h,
-				Path:             path,
-				Service:          gw.Service,
-				NoTLSVerify:      defaults.NoTLSVerifyDefault,
-				OriginServerName: defaults.OriginServerNameDefault,
-			})
+			for _, p := range paths {
+				contribs = append(contribs, IngressContribution{
+					Hostname:         h,
+					Path:             p,
+					Service:          gw.Service,
+					NoTLSVerify:      copyBoolPtr(defaults.NoTLSVerifyDefault),
+					OriginServerName: copyStringPtr(defaults.OriginServerNameDefault),
+				})
+			}
 		}
 	}
 	return contribs, warns
+}
+
+// copyBoolPtr returns a new pointer to the same value, or nil if input is nil.
+// Used by translators to avoid sharing default-pointer state across
+// contributions when callers rebuild Defaults mid-tick.
+func copyBoolPtr(p *bool) *bool {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+// copyStringPtr returns a new pointer to the same value, or nil if input is
+// nil. Mirrors copyBoolPtr; used for the same defensive reason.
+func copyStringPtr(p *string) *string {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // pathToRegex maps an HTTPRoute path match to the cloudflared `path` regex.

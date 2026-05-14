@@ -44,8 +44,8 @@ func TranslateTLSRoute(_ *gwv1a2.TLSRoute, hostnames []string, gw GatewayOrigin,
 		contribs = append(contribs, IngressContribution{
 			Hostname:         h,
 			Service:          gw.Service, // expected to be tcp://… per caller
-			NoTLSVerify:      defaults.NoTLSVerifyDefault,
-			OriginServerName: defaults.OriginServerNameDefault,
+			NoTLSVerify:      copyBoolPtr(defaults.NoTLSVerifyDefault),
+			OriginServerName: copyStringPtr(defaults.OriginServerNameDefault),
 		})
 	}
 	return contribs, warns
