@@ -33,8 +33,8 @@ import (
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
-	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/zone"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
 )
 
