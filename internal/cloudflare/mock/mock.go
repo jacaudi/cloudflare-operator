@@ -43,6 +43,7 @@ type Mock struct {
 	DNS        *dnsMock
 	Ruleset    *rulesetMock
 	ZoneConfig *zoneConfigMock
+	Tunnel     *tunnelMock
 
 	mu        sync.Mutex
 	injectors map[string]error
@@ -55,6 +56,13 @@ func New() *Mock {
 	m.DNS = &dnsMock{parent: m, records: map[string]map[string]*cloudflare.DNSRecord{}}
 	m.Ruleset = &rulesetMock{parent: m, entries: map[string]map[string]*cloudflare.Ruleset{}}
 	m.ZoneConfig = &zoneConfigMock{parent: m, settings: map[string]map[string]any{}, bm: map[string]cloudflare.BotManagementConfig{}}
+	m.Tunnel = &tunnelMock{
+		parent:      m,
+		tunnels:     map[string]*cloudflare.Tunnel{},
+		configs:     map[string]*cloudflare.TunnelConfiguration{},
+		connections: map[string][]cloudflare.TunnelConnection{},
+		tokens:      map[string]cloudflare.TunnelToken{},
+	}
 	return m
 }
 
