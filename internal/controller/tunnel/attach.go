@@ -21,15 +21,22 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
+	"strings"
+	"sync"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
+	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
 // Sentinels for attach errors. Surfaced as conditions / events on the source
@@ -144,4 +151,140 @@ func EnsureTunnelCR(
 		return nil, err
 	}
 	return tn, nil
+}
+
+// cacheTracker is the shared per-controller "last attached tunnel-key" index
+// used by every source reconciler. The map is mutex-guarded because
+// controller-runtime may call Reconcile concurrently from its worker pool.
+//
+// Background: each source reconciler must clear its cache entry under the
+// PRIOR tunnel-key whenever a source's tunnel-name annotation changes between
+// reconciles, otherwise the cache leaks phantom contributions. Tracking the
+// last attached key per source is the simplest reliable way to do that — we
+// don't know what the "prior" key was from the source object alone after the
+// annotation has changed.
+//
+// Extracted to attach.go (from inline copies in T10 + T11) when T12 (HTTPRoute)
+// became the third call site — matches the Phase-2 reconcile.HaltDependency
+// precedent (extract on the third use, not the second).
+type cacheTracker struct {
+	mu           sync.Mutex
+	lastAttached map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey
+}
+
+// newCacheTracker constructs an empty tracker. Returning a value (not pointer)
+// makes embedding in reconcilers explicit without forgetting initialization;
+// callers use `*cacheTracker` fields and initialize lazily.
+func newCacheTracker() *cacheTracker {
+	return &cacheTracker{}
+}
+
+// swap records the new tunnel-key for this source and returns the prior key
+// (zero value if none). The caller is responsible for clearing the prior key
+// from the tunnelsynth.Cache; we do not couple the tracker to the cache so it
+// stays unit-testable in isolation.
+func (t *cacheTracker) swap(src tunnelsynth.SourceKey, newKey tunnelsynth.TunnelKey) (prior tunnelsynth.TunnelKey, hadPrior bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lastAttached == nil {
+		t.lastAttached = map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey{}
+	}
+	if prev, ok := t.lastAttached[src]; ok && prev != newKey {
+		t.lastAttached[src] = newKey
+		return prev, true
+	}
+	t.lastAttached[src] = newKey
+	return tunnelsynth.TunnelKey{}, false
+}
+
+// sweep forgets the prior tunnel-key tracked for this source and returns it
+// (zero value if none). Caller clears the cache entry under the returned key.
+func (t *cacheTracker) sweep(src tunnelsynth.SourceKey) (prior tunnelsynth.TunnelKey, hadPrior bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.lastAttached == nil {
+		return tunnelsynth.TunnelKey{}, false
+	}
+	if prev, ok := t.lastAttached[src]; ok {
+		delete(t.lastAttached, src)
+		return prev, true
+	}
+	return tunnelsynth.TunnelKey{}, false
+}
+
+// errGatewayServiceAnnotationMissing distinguishes "annotation absent"
+// (GatewayServiceUnspecified) from "annotation present but Service can't be
+// resolved" (GatewayServiceUnresolved). Shared by every reconciler that
+// resolves the Gateway's underlying Service.
+var errGatewayServiceAnnotationMissing = errors.New("cloudflare.io/gateway-service annotation required when cloudflare.io/tunnel is set on a Gateway")
+
+// resolveGatewayService reads the REQUIRED cloudflare.io/gateway-service
+// annotation: "<namespace>/<name>" or "<namespace>/<name>:<port>" (or
+// "<name>" / "<name>:<port>" with the Gateway's namespace as the default).
+//
+// Required (not optional) because every Gateway implementation exposes its
+// listener Service differently — no reliable label convention exists. If
+// absent, callers surface GatewayServiceUnspecified on the Gateway and refuse
+// synthesis.
+//
+// Returns the resolved Service plus the chosen port. When the annotation
+// omits the port, falls back to Service.Spec.Ports[0].Port — this is the
+// IN-CLUSTER port cloudflared connects to, NOT the listener's public-facing
+// port. They are routinely different (e.g. listener 443 → Service 8443).
+//
+// Shared by GatewaySourceReconciler (T11), HTTPRouteSourceReconciler (T12),
+// and TLSRouteSourceReconciler (T13).
+func resolveGatewayService(ctx context.Context, c client.Client, gw *gwv1.Gateway) (*corev1.Service, int32, error) {
+	raw := gw.Annotations[conventions.AnnotationGatewayService]
+	if raw == "" {
+		return nil, 0, errGatewayServiceAnnotationMissing
+	}
+	ns, name, port, err := parseGatewayServiceRef(raw, gw.Namespace)
+	if err != nil {
+		return nil, 0, err
+	}
+	var svc corev1.Service
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &svc); err != nil {
+		return nil, 0, fmt.Errorf("get Gateway service %s/%s: %w", ns, name, err)
+	}
+	if port == 0 {
+		// Annotation didn't specify a port — fall back to the Service's
+		// first port. A Service with no ports is a configuration error
+		// (no tunnel URL can be synthesized without a port).
+		if len(svc.Spec.Ports) == 0 {
+			return nil, 0, fmt.Errorf("Service %s/%s has no ports; annotation must specify a port", ns, name)
+		}
+		port = svc.Spec.Ports[0].Port
+	}
+	return &svc, port, nil
+}
+
+// parseGatewayServiceRef parses the cloudflare.io/gateway-service annotation
+// values:
+//   - "<ns>/<name>"
+//   - "<ns>/<name>:<port>"
+//   - "<name>"            (uses defaultNS)
+//   - "<name>:<port>"     (uses defaultNS)
+//
+// Returns port = 0 when omitted; the caller falls back to the Service's first
+// port.
+func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port int32, err error) {
+	hostPart, portPart, hasPort := strings.Cut(raw, ":")
+	if hasPort {
+		p, perr := strconv.Atoi(portPart)
+		if perr != nil || p <= 0 || p > 65535 {
+			return "", "", 0, fmt.Errorf("invalid port %q in cloudflare.io/gateway-service", portPart)
+		}
+		port = int32(p)
+	}
+	if ns, nm, ok := strings.Cut(hostPart, "/"); ok {
+		if ns == "" || nm == "" {
+			return "", "", 0, fmt.Errorf("malformed cloudflare.io/gateway-service %q (want '<ns>/<name>[:<port>]')", raw)
+		}
+		return ns, nm, port, nil
+	}
+	if hostPart == "" {
+		return "", "", 0, fmt.Errorf("malformed cloudflare.io/gateway-service %q (empty)", raw)
+	}
+	return defaultNS, hostPart, port, nil
 }

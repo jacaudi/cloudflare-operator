@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,10 +58,9 @@ import (
 //
 // Stale-key sweep (Correction C): when a Service's tunnel-name annotation
 // changes between reconciles, the cache entry under the prior tunnel-key
-// would otherwise be orphaned. We track the last attached tunnel-key per
-// source in an in-memory map and clear the prior key whenever the new key
-// differs. The map is mutex-guarded because controller-runtime may call
-// Reconcile concurrently from its worker pool.
+// would otherwise be orphaned. The shared cacheTracker (attach.go) tracks
+// the last attached tunnel-key per source so we can clear the prior key
+// whenever the new key differs. Lazily initialized inside Reconcile.
 type ServiceSourceReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -70,8 +68,7 @@ type ServiceSourceReconciler struct {
 	Recorder         record.EventRecorder
 	DefaultConnector v1alpha1.ConnectorSpec
 
-	mu           sync.Mutex
-	lastAttached map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey
+	tracker *cacheTracker
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
@@ -82,13 +79,18 @@ type ServiceSourceReconciler struct {
 // Reconcile drives one iteration of the Service-source state machine.
 func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("service", req.NamespacedName)
+	if r.tracker == nil {
+		r.tracker = newCacheTracker()
+	}
 
 	var svc corev1.Service
 	if err := r.Get(ctx, req.NamespacedName, &svc); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Service deleted — sweep the prior tunnel-key for this source.
 			srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: req.Namespace, Name: req.Name}
-			r.sweepPriorKey(srcKey)
+			if prev, ok := r.tracker.sweep(srcKey); ok {
+				r.Cache.Clear(prev, srcKey)
+			}
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, err
@@ -102,7 +104,9 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		// Sweep every tunnel-key that might have a stale entry for this
 		// source: the previously-tracked key, plus the two derivable-from-
 		// current-annotations candidates (pool + named).
-		r.sweepPriorKey(srcKey)
+		if prev, ok := r.tracker.sweep(srcKey); ok {
+			r.Cache.Clear(prev, srcKey)
+		}
 		r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: svc.Namespace, Name: "cf-" + svc.Namespace}, srcKey)
 		if tn := svc.Annotations[conventions.AnnotationTunnelName]; tn != "" {
 			r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: svc.Namespace, Name: "cf-" + svc.Namespace + "-" + tn}, srcKey)
@@ -125,7 +129,9 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		}
 		// Sweep any stale prior key — the source is now in a broken state and
 		// must not contribute to any tunnel.
-		r.sweepPriorKey(srcKey)
+		if prev, ok := r.tracker.sweep(srcKey); ok {
+			r.Cache.Clear(prev, srcKey)
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -147,7 +153,9 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// Correction C: clear the prior tunnel-key for this source if the
 	// new key differs. This handles annotation changes (tunnel-name added,
 	// removed, or renamed) between reconciles.
-	r.swapAttachedKey(srcKey, tunnelKey)
+	if prev, ok := r.tracker.swap(srcKey, tunnelKey); ok {
+		r.Cache.Clear(prev, srcKey)
+	}
 	r.Cache.Set(tunnelKey, srcKey, contribs)
 
 	// Guard (Correction A): the DNSRecord CR's spec.content is a *string,
@@ -177,34 +185,6 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// tn.Status.AttachedSources from this controller.
 
 	return reconcile.Result{}, nil
-}
-
-// swapAttachedKey records the new tunnel-key for this source and clears any
-// prior key that differs. Thread-safe.
-func (r *ServiceSourceReconciler) swapAttachedKey(src tunnelsynth.SourceKey, newKey tunnelsynth.TunnelKey) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.lastAttached == nil {
-		r.lastAttached = map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey{}
-	}
-	if prev, ok := r.lastAttached[src]; ok && prev != newKey {
-		r.Cache.Clear(prev, src)
-	}
-	r.lastAttached[src] = newKey
-}
-
-// sweepPriorKey clears the prior tunnel-key tracked for this source (if any)
-// and forgets it. Thread-safe.
-func (r *ServiceSourceReconciler) sweepPriorKey(src tunnelsynth.SourceKey) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.lastAttached == nil {
-		return
-	}
-	if prev, ok := r.lastAttached[src]; ok {
-		r.Cache.Clear(prev, src)
-		delete(r.lastAttached, src)
-	}
 }
 
 // emitDNSRecord creates (idempotently) a CloudflareDNSRecord CR for the given

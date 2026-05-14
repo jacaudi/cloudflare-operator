@@ -20,9 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
-	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,15 +59,9 @@ import (
 //
 // Stale-key sweep: when a Gateway's tunnel-name annotation changes between
 // reconciles, the cache entry under the prior tunnel-key would otherwise be
-// orphaned. We track the last attached tunnel-key per source in an in-memory
-// map and clear the prior key whenever the new key differs. The map is
-// mutex-guarded because controller-runtime may call Reconcile concurrently.
-//
-// TODO: when the third source reconciler lands (T12 HTTPRoute or T13 TLSRoute),
-// extract this mu+lastAttached pattern into a shared cacheTracker type in
-// attach.go. With three call sites the refactor pays off; with two it's
-// premature (matches the Phase-2 reconcile.HaltDependency extraction
-// precedent — extract on the third use).
+// orphaned. The shared cacheTracker (attach.go) tracks the last attached
+// tunnel-key per source so we can clear the prior key whenever the new key
+// differs. Lazily initialized inside Reconcile to keep the zero value useful.
 type GatewaySourceReconciler struct {
 	client.Client
 	Scheme           *runtime.Scheme
@@ -78,8 +69,7 @@ type GatewaySourceReconciler struct {
 	Recorder         record.EventRecorder
 	DefaultConnector v1alpha1.ConnectorSpec
 
-	mu           sync.Mutex
-	lastAttached map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey
+	tracker *cacheTracker
 }
 
 // +kubebuilder:rbac:groups="gateway.networking.k8s.io",resources=gateways,verbs=get;list;watch
@@ -91,13 +81,18 @@ type GatewaySourceReconciler struct {
 // Reconcile drives one iteration of the Gateway-source state machine.
 func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("gateway", req.NamespacedName)
+	if r.tracker == nil {
+		r.tracker = newCacheTracker()
+	}
 
 	var gw gwv1.Gateway
 	if err := r.Get(ctx, req.NamespacedName, &gw); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Gateway deleted — sweep the prior tunnel-key for this source.
 			srcKey := tunnelsynth.SourceKey{Kind: "Gateway", Namespace: req.Namespace, Name: req.Name}
-			r.sweepPriorKey(srcKey)
+			if prev, ok := r.tracker.sweep(srcKey); ok {
+				r.Cache.Clear(prev, srcKey)
+			}
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, err
@@ -112,7 +107,9 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		// source: the previously-tracked key, plus the two derivable-from-
 		// current-annotations candidates (pool + named). Mirrors the
 		// ServiceSourceReconciler opt-out path.
-		r.sweepPriorKey(srcKey)
+		if prev, ok := r.tracker.sweep(srcKey); ok {
+			r.Cache.Clear(prev, srcKey)
+		}
 		r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-" + gw.Namespace}, srcKey)
 		if tn := gw.Annotations[conventions.AnnotationTunnelName]; tn != "" {
 			r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-" + gw.Namespace + "-" + tn}, srcKey)
@@ -128,7 +125,9 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, conventions.ReasonNoListenerHostname,
 				"Gateway has no listener with a hostname; tunnel-apex synthesis requires at least one")
 		}
-		r.sweepPriorKey(srcKey)
+		if prev, ok := r.tracker.sweep(srcKey); ok {
+			r.Cache.Clear(prev, srcKey)
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -144,14 +143,16 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if r.Recorder != nil {
 			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, reason, "%v", err)
 		}
-		r.sweepPriorKey(srcKey)
+		if prev, ok := r.tracker.sweep(srcKey); ok {
+			r.Cache.Clear(prev, srcKey)
+		}
 		return reconcile.Result{}, nil
 	}
 
 	// Resolve the Gateway's underlying Service BEFORE EnsureTunnelCR — if the
 	// annotation is missing or the Service can't be found, we want to surface
 	// the failure without creating a CloudflareTunnel that ends up orphaned.
-	gwSvc, port, err := r.resolveGatewayService(ctx, &gw)
+	gwSvc, port, err := resolveGatewayService(ctx, r.Client, &gw)
 	if err != nil {
 		reason := conventions.ReasonGatewayServiceUnspecified
 		if !errors.Is(err, errGatewayServiceAnnotationMissing) {
@@ -162,7 +163,9 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if r.Recorder != nil {
 			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, reason, "%v", err)
 		}
-		r.sweepPriorKey(srcKey)
+		if prev, ok := r.tracker.sweep(srcKey); ok {
+			r.Cache.Clear(prev, srcKey)
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -204,7 +207,9 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	tunnelKey := tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name}
 
 	// Annotation-change sweep: clear the prior tunnel-key if it differs.
-	r.swapAttachedKey(srcKey, tunnelKey)
+	if prev, ok := r.tracker.swap(srcKey, tunnelKey); ok {
+		r.Cache.Clear(prev, srcKey)
+	}
 	// Register this source under the new key, even if contribs is empty
 	// (e.g. all listeners are TLS). The empty registration keeps the
 	// per-source bookkeeping symmetric — subsequent sweeps remain a no-op
@@ -235,34 +240,6 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	return reconcile.Result{}, nil
 }
 
-// swapAttachedKey records the new tunnel-key for this source and clears any
-// prior key that differs. Thread-safe.
-func (r *GatewaySourceReconciler) swapAttachedKey(src tunnelsynth.SourceKey, newKey tunnelsynth.TunnelKey) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.lastAttached == nil {
-		r.lastAttached = map[tunnelsynth.SourceKey]tunnelsynth.TunnelKey{}
-	}
-	if prev, ok := r.lastAttached[src]; ok && prev != newKey {
-		r.Cache.Clear(prev, src)
-	}
-	r.lastAttached[src] = newKey
-}
-
-// sweepPriorKey clears the prior tunnel-key tracked for this source (if any)
-// and forgets it. Thread-safe.
-func (r *GatewaySourceReconciler) sweepPriorKey(src tunnelsynth.SourceKey) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.lastAttached == nil {
-		return
-	}
-	if prev, ok := r.lastAttached[src]; ok {
-		r.Cache.Clear(prev, src)
-		delete(r.lastAttached, src)
-	}
-}
-
 // listenerHostnames returns the non-empty hostnames of all Gateway listeners.
 // Used both for the "no-hostname" gate and to drive DNSRecord emission. A
 // listener whose protocol is HTTP/HTTPS but lacks a hostname still does not
@@ -275,79 +252,6 @@ func listenerHostnames(gw *gwv1.Gateway) []string {
 		}
 	}
 	return out
-}
-
-// errGatewayServiceAnnotationMissing distinguishes "annotation absent"
-// (GatewayServiceUnspecified) from "annotation present but Service can't be
-// resolved" (GatewayServiceUnresolved). Internal to this file.
-var errGatewayServiceAnnotationMissing = errors.New("cloudflare.io/gateway-service annotation required when cloudflare.io/tunnel is set on a Gateway")
-
-// resolveGatewayService reads the REQUIRED cloudflare.io/gateway-service
-// annotation: "<namespace>/<name>" or "<namespace>/<name>:<port>" (or
-// "<name>" / "<name>:<port>" with the Gateway's namespace as the default).
-//
-// Required (not optional) because every Gateway implementation exposes its
-// listener Service differently — no reliable label convention exists. If
-// absent, surface GatewayServiceUnspecified on the Gateway and refuse
-// synthesis.
-//
-// Returns the resolved Service plus the chosen port. When the annotation
-// omits the port, falls back to Service.Spec.Ports[0].Port — this is the
-// IN-CLUSTER port cloudflared connects to, NOT the listener's public-facing
-// port. They are routinely different (e.g. listener 443 → Service 8443).
-func (r *GatewaySourceReconciler) resolveGatewayService(ctx context.Context, gw *gwv1.Gateway) (*corev1.Service, int32, error) {
-	raw := gw.Annotations[conventions.AnnotationGatewayService]
-	if raw == "" {
-		return nil, 0, errGatewayServiceAnnotationMissing
-	}
-	ns, name, port, err := parseGatewayServiceRef(raw, gw.Namespace)
-	if err != nil {
-		return nil, 0, err
-	}
-	var svc corev1.Service
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &svc); err != nil {
-		return nil, 0, fmt.Errorf("get Gateway service %s/%s: %w", ns, name, err)
-	}
-	if port == 0 {
-		// Annotation didn't specify a port — fall back to the Service's
-		// first port. A Service with no ports is treated as a configuration
-		// error (we can't synthesize a tunnel URL without a port).
-		if len(svc.Spec.Ports) == 0 {
-			return nil, 0, fmt.Errorf("Service %s/%s has no ports; annotation must specify a port", ns, name)
-		}
-		port = svc.Spec.Ports[0].Port
-	}
-	return &svc, port, nil
-}
-
-// parseGatewayServiceRef parses the cloudflare.io/gateway-service annotation
-// values:
-//   - "<ns>/<name>"
-//   - "<ns>/<name>:<port>"
-//   - "<name>"            (uses defaultNS)
-//   - "<name>:<port>"     (uses defaultNS)
-//
-// Returns port = 0 when omitted; the caller falls back to the Service's first
-// port.
-func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port int32, err error) {
-	hostPart, portPart, hasPort := strings.Cut(raw, ":")
-	if hasPort {
-		p, perr := strconv.Atoi(portPart)
-		if perr != nil || p <= 0 || p > 65535 {
-			return "", "", 0, fmt.Errorf("invalid port %q in cloudflare.io/gateway-service", portPart)
-		}
-		port = int32(p)
-	}
-	if ns, nm, ok := strings.Cut(hostPart, "/"); ok {
-		if ns == "" || nm == "" {
-			return "", "", 0, fmt.Errorf("malformed cloudflare.io/gateway-service %q (want '<ns>/<name>[:<port>]')", raw)
-		}
-		return ns, nm, port, nil
-	}
-	if hostPart == "" {
-		return "", "", 0, fmt.Errorf("malformed cloudflare.io/gateway-service %q (empty)", raw)
-	}
-	return defaultNS, hostPart, port, nil
 }
 
 // emitDNSRecord creates (idempotently) a CloudflareDNSRecord CR for one
