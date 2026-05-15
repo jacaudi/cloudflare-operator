@@ -335,6 +335,44 @@ spec:
                   controller has not yet processed the latest spec.
                 format: int64
                 type: integer
+              observedTXT:
+                description: |-
+                  ObservedTXT carries the decoded TXT companion payload as last
+                  observed from Cloudflare. Populated by both Managed and Observe modes
+                  when a TXT companion exists. RawContent is set instead when decoding
+                  fails.
+                properties:
+                  codec:
+                    description: |-
+                      Codec reports which decoder ("plaintext", "aes-gcm", or
+                      "unrecognized") produced this payload.
+                    type: string
+                  contentHash:
+                    description: |-
+                      ContentHash is the SHA256 of the canonicalized spec.content at TXT
+                      write time. Used by drift detection.
+                    type: string
+                  kind:
+                    description: Kind is the encoded owner kind ("CloudflareDNSRecord"
+                      in v1alpha1).
+                    type: string
+                  name:
+                    description: Name is the encoded owner name.
+                    type: string
+                  namespace:
+                    description: Namespace is the encoded owner namespace.
+                    type: string
+                  rawContent:
+                    description: |-
+                      RawContent is the raw TXT content as received from Cloudflare when
+                      decoding failed. Set instead of Version/Kind/Namespace/Name so users
+                      can see what's there even when the operator can't parse it.
+                    type: string
+                  version:
+                    description: Version is the payload schema version (currently
+                      always 1).
+                    type: integer
+                type: object
               phase:
                 default: Pending
                 description: Phase is a coarse summary derived from the Ready condition
@@ -347,6 +385,19 @@ spec:
                 type: string
               recordID:
                 description: RecordID is the Cloudflare ID of the managed DNS record.
+                type: string
+              txtAffix:
+                description: |-
+                  TxtAffix is the prefix used for the companion TXT record name (today
+                  always "cf-txt"). Recorded for forensic clarity if the convention
+                  changes (e.g., v2 affixing scheme). Operator-managed; users should
+                  not edit.
+                type: string
+              txtRecordID:
+                description: |-
+                  TxtRecordID is the Cloudflare-side ID of the companion TXT record.
+                  Empty when no TXT companion has been written yet. Set on successful
+                  TXT write; cleared on delete.
                 type: string
             type: object
         type: object

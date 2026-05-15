@@ -145,6 +145,37 @@ type SRVData struct {
 	Target string `json:"target"`
 }
 
+// ObservedTXTPayload mirrors the decoded RegistryPayload fields in the CR's
+// Status for user-visible diagnostics. The internal payload type lives in
+// internal/cloudflare/; this is the API-stable surface.
+type ObservedTXTPayload struct {
+	// Version is the payload schema version (currently always 1).
+	// +optional
+	Version int `json:"version,omitempty"`
+	// Kind is the encoded owner kind ("CloudflareDNSRecord" in v1alpha1).
+	// +optional
+	Kind string `json:"kind,omitempty"`
+	// Namespace is the encoded owner namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+	// Name is the encoded owner name.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// ContentHash is the SHA256 of the canonicalized spec.content at TXT
+	// write time. Used by drift detection.
+	// +optional
+	ContentHash string `json:"contentHash,omitempty"`
+	// RawContent is the raw TXT content as received from Cloudflare when
+	// decoding failed. Set instead of Version/Kind/Namespace/Name so users
+	// can see what's there even when the operator can't parse it.
+	// +optional
+	RawContent string `json:"rawContent,omitempty"`
+	// Codec reports which decoder ("plaintext", "aes-gcm", or
+	// "unrecognized") produced this payload.
+	// +optional
+	Codec string `json:"codec,omitempty"`
+}
+
 // CloudflareDNSRecordStatus defines the observed state.
 type CloudflareDNSRecordStatus struct {
 	// +listType=map
@@ -165,6 +196,23 @@ type CloudflareDNSRecordStatus struct {
 	// LastSyncedAt is the timestamp of the most recent successful reconcile.
 	// +optional
 	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+	// TxtRecordID is the Cloudflare-side ID of the companion TXT record.
+	// Empty when no TXT companion has been written yet. Set on successful
+	// TXT write; cleared on delete.
+	// +optional
+	TxtRecordID string `json:"txtRecordID,omitempty"`
+	// TxtAffix is the prefix used for the companion TXT record name (today
+	// always "cf-txt"). Recorded for forensic clarity if the convention
+	// changes (e.g., v2 affixing scheme). Operator-managed; users should
+	// not edit.
+	// +optional
+	TxtAffix string `json:"txtAffix,omitempty"`
+	// ObservedTXT carries the decoded TXT companion payload as last
+	// observed from Cloudflare. Populated by both Managed and Observe modes
+	// when a TXT companion exists. RawContent is set instead when decoding
+	// fails.
+	// +optional
+	ObservedTXT *ObservedTXTPayload `json:"observedTXT,omitempty"`
 	// ObservedGeneration is the .metadata.generation observed by the controller
 	// during its last reconcile. When this lags .metadata.generation the
 	// controller has not yet processed the latest spec.
