@@ -163,13 +163,25 @@ func isAutoCreated(tn *v1alpha1.CloudflareTunnel) bool {
 	return tn.Annotations[conventions.AnnotationAutoCreated] == "true"
 }
 
-// needsOwnerTransfer reports whether the tunnel CR has lost its
+// needsOwnerTransfer reports whether an auto-created tunnel CR has lost its
 // OwnerReferences but still has attaching sources tracked in
 // Status.AttachedSources. When true, the reconciler should attempt to
 // promote one of the remaining attachers to owner. See design §4.2 for
 // the algorithm.
+//
+// isAutoCreated-gated, symmetric with isOrphaned: this predicate applies
+// ONLY to CRs the operator created itself. Direct-create (user-authored)
+// CRs are user-managed — the operator never takes controller-ownership of
+// them, so a Service annotation-attaching to a user's CR never makes that
+// Service the CR's k8s-controller-owner, and Kubernetes GC therefore never
+// cascade-deletes the user's CR when the Service is removed (design §7).
+// With both cascade-GC predicates isAutoCreated-gated, the entire
+// cascade-GC machinery (owner-transfer rebalancing AND self-delete) is
+// inert for direct-create CRs.
 func needsOwnerTransfer(tn *v1alpha1.CloudflareTunnel) bool {
-	return len(tn.OwnerReferences) == 0 && len(tn.Status.AttachedSources) > 0
+	return isAutoCreated(tn) &&
+		len(tn.OwnerReferences) == 0 &&
+		len(tn.Status.AttachedSources) > 0
 }
 
 // isOrphaned reports whether the tunnel CR is an auto-created CR with no

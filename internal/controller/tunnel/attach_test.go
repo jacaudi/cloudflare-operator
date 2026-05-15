@@ -202,7 +202,14 @@ func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T)
 }
 
 func TestNeedsOwnerTransfer_OwnerGoneSourcesExist(t *testing.T) {
+	// Auto-created marker present: needsOwnerTransfer is isAutoCreated-gated,
+	// so the TRUE path requires the annotation in addition to no owner +
+	// attaching sources (a direct-create CR is never owner-transferred —
+	// see TestNeedsOwnerTransfer_DirectCreateNeverTransfers).
 	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
 		Status: v1alpha1.CloudflareTunnelStatus{
 			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
 		},
@@ -210,20 +217,44 @@ func TestNeedsOwnerTransfer_OwnerGoneSourcesExist(t *testing.T) {
 	require.True(t, needsOwnerTransfer(tn))
 }
 
+func TestNeedsOwnerTransfer_DirectCreateNeverTransfers(t *testing.T) {
+	// No cloudflare.io/auto-created annotation: a user-authored direct-create
+	// tunnel must never be owner-transferred (else a Service becomes its
+	// k8s-controller-owner and GC deletes the user's CR — design §7).
+	tn := &v1alpha1.CloudflareTunnel{
+		Status: v1alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.False(t, needsOwnerTransfer(tn),
+		"direct-create CR (no auto-created marker) must never need owner-transfer")
+}
+
 func TestNeedsOwnerTransfer_OwnerExists(t *testing.T) {
+	// Auto-created marker present so the isAutoCreated gate is satisfied —
+	// the discriminating clause under test is "owner present blocks transfer",
+	// not the auto-created gate.
 	tn := &v1alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
+			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
 			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
 		},
 		Status: v1alpha1.CloudflareTunnelStatus{
 			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
 		},
 	}
-	require.False(t, needsOwnerTransfer(tn))
+	require.False(t, needsOwnerTransfer(tn), "owner present → no transfer needed (auto-created gate satisfied)")
 }
 
 func TestNeedsOwnerTransfer_OwnerGoneNoSources(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{}
+	// Auto-created marker present so the isAutoCreated gate is satisfied —
+	// the discriminating clause under test is "no sources → delegated to
+	// isOrphaned", not the auto-created gate.
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+	}
 	require.False(t, needsOwnerTransfer(tn), "no sources → delegated to isOrphaned, not transfer")
 }
 
@@ -269,9 +300,14 @@ func TestPredicates_MutuallyExclusive(t *testing.T) {
 		{Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a"}}}},
 		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}}},
 		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}, OwnerReferences: []metav1.OwnerReference{{UID: "u"}}}},
-		// 4th case: auto-created + sources + no owners — the only state where a
-		// regression dropping isOrphaned's AttachedSources==0 clause would make
-		// both predicates return true simultaneously.
+		// 4th case is THE discriminator: auto-created + sources + no owners —
+		// the only state where needsOwnerTransfer is true (so nt&&io is not
+		// vacuously false here), and the only state where a regression dropping
+		// isOrphaned's AttachedSources==0 clause would make both predicates
+		// return true simultaneously. Cases 1-3 yield needsOwnerTransfer=false
+		// (case 1 lacks the auto-created marker; cases 2-3 have no sources), so
+		// nt&&io is trivially false for them — keep this 4th case so the test
+		// stays non-vacuous now that needsOwnerTransfer is isAutoCreated-gated.
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},

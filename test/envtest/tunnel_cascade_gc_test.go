@@ -84,6 +84,172 @@ func gcEmulateStripDeadOwner(t *testing.T, ctx context.Context, c client.Client,
 		"dangling "+deadName+" ownerReference must be stripped and AttachedSources drained (GC emulation)")
 }
 
+// bumpRetriggerTick stamps a benign test-only label on the tunnel CR to force
+// a real resourceVersion change and generate a watch event so the tunnel
+// reconciler re-runs on the next tick (k8s does not bump rv on a no-op
+// Update, so without this the tunnel reconciler would stall at its long
+// requeue interval). Conflict-tolerant: a stale-rv error just means the next
+// tick retries with a fresh Get. The label key uses the envtest.local/ prefix
+// — NOT cloudflare.io/ — because this is a test-only mechanical retriggering
+// device, not an operator annotation (same rationale as
+// gcEmulateStripDeadOwner's strip-tick label).
+func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v1alpha1.CloudflareTunnel) {
+	if tn.Labels == nil {
+		tn.Labels = map[string]string{}
+	}
+	tn.Labels["envtest.local/retrigger-tick"] = strconv.FormatInt(time.Now().UnixNano(), 10)
+	_ = c.Update(ctx, tn) // conflict-tolerant: error ignored, next tick retries
+}
+
+// TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef pins the
+// positive form of design §7 against a real apiserver: a user-authored
+// (direct-create) CloudflareTunnel CR must NEVER acquire a controller
+// OwnerReference, even while an annotated Service actively attaches to it.
+//
+// Why this matters: needsOwnerTransfer drives TransferOwnershipIfNeeded,
+// which stamps a source as the tunnel CR's Controller+BlockOwnerDeletion
+// owner. If that fired for a direct-create CR, deleting the Service would
+// let Kubernetes GC cascade-delete the user's tunnel — exactly the §7
+// violation Task 14 closes. The isAutoCreated gate on needsOwnerTransfer
+// must keep the operator from ever taking controller-ownership of a user's
+// CR. (The negative form — "never self-deleted" — is covered by
+// TestEnvtest_CascadeGC_DirectCreateNeverGCd; this test pins the upstream
+// invariant that no controller-ref is ever acquired in the first place.)
+//
+// Sequence:
+//  1. Create a CloudflareTunnel CR directly with the derived name
+//     "cf-<ns>-direct-owns" and NO auto-created annotation (finalizer
+//     present so it reconciles like a real CR).
+//  2. Create an annotated Service (tunnel-name: direct-owns) that adopts it
+//     via EnsureTunnelCR's find path (no owner-ref set on adopt).
+//  3. Wait for the Service to appear in Status.AttachedSources.
+//  4. Assert via require.Never (~10s, 250ms tick) that the tunnel CR's
+//     OwnerReferences NEVER becomes non-empty AND the auto-created
+//     annotation stays absent. Each tick bumps a benign retrigger label so
+//     the tunnel reconciler is actively re-run throughout the window
+//     (otherwise the needsOwnerTransfer path would never be exercised and
+//     the test would be vacuous).
+//
+// Non-vacuity (mutation-verified): with needsOwnerTransfer ungated (the
+// pre-Task-14 form, len(OwnerReferences)==0 && len(AttachedSources)>0), the
+// reconciler promotes the attaching Service to controller-owner within a
+// few reconciles → OwnerReferences becomes non-empty → require.Never trips.
+// With the isAutoCreated gate intact, needsOwnerTransfer is false for the
+// unannotated direct-create CR, TransferOwnershipIfNeeded is never called,
+// and OwnerReferences stays empty for the full window.
+func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	f := setupServiceEnv(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// CloudflareZone scaffold — DNSRecord admission CEL requires has(zoneID)||has(zoneRef).
+	zone := &v1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
+		Spec: v1alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, zone))
+
+	// Step 1: create the CloudflareTunnel CR directly — no auto-created
+	// annotation. The name follows the DeriveTunnelName template so the
+	// annotated Service's EnsureTunnelCR finds it via Get (adopt path).
+	tnName := "cf-" + f.ns + "-direct-owns"
+	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
+
+	directTunnel := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tnName,
+			Namespace: f.ns,
+			// No cloudflare.io/auto-created annotation — direct-create path.
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name: "cf-direct-owns",
+			Connector: v1alpha1.ConnectorSpec{
+				Replicas:           1,
+				Protocol:           "auto",
+				LogLevel:           "info",
+				GracePeriodSeconds: 30,
+			},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, directTunnel))
+
+	// Step 2: annotated Service adopts the existing CR via EnsureTunnelCR's
+	// find path (no owner-ref set on adopt).
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "owns-svc", Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "direct-owns",
+				conventions.AnnotationHostnames:  "owns.example.com",
+				conventions.AnnotationZoneRef:    "example-com",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, svc))
+
+	// Step 3: wait for the Service to attach (appears in AttachedSources)
+	// while the auto-created annotation stays absent (adopt = no backfill).
+	require.Eventually(t, func() bool {
+		var tn v1alpha1.CloudflareTunnel
+		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
+			return false
+		}
+		if tn.Annotations[conventions.AnnotationAutoCreated] == "true" {
+			return false
+		}
+		for _, src := range tn.Status.AttachedSources {
+			if src.Name == "owns-svc" {
+				return true
+			}
+		}
+		return false
+	}, 45*time.Second, 250*time.Millisecond,
+		"Service must attach and auto-created annotation must stay absent (adopt path)")
+
+	// Step 4: with the Service actively attaching, the tunnel CR's
+	// OwnerReferences must NEVER become non-empty and the auto-created
+	// annotation must stay absent. Each tick bumps a benign retrigger label
+	// so the tunnel reconciler keeps running (otherwise needsOwnerTransfer
+	// would never be exercised — vacuity guard). Pre-Task-14 (ungated
+	// needsOwnerTransfer) the Service is promoted to controller-owner within
+	// a few reconciles and this require.Never trips.
+	require.Never(t, func() bool {
+		var tn v1alpha1.CloudflareTunnel
+		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
+			return false // transient Get error — not the failure condition
+		}
+		if len(tn.OwnerReferences) > 0 {
+			return true // operator took controller-ownership of a user's CR — §7 violation
+		}
+		if tn.Annotations[conventions.AnnotationAutoCreated] == "true" {
+			return true // operator backfilled the marker — §7 violation
+		}
+		bumpRetriggerTick(ctx, f.c, &tn)
+		return false
+	}, 10*time.Second, 250*time.Millisecond,
+		"direct-create tunnel must never acquire a controller OwnerReference (needsOwnerTransfer isAutoCreated-gated)")
+
+	// Final state: no owner refs, auto-created annotation still absent.
+	var finalTunnel v1alpha1.CloudflareTunnel
+	require.NoError(t, f.c.Get(ctx, tnKey, &finalTunnel))
+	require.Empty(t, finalTunnel.OwnerReferences,
+		"direct-create tunnel must end with zero OwnerReferences")
+	require.NotEqual(t, "true", finalTunnel.Annotations[conventions.AnnotationAutoCreated],
+		"adopt path must not backfill the auto-created annotation")
+}
+
 // TestEnvtest_CascadeGC_OwnerTransfer pins the cascade-GC owner-transfer
 // contract (design §8.2) against a real apiserver: two annotated Services
 // share one auto-created CloudflareTunnel; deleting the Service that owns the
