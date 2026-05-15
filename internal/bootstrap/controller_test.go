@@ -19,6 +19,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -162,6 +163,22 @@ func TestReconcile_TunnelDisabled_DeletesTunnelDeployment(t *testing.T) {
 	var dep appsv1.Deployment
 	err = c.Get(context.Background(), types.NamespacedName{Name: "cloudflare-tunnel-controller", Namespace: "cf"}, &dep)
 	require.True(t, apierrors.IsNotFound(err), "tunnel Deployment should be deleted: %v", err)
+}
+
+func TestBundleMembership_MatchesBundleKinds(t *testing.T) {
+	for _, b := range AllBundles() {
+		gvks := bundleKinds(b)
+		files := bundleMembership(b)
+		require.Equal(t, len(gvks), len(files),
+			"bundle %s: gvks count %d != filenames count %d", b, len(gvks), len(files))
+		// Spot-check that derivation matches the expected on-disk pattern.
+		for i, gvk := range gvks {
+			expected := "crds/" + gvk.Group + "_" + strings.ToLower(gvk.Kind) + "s.yaml"
+			require.Equal(t, expected, files[i],
+				"bundle %s: expected filename %q for kind %s, got %q",
+				b, expected, gvk.Kind, files[i])
+		}
+	}
 }
 
 func TestReconcile_StaleCRSweep_OnDisable(t *testing.T) {
