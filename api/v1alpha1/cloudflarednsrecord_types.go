@@ -18,6 +18,23 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+// RecordMode controls operator write behavior on a CloudflareDNSRecord.
+// +kubebuilder:validation:Enum=Managed;Observe
+type RecordMode string
+
+const (
+	// RecordModeManaged is the default. The operator creates / updates /
+	// deletes the underlying Cloudflare record and TXT companion as needed.
+	RecordModeManaged RecordMode = "Managed"
+
+	// RecordModeObserve means the operator reads Cloudflare state and
+	// populates Status, but never writes. Spec.Adopt has no effect. Useful
+	// for verifying state before promoting to Managed (which would
+	// otherwise refuse adoption without a matching TXT companion under
+	// design §2 Q2's no-silent-backfill rule).
+	RecordModeObserve RecordMode = "Observe"
+)
+
 // CloudflareDNSRecordSpec defines the desired state of a Cloudflare DNS record.
 type CloudflareDNSRecordSpec struct {
 	// ZoneID is the Cloudflare Zone ID. Mutually exclusive with ZoneRef.
@@ -73,6 +90,17 @@ type CloudflareDNSRecordSpec struct {
 	// managed by another source.
 	// +optional
 	Adopt bool `json:"adopt,omitempty"`
+
+	// Mode controls operator write behavior on this record.
+	// Default Managed: operator creates / updates / deletes the underlying
+	// Cloudflare record and TXT companion as needed.
+	// Observe: operator reads but never writes. Useful for verifying state
+	// before claiming a record under Adopt:true (which would otherwise
+	// refuse without a matching TXT companion).
+	// +kubebuilder:validation:Enum=Managed;Observe
+	// +kubebuilder:default=Managed
+	// +optional
+	Mode RecordMode `json:"mode,omitempty"`
 
 	// Cloudflare overrides the top-level credential + account from the
 	// CloudflareOperator CR. Per Foundation §5 the token and accountID are
