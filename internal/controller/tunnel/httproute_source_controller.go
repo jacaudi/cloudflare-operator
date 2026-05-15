@@ -191,7 +191,7 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 
 	// Emit per-Route DNSRecord CRs: CNAME <hostname> → <gateway-apex>.
 	for _, h := range rt.Spec.Hostnames {
-		if err := r.emitChainDNSRecord(ctx, &rt, string(h), gwApex); err != nil {
+		if err := r.emitChainDNSRecord(ctx, &rt, string(h), gwApex, gw); err != nil {
 			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", h, err)
 		}
 	}
@@ -287,18 +287,23 @@ func firstListenerHostname(gw *gwv1.Gateway) string {
 // emitChainDNSRecord upserts the chain CloudflareDNSRecord CR (route
 // hostname → Gateway apex) for this HTTPRoute + hostname pair via the
 // shared SSA-based helper. Annotation drift (cloudflare.io/adopt,
-// cloudflare.io/zone-ref) propagates to the emitted CR because
+// cloudflare.io/zone-ref, etc.) propagates to the emitted CR because
 // EmitDNSRecord uses SSA.
+//
+// cloudflare.io/* annotations are merged via inheritedAnnotations: the
+// route's own value wins when set; missing values fall through to the
+// parent Gateway. This implements the per-route override / per-gateway
+// default pattern from design §5.
 //
 // Operator-edits-win: a user `kubectl edit` on the emitted CR will be
 // reverted on the next reconcile.
-func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, gwApex string) error {
+func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, gwApex string, gw *gwv1.Gateway) error {
 	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
 		Owner:       rt,
 		OwnerKind:   "HTTPRoute",
 		Hostname:    hostname,
 		Content:     gwApex,
-		Annotations: rt.GetAnnotations(),
+		Annotations: inheritedAnnotations(rt.GetAnnotations(), gw),
 	})
 }
 
