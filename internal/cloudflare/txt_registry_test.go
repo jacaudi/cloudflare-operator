@@ -150,3 +150,36 @@ func TestAESCodec_RejectsMalformedV1Format(t *testing.T) {
 func TestAESCodec_KindIsAESGCM(t *testing.T) {
 	require.Equal(t, "aes-gcm", aesCodec{key: makeKey(t, 1)}.Kind())
 }
+
+func TestAutoDetectingCodec_DispatchesPlaintext(t *testing.T) {
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	encoded, _ := plaintextCodec{}.Encode(RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"})
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "X", got.K)
+}
+
+func TestAutoDetectingCodec_DispatchesAESWhenKeyPresent(t *testing.T) {
+	aesC := aesCodec{key: makeKey(t, 1)}
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: &aesC}
+	encoded, _ := aesC.Encode(RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"})
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "X", got.K)
+}
+
+func TestAutoDetectingCodec_RefusesEncryptedWithoutKey(t *testing.T) {
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	_, err := c.Decode("v1:ANY:THING")
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "encrypted input with no key configured must surface unrecognized")
+}
+
+func TestAutoDetectingCodec_EncodePanics(t *testing.T) {
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	require.Panics(t, func() { _, _ = c.Encode(RegistryPayload{V: 1}) },
+		"autoDetectingCodec is read-only; callers must use the explicit encoder")
+}
+
+func TestAutoDetectingCodec_KindIsAutoDetect(t *testing.T) {
+	require.Equal(t, "auto-detect", autoDetectingCodec{}.Kind())
+}

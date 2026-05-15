@@ -77,10 +77,9 @@ func AffixName(prefix, name string) string {
 var ErrUnrecognizedCodec = errors.New("txt registry: unrecognized codec or malformed payload")
 
 // Codec encodes/decodes a RegistryPayload to/from a TXT record's content
-// string. Current implementations: plaintextCodec (bare JSON; default) and
-// aesCodec (v1:<nonce>:<ciphertext> AES-256-GCM; opt-in via key Secret).
-// A read-side auto-detecting decoder that dispatches across both formats is
-// added separately.
+// string. Implementations: plaintextCodec (bare JSON; default),
+// aesCodec (v1:<nonce>:<ciphertext> AES-256-GCM; opt-in via key Secret),
+// autoDetectingCodec (read-side dispatcher; sniffs the v1: prefix, no Encode).
 type Codec interface {
 	Encode(payload RegistryPayload) (string, error)
 	Decode(s string) (RegistryPayload, error)
@@ -188,3 +187,30 @@ func (c aesCodec) Decode(s string) (RegistryPayload, error) {
 }
 
 func (aesCodec) Kind() string { return "aes-gcm" }
+
+// autoDetectingCodec is the read-side wrapper for Decode. It sniffs the
+// "v1:" prefix: present + aes!=nil → aesCodec; otherwise → plaintextCodec.
+// Encode is not supported (panics) — the reconciler must use the explicit
+// configured encoder based on whether a key Secret is loaded.
+type autoDetectingCodec struct {
+	plain plaintextCodec
+	aes   *aesCodec
+}
+
+var _ Codec = autoDetectingCodec{}
+
+func (c autoDetectingCodec) Decode(s string) (RegistryPayload, error) {
+	if strings.HasPrefix(s, "v1:") {
+		if c.aes == nil {
+			return RegistryPayload{}, fmt.Errorf("auto-detect: %w: v1: input but no key configured", ErrUnrecognizedCodec)
+		}
+		return c.aes.Decode(s)
+	}
+	return c.plain.Decode(s)
+}
+
+func (autoDetectingCodec) Encode(_ RegistryPayload) (string, error) {
+	panic("autoDetectingCodec.Encode: use the explicitly configured codec")
+}
+
+func (autoDetectingCodec) Kind() string { return "auto-detect" }
