@@ -217,8 +217,9 @@ func getSourceObject(src v1alpha1.AttachedSource) (client.Object, error) {
 }
 
 // TransferOwnershipIfNeeded promotes the lex-smallest LIVE remaining source in
-// tn.Status.AttachedSources to be the new controller-owner of tn, via an
-// optimistic-locked client.MergeFrom Patch. See design §4.2.
+// tn.Status.AttachedSources to be the new controller-owner of tn, via a
+// MergeFromWithOptimisticLock Patch that carries tn.ResourceVersion so the
+// apiserver rejects a stale Patch with 409 Conflict. See design §4.2.
 //
 // Candidates are sorted lexicographically by (Kind, Namespace, Name) and
 // probed up to transferOwnershipMaxAttempts. For each candidate a fresh typed
@@ -232,10 +233,12 @@ func getSourceObject(src v1alpha1.AttachedSource) (client.Object, error) {
 //     is updated so the caller observes the post-patch state.
 //   - (false, nil) — either every candidate was NotFound/terminating (the next
 //     reconcile retries once state stabilizes), OR the Patch hit a
-//     ResourceVersion Conflict (the optimistic-lock contract — the next
-//     reconcile retries with a fresh RV). Neither is an error.
+//     ResourceVersion Conflict (stale RV — the next reconcile retries with a
+//     fresh ResourceVersion). Neither is an error.
 //   - (false, err) — an unexpected error (unknown kind, non-Conflict Patch
-//     failure, owner-ref construction failure).
+//     failure, owner-ref construction failure). Cross-namespace attachers (a
+//     source in a different namespace than the tunnel CR) also surface here via
+//     SetControllerReference's namespace-mismatch guard and are out of scope.
 //
 // Owner-ref construction reuses reconcile.SetControllerOwner
 // (controllerutil.SetControllerReference) rather than a hand-built
@@ -292,7 +295,7 @@ func TransferOwnershipIfNeeded(
 		if err := reconcilelib.SetControllerOwner(live, patched, scheme); err != nil {
 			return false, fmt.Errorf("set controller owner %s/%s/%s: %w", cand.Kind, cand.Namespace, cand.Name, err)
 		}
-		if err := c.Patch(ctx, patched, client.MergeFrom(tn)); err != nil {
+		if err := c.Patch(ctx, patched, client.MergeFromWithOptions(tn, client.MergeFromWithOptimisticLock{})); err != nil {
 			if apierrors.IsConflict(err) {
 				// Optimistic-lock contract: stale RV. The next reconcile
 				// retries with a fresh ResourceVersion. NOT an error.
