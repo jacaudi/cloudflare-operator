@@ -75,6 +75,13 @@ func EnvCredentials() (cloudflare.Credentials, bool) {
 //
 // Per-CR override wins; env-var default is the fallback. Both controllers
 // (zone, tunnel) use this helper at the top of every reconcile.
+//
+// API-shape note: this function's callees deliberately differ. LoadCredentials
+// returns (creds, *ctrl.Result, error) — the reconcile-loop idiom where a
+// missing Secret produces a halt result, not an error. EnvCredentials returns
+// (creds, bool) — the process-startup idiom where a missing env var is just
+// "no default available", not a halt condition. The shapes match their
+// callers' control flow; do not harmonize without a use case.
 func LoadCredentialsHierarchical(
 	ctx context.Context,
 	c client.Client,
