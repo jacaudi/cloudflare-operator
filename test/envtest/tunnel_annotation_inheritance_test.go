@@ -39,17 +39,17 @@ import (
 // Gateway's value.
 //
 // Gotchas pre-empted (per project Phase 3 execution lessons):
-//  - DNSRecord admission has CEL "has(zoneID) || has(zoneRef)": the fixture
-//    creates a CloudflareZone CR and sets cloudflare.io/zone-ref on the Gateway
-//    so every emitted DNSRecord carries a valid zoneRef. Routes omit zone-ref
-//    deliberately — they must inherit it from the Gateway.
-//  - Tunnel Status.TunnelCNAME must populate before the HTTPRoute is created
-//    so the HTTPRoute reconciler's deferred-emission guard never fires. The
-//    fixture waits for this before creating the route (mirrors
-//    createGatewayForRouteTest in httproute_source_envtest_test.go).
-//  - setupHTTPRouteEnv is reused without modification — all reconcilers
-//    (Gateway, Tunnel, HTTPRoute sources) are wired and share one
-//    tunnelsynth.Cache, identical to the existing HTTPRoute envtests.
+//   - DNSRecord admission has CEL "has(zoneID) || has(zoneRef)": the fixture
+//     creates a CloudflareZone CR and sets cloudflare.io/zone-ref on the Gateway
+//     so every emitted DNSRecord carries a valid zoneRef. Routes omit zone-ref
+//     deliberately — they must inherit it from the Gateway.
+//   - Tunnel Status.TunnelCNAME must populate before the HTTPRoute is created
+//     so the HTTPRoute reconciler's deferred-emission guard never fires. The
+//     fixture waits for this before creating the route (mirrors
+//     createGatewayForRouteTest in httproute_source_envtest_test.go).
+//   - setupHTTPRouteEnv is reused without modification — all reconcilers
+//     (Gateway, Tunnel, HTTPRoute sources) are wired and share one
+//     tunnelsynth.Cache, identical to the existing HTTPRoute envtests.
 func TestEnvtest_HTTPRoute_InheritsAdoptFromGateway(t *testing.T) {
 	if sharedConfig == nil {
 		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")

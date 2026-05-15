@@ -27,4 +27,3 @@ import (
 func SetControllerOwner(owner, child client.Object, scheme *runtime.Scheme) error {
 	return controllerutil.SetControllerReference(owner, child, scheme)
 }
-
