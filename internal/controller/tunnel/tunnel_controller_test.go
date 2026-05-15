@@ -19,7 +19,9 @@ package tunnel
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -29,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -672,6 +675,100 @@ func TestReconcile_OwnerTransferPromotesLexSmallest(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Len(t, got.OwnerReferences, 1)
 	require.Equal(t, "b-svc", got.OwnerReferences[0].Name)
+}
+
+func TestReconcile_OrphanStateFirstObservation_StampsLastOrphanedAt(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Spec:   v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: nil}, // empty -> orphan
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+	var got v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.NotNil(t, got.Status.LastOrphanedAt, "first orphan observation must stamp LastOrphanedAt")
+	require.Greater(t, res.RequeueAfter, time.Duration(0), "should requeue after grace")
+	require.LessOrEqual(t, res.RequeueAfter, pendingDeletionGrace+1*time.Second, "requeue near grace window")
+}
+
+func TestReconcile_OrphanStateGraceElapsed_SelfDeletes(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+	staleStamp := metav1.NewTime(time.Now().Add(-(pendingDeletionGrace + 5*time.Second)))
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Spec:   v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v1alpha1.CloudflareTunnelStatus{LastOrphanedAt: &staleStamp},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(10)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+	var got v1alpha1.CloudflareTunnel
+	gerr := c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got)
+	if gerr == nil {
+		require.NotNil(t, got.DeletionTimestamp, "self-delete must have set DeletionTimestamp")
+	} else {
+		require.True(t, apierrors.IsNotFound(gerr), "CR may already be deleted: %v", gerr)
+	}
+	foundTerminal := false
+drain:
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, conventions.ReasonTerminalNoSources) {
+				foundTerminal = true
+			}
+		default:
+			break drain
+		}
+	}
+	require.True(t, foundTerminal, "expected TerminalNoSources event before self-delete")
+}
+
+func TestReconcile_OrphanStateClearedOnSourceReattach(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+	stamp := metav1.NewTime(time.Now())
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
+			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "svc", UID: "uid-svc", APIVersion: "v1", Controller: ptr.To(true)}},
+		},
+		Spec: v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			LastOrphanedAt:  &stamp,
+			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Namespace: "ns", Name: "svc"}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svc).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+	var got v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Nil(t, got.Status.LastOrphanedAt, "source reattach must clear LastOrphanedAt")
 }
 
 // containsAll returns true when s contains every substring.
