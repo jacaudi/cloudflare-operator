@@ -70,6 +70,16 @@ const (
 	AnnotationAdopt   = "cloudflare.io/adopt"
 )
 
+// Tunnel auto-management family. Applied to CloudflareTunnel CRs themselves.
+const (
+	// AnnotationAutoCreated is stamped on CloudflareTunnel CRs that were created
+	// by EnsureTunnelCR (i.e., annotation-driven auto-creation from a Service /
+	// Gateway / HTTPRoute / TLSRoute opt-in). Direct-create CRs (user
+	// `kubectl apply`) lack this annotation and are never subject to auto-GC.
+	// Immutable after the create.
+	AnnotationAutoCreated = "cloudflare.io/auto-created"
+)
+
 // ErrUnrecognizedTruthy is returned by ParseTruthy for values outside the
 // accepted vocabulary.
 var ErrUnrecognizedTruthy = errors.New("unrecognized truthy value")

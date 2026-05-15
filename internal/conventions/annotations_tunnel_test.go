@@ -46,6 +46,10 @@ func TestAnnotation_Shared(t *testing.T) {
 	require.Equal(t, "cloudflare.io/adopt", AnnotationAdopt)
 }
 
+func TestAnnotation_TunnelAutoMgmtFamily(t *testing.T) {
+	require.Equal(t, "cloudflare.io/auto-created", AnnotationAutoCreated)
+}
+
 func TestParseTruthy_Cases(t *testing.T) {
 	cases := []struct {
 		in   string
