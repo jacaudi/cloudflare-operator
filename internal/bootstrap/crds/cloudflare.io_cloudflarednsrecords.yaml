@@ -147,13 +147,6 @@ spec:
                 description: Interval is the reconciliation interval for drift detection.
                 type: string
               mode:
-                allOf:
-                - enum:
-                  - Managed
-                  - Observe
-                - enum:
-                  - Managed
-                  - Observe
                 default: Managed
                 description: |-
                   Mode controls operator write behavior on this record.
@@ -162,6 +155,9 @@ spec:
                   Observe: operator reads but never writes. Useful for verifying state
                   before claiming a record under Adopt:true (which would otherwise
                   refuse without a matching TXT companion).
+                enum:
+                - Managed
+                - Observe
                 type: string
               name:
                 description: Name is the DNS record name (e.g., "example.com", "sub.example.com").

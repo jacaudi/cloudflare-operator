@@ -97,7 +97,6 @@ type CloudflareDNSRecordSpec struct {
 	// Observe: operator reads but never writes. Useful for verifying state
 	// before claiming a record under Adopt:true (which would otherwise
 	// refuse without a matching TXT companion).
-	// +kubebuilder:validation:Enum=Managed;Observe
 	// +kubebuilder:default=Managed
 	// +optional
 	Mode RecordMode `json:"mode,omitempty"`
