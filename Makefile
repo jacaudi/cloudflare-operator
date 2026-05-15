@@ -18,6 +18,15 @@ generate: tools
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=internal/bootstrap/crds
 	# Copy CRD YAML to chart for the CloudflareOperator only
 	-cp internal/bootstrap/crds/cloudflare.io_cloudflareoperators.yaml chart/cloudflare-operator/templates/crd.yaml
+	# Inject helm.sh/resource-policy: keep annotation to preserve CRD on helm uninstall
+	@if ! grep -q "helm.sh/resource-policy" chart/cloudflare-operator/templates/crd.yaml; then \
+		awk '/controller-gen\.kubebuilder\.io\/version:/ {print $$0; print "    helm.sh/resource-policy: keep"; next} {print}' \
+			chart/cloudflare-operator/templates/crd.yaml > chart/cloudflare-operator/templates/crd.yaml.tmp && \
+		mv chart/cloudflare-operator/templates/crd.yaml.tmp chart/cloudflare-operator/templates/crd.yaml; \
+		echo "Added helm.sh/resource-policy annotation"; \
+	else \
+		echo "helm.sh/resource-policy annotation already present"; \
+	fi
 
 .PHONY: test
 test: tools
