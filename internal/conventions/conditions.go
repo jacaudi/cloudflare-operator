@@ -129,6 +129,12 @@ const (
 	ReasonConnectionsDraining = "ConnectionsDraining"
 	ReasonNoConnectors        = "NoConnectors"
 	ReasonOwnerTransferred    = "OwnerTransferred"
+	// ReasonTerminalNoSources marks an auto-created CloudflareTunnel CR that
+	// has no remaining attaching sources and no owner. After the pending-
+	// deletion grace window (60s) elapses, the reconciler self-deletes the CR.
+	// Emitted as a Warning Event before the Delete; also used as the Ready=
+	// False reason in the brief pre-delete window.
+	ReasonTerminalNoSources = "TerminalNoSources"
 
 	// Source-object reasons (Service, Gateway, HTTPRoute, TLSRoute).
 	ReasonTunnelAttached            = "TunnelAttached"
@@ -161,6 +167,7 @@ func TunnelReasons() []string {
 		ReasonConnectionsDraining,
 		ReasonNoConnectors,
 		ReasonOwnerTransferred,
+		ReasonTerminalNoSources,
 		ReasonTunnelAttached,
 		ReasonUnsupportedValue,
 		ReasonIncompatibleFilters,
