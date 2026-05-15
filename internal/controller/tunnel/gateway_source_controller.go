@@ -24,7 +24,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,7 +33,6 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
-	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
@@ -269,46 +267,21 @@ func listenerHostnames(gw *gwv1.Gateway) []string {
 	return out
 }
 
-// emitDNSRecord creates (idempotently) a CloudflareDNSRecord CR for one
-// Gateway listener hostname, owner-reffed to the Gateway and stamped with
-// source labels. The CR name uses the same hash-suffixed scheme as the
-// Service source reconciler (emittedDNSRecordName helper) so we never collide
-// across alias hostnames or get truncated into a clash.
+// emitDNSRecord upserts the CloudflareDNSRecord CR for this Gateway +
+// hostname pair via the shared SSA-based helper. Annotation drift
+// (cloudflare.io/adopt, cloudflare.io/zone-ref) propagates to the emitted
+// CR because EmitDNSRecord uses SSA.
 //
-// Per spec 2 contract:
-//   - spec.zoneRef.name (resolved by the zone reconciler) when
-//     cloudflare.io/zone-ref is set on the Gateway — never spec.zoneID
-//   - spec.type = CNAME
-//   - spec.name = hostname
-//   - spec.content = tunnel CNAME (caller guards non-empty)
-//   - spec.adopt threaded from cloudflare.io/adopt
+// Operator-edits-win: a user `kubectl edit` on the emitted CR will be
+// reverted on the next reconcile.
 func (r *GatewaySourceReconciler) emitDNSRecord(ctx context.Context, gw *gwv1.Gateway, hostname string, tn *v1alpha1.CloudflareTunnel) error {
-	content := tn.Status.TunnelCNAME // copy so we can take its address
-	dr := &v1alpha1.CloudflareDNSRecord{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      emittedDNSRecordName(gw.Name, hostname),
-			Namespace: gw.Namespace,
-		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
-			Type:    "CNAME",
-			Name:    hostname,
-			Content: &content,
-		},
-	}
-	reconcilelib.StampSourceLabels(dr, "Gateway", gw.Name, gw.Namespace)
-	if err := reconcilelib.SetControllerOwner(gw, dr, r.Scheme); err != nil {
-		return err
-	}
-	if zr := gw.Annotations[conventions.AnnotationZoneRef]; zr != "" {
-		dr.Spec.ZoneRef = &v1alpha1.ZoneReference{Name: zr, Namespace: gw.Namespace}
-	}
-	if adopt, _ := conventions.ParseTruthy(gw.Annotations[conventions.AnnotationAdopt]); adopt {
-		dr.Spec.Adopt = true
-	}
-	if err := r.Create(ctx, dr); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
+		Owner:       gw,
+		OwnerKind:   "Gateway",
+		Hostname:    hostname,
+		Content:     tn.Status.TunnelCNAME,
+		Annotations: gw.GetAnnotations(),
+	})
 }
 
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)

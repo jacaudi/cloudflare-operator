@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
@@ -104,8 +105,9 @@ func TestGatewaySource_HappyPath(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-gw-ns-edge", "gw-ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
@@ -151,8 +153,9 @@ func TestGatewaySource_AutoCreateStampsSourceLabels(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gw", Namespace: "gw-ns"},
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(),
@@ -177,7 +180,8 @@ func TestGatewaySource_OptOut_ClearsCache(t *testing.T) {
 		},
 		Spec: gwv1.GatewaySpec{},
 	}
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	// Pre-populate a stale entry for this source.
 	cache.Set(tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns"},
@@ -204,8 +208,9 @@ func TestGatewaySource_NoGatewayServiceAnnotation_RejectsWithEvent(t *testing.T)
 		},
 		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{gwListener("h", "h.example.com", 80, gwv1.HTTPProtocolType)}},
 	}
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(8)
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
@@ -239,7 +244,8 @@ func TestGatewaySource_NoListenerHostname_RejectsWithEvent(t *testing.T) {
 		},
 		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{{Name: "n", Port: 80, Protocol: gwv1.HTTPProtocolType}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(8)
 	r := &GatewaySourceReconciler{Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec}
 
@@ -261,8 +267,9 @@ func TestGatewaySource_MultipleListenerHostnames(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -295,8 +302,9 @@ func TestGatewaySource_TunnelCNAMEEmpty_DefersEmission(t *testing.T) {
 		},
 		// No Status.TunnelCNAME.
 	}
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, tn).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -321,8 +329,9 @@ func TestGatewaySource_AnnotationPortOverride(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -344,8 +353,9 @@ func TestGatewaySource_FallsBackToServiceFirstPort(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 8080}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -387,8 +397,9 @@ func TestGatewaySource_AllTLSListeners_RegistersEmptyContribs(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -429,8 +440,9 @@ func TestGatewaySource_UnsupportedProtocol_EmitsEvent(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(16)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
@@ -481,8 +493,9 @@ func TestGatewaySource_HTTPSScheme(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -506,8 +519,9 @@ func TestGatewaySource_AnnotationChangeSweepsPriorKey(t *testing.T) {
 	}
 	tnA := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	tnB := gwPreCreatedTunnel("cf-ns-billing", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, tnA, tnB).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, tnA, tnB).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -538,8 +552,9 @@ func TestGatewaySource_GatewayDeletedSweepsCache(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
@@ -566,8 +581,9 @@ func TestGatewaySource_ZoneRefAndAdoptThreaded(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(),
 		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
@@ -587,7 +603,8 @@ func TestGatewaySource_ZoneRefAndAdoptThreaded(t *testing.T) {
 func TestGatewaySource_InvalidName_StatusEventOnly(t *testing.T) {
 	gw := mkGw("gw", "ns", "ns/gw-svc", []string{"a.example.com"})
 	gw.Annotations[conventions.AnnotationTunnelName] = "Invalid_Name" // uppercase + underscore
-	c := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(8)
 	r := &GatewaySourceReconciler{Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec}
 
