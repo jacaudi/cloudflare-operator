@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -188,4 +189,133 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 	require.Len(t, final.OwnerReferences, 1)
 	require.Equal(t, survivor, final.OwnerReferences[0].Name,
 		"surviving Service must be the new controller-owner")
+}
+
+// TestEnvtest_CascadeGC_LastSourceSelfDelete pins the cascade-GC self-delete
+// contract (design §8.2) against a real apiserver: a single annotated Service
+// creates an auto-created CloudflareTunnel; the Service is deleted; after the
+// (harness-overridden, 3-second) grace window the tunnel CR self-deletes — the
+// production reconciler stamps LastOrphanedAt, drains via the finalizer path,
+// and the CR disappears.
+//
+// Harness-fidelity notes inherited from TestEnvtest_CascadeGC_OwnerTransfer:
+//
+//   - Derived tunnel name: "cf-<ns>-<tunnel-name>" (same inline template).
+//
+//   - No garbage collector in envtest. Deleting the only Service leaves a
+//     dangling ownerReference on the tunnel CR. isOrphaned requires
+//     len(OwnerReferences)==0 && len(AttachedSources)==0, so the test emulates
+//     real-cluster GC by stripping the dead owner's ref via the same
+//     conflict-tolerant Eventually loop Task 10 established. The strip only
+//     removes that ownerRef — stamping LastOrphanedAt, respecting the grace
+//     window, emitting the Warning, and self-deleting are all production code.
+//
+//   - Short grace. setupServiceEnv sets PendingDeletionGrace to 3s on the tunnel
+//     reconciler, so the two-tick orphan window is ~3s, not the default 60s.
+func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	f := setupServiceEnv(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// CloudflareZone scaffold — DNSRecord admission CEL requires has(zoneID)||has(zoneRef);
+	// the Service carries cloudflare.io/zone-ref so emitted DNSRecords pass admission.
+	zone := &v1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
+		Spec: v1alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, zone))
+
+	// A single Service — the only source for this tunnel.
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "solo-svc", Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "solo-tnl",
+				conventions.AnnotationHostnames:  "solo.example.com",
+				conventions.AnnotationZoneRef:    "example-com",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, svc))
+
+	// DeriveTunnelName template: "cf-<ns>-<tunnel-name>".
+	tnName := "cf-" + f.ns + "-solo-tnl"
+	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
+
+	// Wait for the auto-created tunnel owned by solo-svc.
+	require.Eventually(t, func() bool {
+		var tn v1alpha1.CloudflareTunnel
+		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
+			return false
+		}
+		return tn.Annotations[conventions.AnnotationAutoCreated] == "true" &&
+			len(tn.OwnerReferences) == 1 && tn.OwnerReferences[0].Name == "solo-svc"
+	}, 45*time.Second, 250*time.Millisecond,
+		"auto-created tunnel must appear owned by solo-svc")
+
+	// Delete the only source.
+	require.NoError(t, f.c.Delete(ctx, svc))
+
+	// Emulate real-cluster GC: strip the dangling solo-svc ownerReference from
+	// the tunnel CR so the production isOrphaned path can fire (envtest has no
+	// kube-controller-manager). This is a Tunnel CR write, which retriggers the
+	// Tunnel reconciler; observeAttachedSources will also have emptied
+	// AttachedSources once the Service-source reconciler processes the deletion.
+	// The strip only removes the dead owner's ref — the production reconciler is
+	// responsible for stamping LastOrphanedAt, waiting the grace window, and
+	// self-deleting. Conflict-tolerant: stale ResourceVersion just retries.
+	require.Eventually(t, func() bool {
+		var tn v1alpha1.CloudflareTunnel
+		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
+			return false // tunnel not yet visible or already gone
+		}
+		// No dangling ref remaining — strip is complete.
+		if len(tn.OwnerReferences) == 0 {
+			return true
+		}
+		// Still carries the dead owner's ref — remove it (GC emulation).
+		kept := tn.OwnerReferences[:0]
+		for _, or := range tn.OwnerReferences {
+			if or.Name != "solo-svc" {
+				kept = append(kept, or)
+			}
+		}
+		tn.OwnerReferences = kept
+		_ = f.c.Update(ctx, &tn) // conflict => retried next tick
+		return false
+	}, 30*time.Second, 250*time.Millisecond,
+		"dangling solo-svc ownerReference must be stripped (GC emulation)")
+
+	// Production stamps LastOrphanedAt on the first orphan observation
+	// (len(OwnerReferences)==0 && len(AttachedSources)==0 && auto-created==true).
+	require.Eventually(t, func() bool {
+		var tn v1alpha1.CloudflareTunnel
+		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
+			return false
+		}
+		return tn.Status.LastOrphanedAt != nil
+	}, 30*time.Second, 250*time.Millisecond,
+		"LastOrphanedAt must be stamped on first orphan observation")
+
+	// After the 3-second grace elapses the production reconciler emits Warning
+	// ReasonTerminalNoSources, sets Ready=False, calls r.Delete (which sets a
+	// DeletionTimestamp on the CR), then reconcileDelete drains via the mock
+	// TunnelClient and drops the finalizer. The CR vanishes entirely.
+	require.Eventually(t, func() bool {
+		var tn v1alpha1.CloudflareTunnel
+		err := f.c.Get(ctx, tnKey, &tn)
+		return apierrors.IsNotFound(err)
+	}, 45*time.Second, 250*time.Millisecond,
+		"auto-created tunnel must self-delete after grace window + drain")
 }
