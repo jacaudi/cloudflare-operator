@@ -88,6 +88,22 @@ type CloudflareTunnelReconciler struct {
 	// DefaultImage is the operator's compile-time pinned cloudflared image.
 	// Used as the default for spec.connector.image's unset half.
 	DefaultImage string
+
+	// PendingDeletionGrace overrides the cascade-GC two-tick grace window.
+	// Zero (the default) means use the pendingDeletionGrace constant (60s).
+	// Operator/test hook — envtests set a short value to keep runtime sane.
+	PendingDeletionGrace time.Duration
+}
+
+// gracePeriod returns the cascade-GC two-tick confirmation window: the
+// PendingDeletionGrace override when set to a positive value, otherwise the
+// pendingDeletionGrace constant (60s). Centralizing the fallback keeps the
+// orphan-state block below reading a single value per reconcile.
+func (r *CloudflareTunnelReconciler) gracePeriod() time.Duration {
+	if r.PendingDeletionGrace > 0 {
+		return r.PendingDeletionGrace
+	}
+	return pendingDeletionGrace
 }
 
 // +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflaretunnels,verbs=get;list;watch;create;update;patch;delete
@@ -191,6 +207,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Orphan-state management (design §4.1 step 10). Only auto-created CRs are
 	// eligible for cascade-GC; direct-create CRs are never auto-removed.
 	if isAutoCreated(&tn) {
+		grace := r.gracePeriod()
 		if isOrphaned(&tn) {
 			switch {
 			case tn.Status.LastOrphanedAt == nil:
@@ -199,12 +216,12 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				// Requeue after the grace window for the confirmation tick.
 				now := metav1.Now()
 				tn.Status.LastOrphanedAt = &now
-				pendingRequeueAfter = pendingDeletionGrace
-			case time.Since(tn.Status.LastOrphanedAt.Time) >= pendingDeletionGrace:
+				pendingRequeueAfter = grace
+			case time.Since(tn.Status.LastOrphanedAt.Time) >= grace:
 				// Two-tick confirmed: still orphaned past the grace window.
 				if r.Recorder != nil {
 					r.Recorder.Eventf(&tn, corev1.EventTypeWarning, conventions.ReasonTerminalNoSources,
-						"no remaining sources after %s; self-deleting", pendingDeletionGrace)
+						"no remaining sources after %s; self-deleting", grace)
 				}
 				tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
 					conventions.ReasonTerminalNoSources, "auto-created tunnel has no remaining sources")
@@ -217,7 +234,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				return ctrl.Result{}, nil
 			default:
 				// Within grace: requeue when the remaining window elapses.
-				pendingRequeueAfter = pendingDeletionGrace - time.Since(tn.Status.LastOrphanedAt.Time)
+				pendingRequeueAfter = grace - time.Since(tn.Status.LastOrphanedAt.Time)
 			}
 		} else if tn.Status.LastOrphanedAt != nil {
 			// State moved away from orphaned (source attached / owner
