@@ -40,7 +40,14 @@ func NewClient(creds Credentials) (*Client, error) {
 	if creds.AccountID == "" {
 		return nil, fmt.Errorf("accountID required")
 	}
-	cf := cfgo.NewClient(option.WithAPIToken(creds.Token))
+	// MaxRetries caps the SDK's internal retry budget (default 10) to 3 so a
+	// stuck Cloudflare endpoint fails fast and lets controller-runtime requeue
+	// rather than blocking a reconciler worker for minutes. Retry-After
+	// honoring + 429/5xx classification remain handled by the SDK.
+	cf := cfgo.NewClient(
+		option.WithAPIToken(creds.Token),
+		option.WithMaxRetries(3),
+	)
 	return &Client{cf: cf, accountID: creds.AccountID}, nil
 }
 
