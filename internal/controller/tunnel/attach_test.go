@@ -152,6 +152,31 @@ func TestEnsureTunnelCR_StampsAutoCreatedAnnotation(t *testing.T) {
 		"newly-created tunnel CR must carry the auto-created marker")
 }
 
+func TestIsAutoCreated_AnnotationTrue(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			conventions.AnnotationAutoCreated: "true",
+		}},
+	}
+	require.True(t, isAutoCreated(tn))
+}
+
+func TestIsAutoCreated_AnnotationAbsent(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{}
+	require.False(t, isAutoCreated(tn), "absent annotation must default to direct-create (no GC)")
+}
+
+func TestIsAutoCreated_AnnotationOtherValue(t *testing.T) {
+	for _, v := range []string{"false", "", "1", "yes", "gibberish"} {
+		tn := &v1alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				conventions.AnnotationAutoCreated: v,
+			}},
+		}
+		require.False(t, isAutoCreated(tn), "value %q should NOT count as auto-created", v)
+	}
+}
+
 func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T) {
 	s := tunnelScheme(t)
 	existing := &v1alpha1.CloudflareTunnel{

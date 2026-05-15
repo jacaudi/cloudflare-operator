@@ -151,6 +151,15 @@ func EnsureTunnelCR(
 	return tn, nil
 }
 
+// isAutoCreated reports whether a CloudflareTunnel CR carries the
+// AnnotationAutoCreated marker stamped by EnsureTunnelCR on creation.
+// Strict equality with "true" — any other value (including absent,
+// empty, "yes", "1") returns false. Documented as: only CRs the operator
+// creates itself are eligible for cascade-GC.
+func isAutoCreated(tn *v1alpha1.CloudflareTunnel) bool {
+	return tn.Annotations[conventions.AnnotationAutoCreated] == "true"
+}
+
 // cacheTracker is the shared per-controller "last attached tunnel-key" index
 // used by every source reconciler. The map is mutex-guarded because
 // controller-runtime may call Reconcile concurrently from its worker pool.
