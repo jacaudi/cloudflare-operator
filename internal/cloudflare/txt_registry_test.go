@@ -56,3 +56,24 @@ func TestErrUnrecognizedCodec_Is(t *testing.T) {
 	require.ErrorIs(t, ErrUnrecognizedCodec, ErrUnrecognizedCodec)
 	require.EqualError(t, ErrUnrecognizedCodec, "txt registry: unrecognized codec or malformed payload")
 }
+
+func TestPlaintextCodec_RoundTrip(t *testing.T) {
+	c := plaintextCodec{}
+	p := RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "media", N: "root", H: "sha256:deadbeef"}
+	encoded, err := c.Encode(p)
+	require.NoError(t, err)
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, p, got)
+}
+func TestPlaintextCodec_RejectsUnknownVersion(t *testing.T) {
+	_, err := plaintextCodec{}.Decode(`{"v":99,"k":"X","ns":"y","n":"z"}`)
+	require.Error(t, err, "v=99 must be rejected")
+}
+func TestPlaintextCodec_RejectsMalformedJSON(t *testing.T) {
+	_, err := plaintextCodec{}.Decode("not-json-at-all")
+	require.Error(t, err)
+}
+func TestPlaintextCodec_KindIsPlaintext(t *testing.T) {
+	require.Equal(t, "plaintext", plaintextCodec{}.Kind())
+}

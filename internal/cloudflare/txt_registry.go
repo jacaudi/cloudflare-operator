@@ -17,7 +17,9 @@ limitations under the License.
 package cloudflare
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -68,3 +70,42 @@ func AffixName(prefix, name string) string {
 // unknown. Reconcilers should map this error to
 // Reason=AdoptRefusedNoTXT so the record is left unowned.
 var ErrUnrecognizedCodec = errors.New("txt registry: unrecognized codec or malformed payload")
+
+// Codec encodes/decodes a RegistryPayload to/from a TXT record's content
+// string. Implementations: plaintextCodec (bare JSON; default),
+// aesCodec (v1:<nonce>:<ciphertext> AES-256-GCM; opt-in via key Secret),
+// autoDetectingCodec (read-side dispatcher; sniffs the v1: prefix).
+type Codec interface {
+	Encode(payload RegistryPayload) (string, error)
+	Decode(s string) (RegistryPayload, error)
+	Kind() string
+}
+
+// plaintextCodec writes bare JSON; reads JSON OR rejects with
+// ErrUnrecognizedCodec when the input is anything else. Used when no key
+// Secret is configured (the v1alpha1 default).
+type plaintextCodec struct{}
+
+func (plaintextCodec) Encode(p RegistryPayload) (string, error) {
+	if p.V == 0 {
+		p.V = 1 // default — callers always intend v1 in v1alpha1
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return "", fmt.Errorf("plaintext encode: %w", err)
+	}
+	return string(b), nil
+}
+
+func (plaintextCodec) Decode(s string) (RegistryPayload, error) {
+	var p RegistryPayload
+	if err := json.Unmarshal([]byte(s), &p); err != nil {
+		return RegistryPayload{}, fmt.Errorf("plaintext decode: %w: %w", ErrUnrecognizedCodec, err)
+	}
+	if p.V != 1 {
+		return RegistryPayload{}, fmt.Errorf("plaintext decode: %w: unsupported schema version %d", ErrUnrecognizedCodec, p.V)
+	}
+	return p, nil
+}
+
+func (plaintextCodec) Kind() string { return "plaintext" }
