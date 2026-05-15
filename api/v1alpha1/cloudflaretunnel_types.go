@@ -218,6 +218,15 @@ type CloudflareTunnelStatus struct {
 	// reconcile (drift check + remote-config PUT, even if a no-op).
 	// +optional
 	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+
+	// LastOrphanedAt is the timestamp of the first reconcile that observed this
+	// CR as orphaned (auto-created with no OwnerReferences and an empty
+	// Status.AttachedSources). Self-delete fires only when a subsequent
+	// reconcile observes the same state past the pending-deletion grace window
+	// (60s). Cleared as soon as a source attaches or owner-transfer succeeds.
+	// Operator-managed; user edits will be reverted on the next reconcile.
+	// +optional
+	LastOrphanedAt *metav1.Time `json:"lastOrphanedAt,omitempty"`
 }
 
 // IngressEntrySnapshot is a status-only snapshot of one materialized ingress
