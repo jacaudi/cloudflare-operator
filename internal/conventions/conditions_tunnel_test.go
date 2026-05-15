@@ -28,7 +28,7 @@ func TestTunnelReasons_AllDefined(t *testing.T) {
 		// CloudflareTunnel reasons.
 		ReasonTunnelCreated, ReasonTunnelCreating, ReasonConnectorDeploying, ReasonConnectorReady,
 		ReasonRemoteConfigApplied, ReasonRemoteConfigStale, ReasonConnectionsDraining, ReasonNoConnectors,
-		ReasonOwnerTransferred,
+		ReasonOwnerTransferred, ReasonTerminalNoSources,
 		// Source-object reasons.
 		ReasonTunnelAttached, ReasonUnsupportedValue, ReasonIncompatibleFilters,
 		ReasonNoListenerHostname, ReasonClientSideClientRequired,
@@ -52,7 +52,7 @@ func TestTunnelReasons_NoDuplicatesWithBase(t *testing.T) {
 	tunnel := []string{
 		ReasonTunnelCreated, ReasonTunnelCreating, ReasonConnectorDeploying, ReasonConnectorReady,
 		ReasonRemoteConfigApplied, ReasonRemoteConfigStale, ReasonConnectionsDraining, ReasonNoConnectors,
-		ReasonOwnerTransferred, ReasonTunnelAttached, ReasonUnsupportedValue, ReasonIncompatibleFilters,
+		ReasonOwnerTransferred, ReasonTerminalNoSources, ReasonTunnelAttached, ReasonUnsupportedValue, ReasonIncompatibleFilters,
 		ReasonNoListenerHostname, ReasonClientSideClientRequired, ReasonNameTooLong, ReasonInvalidName,
 		ReasonGatewayServiceUnspecified,
 		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,

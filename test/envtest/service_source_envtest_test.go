@@ -87,6 +87,14 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 		},
 		Cache:        cache,
 		DefaultImage: tunnel.DefaultCloudflaredImage,
+		// Short cascade-GC grace so the two-tick self-delete window is
+		// seconds, not the production 60s, keeping envtest runtime sane.
+		// Shared across all setupServiceEnv callers: verified harmless —
+		// no existing caller deletes the last attaching source of an
+		// auto-created tunnel and then asserts the tunnel still exists
+		// past the grace window (they keep the source alive for the test
+		// or only assert creation/emission/prune while it persists).
+		PendingDeletionGrace: 3 * time.Second,
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflaretunnel-"+sanitizeTestName(t.Name())).
