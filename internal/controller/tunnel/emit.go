@@ -63,7 +63,10 @@ type EmitOpts struct {
 // Field ownership: this helper operates as the "cloudflare-operator" field
 // manager (per reconcile.Apply). Operator-edits-win is intentional — matches
 // Foundation's SSA convention for owned children. A user `kubectl edit` of
-// an emitted CR will be reverted on the next reconcile.
+// an emitted CR will be reverted on the next reconcile — including Spec.Adopt and
+// Spec.ZoneRef, which are re-asserted from the SOURCE object's annotations
+// (cloudflare.io/adopt, cloudflare.io/zone-ref). Toggle these on the
+// source, not on the emitted CR.
 func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme, opts EmitOpts) error {
 	content := opts.Content // local copy so we can take its address; Spec.Content is *string
 	dr := &v1alpha1.CloudflareDNSRecord{

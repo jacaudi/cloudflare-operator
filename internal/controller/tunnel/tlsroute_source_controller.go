@@ -92,7 +92,9 @@ func (r *TLSRouteSourceReconciler) ensureTracker() {
 		if r.tracker == nil {
 			r.tracker = newCacheTracker()
 		}
-		r.dedupe = newEventDedupe(0, 0)
+		if r.dedupe == nil {
+			r.dedupe = newEventDedupe(0, 0)
+		}
 	})
 }
 

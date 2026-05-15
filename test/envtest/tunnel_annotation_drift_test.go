@@ -127,4 +127,12 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 		return got.Spec.Adopt
 	}, 30*time.Second, 250*time.Millisecond,
 		"after annotation flip, Spec.Adopt must become true (silent-bug regression catch)")
+
+	// The DNSRecord must be updated in place, not recreated. A future
+	// regression that accidentally introduced delete+recreate would pass
+	// the Spec.Adopt poll but break this UID assertion.
+	var finalDR v1alpha1.CloudflareDNSRecord
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: drName}, &finalDR))
+	require.Equal(t, initialDR.UID, finalDR.UID,
+		"DNSRecord must be updated in place (UID preserved), not recreated")
 }

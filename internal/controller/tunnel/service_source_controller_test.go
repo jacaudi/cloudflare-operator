@@ -589,8 +589,8 @@ func TestEmittedDNSRecordNameDNS1123Compliant(t *testing.T) {
 // TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias verifies that two
 // hostnames which sanitize to the same prefix (because the only difference
 // is non-alphanumeric punctuation) still produce distinct CR names. Without
-// the hash suffix, the second hostname's DNSRecord would be silently dropped
-// because emitDNSRecord swallows IsAlreadyExists.
+// the hash suffix, the second hostname's DNSRecord would be
+// silently overwritten by the second SSA Apply on the same CR name.
 func TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias(t *testing.T) {
 	a := emittedDNSRecordName("svc", "foo.example.com")
 	b := emittedDNSRecordName("svc", "foo-example-com")
