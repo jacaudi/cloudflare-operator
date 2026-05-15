@@ -190,8 +190,8 @@ func TestZone_DeleteWithDelete_CallsDrainHoldFn(t *testing.T) {
 
 	var drainCalls []string
 	r := &CloudflareZoneReconciler{
-		Client: c,
-		Scheme: s,
+		Client:       c,
+		Scheme:       s,
 		ZoneClientFn: func(_ cloudflare.Credentials) (cloudflare.ZoneClient, error) { return m.Zone, nil },
 		DrainHoldFn: func(_ context.Context, zoneID string) error {
 			drainCalls = append(drainCalls, zoneID)
@@ -241,8 +241,8 @@ func TestZone_DeleteWithDelete_DrainHoldFnErrorIsLogged(t *testing.T) {
 
 	drainErr := errors.New("hold drain failed")
 	r := &CloudflareZoneReconciler{
-		Client: c,
-		Scheme: s,
+		Client:       c,
+		Scheme:       s,
 		ZoneClientFn: func(_ cloudflare.Credentials) (cloudflare.ZoneClient, error) { return m.Zone, nil },
 		DrainHoldFn: func(_ context.Context, _ string) error {
 			return drainErr

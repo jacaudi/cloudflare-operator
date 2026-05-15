@@ -35,9 +35,9 @@ func TestIndexHTTPRouteByGatewayParent_MultiParent(t *testing.T) {
 		Spec: gwv1.HTTPRouteSpec{
 			CommonRouteSpec: gwv1.CommonRouteSpec{
 				ParentRefs: []gwv1.ParentReference{
-					{Name: "gw1"},                                   // implicit Gateway kind, same ns
-					{Name: "gw2", Namespace: gwv1NS("ns-b")},        // explicit cross-ns
-					{Name: "svc", Kind: gwv1Kind("Service")},        // non-Gateway → skipped
+					{Name: "gw1"},                            // implicit Gateway kind, same ns
+					{Name: "gw2", Namespace: gwv1NS("ns-b")}, // explicit cross-ns
+					{Name: "svc", Kind: gwv1Kind("Service")}, // non-Gateway → skipped
 				},
 			},
 		},
