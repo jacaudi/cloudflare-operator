@@ -214,3 +214,26 @@ func (autoDetectingCodec) Encode(_ RegistryPayload) (string, error) {
 }
 
 func (autoDetectingCodec) Kind() string { return "auto-detect" }
+
+// --- Exported constructors for reconciler use ---
+
+// NewPlaintextCodec returns the plaintext codec for reconciler use.
+func NewPlaintextCodec() Codec { return plaintextCodec{} }
+
+// NewAESCodec returns an AES-256-GCM codec for the given 32-byte key.
+func NewAESCodec(key [32]byte) Codec { return aesCodec{key: key} }
+
+// NewAutoDetectingCodec returns the read-side dispatcher. Pass the AES codec
+// (may be nil) to enable v1: dispatch; plaintext is always available.
+// If aes is not nil but is not an aesCodec, the AES path is disabled
+// defensively to prevent misuse.
+func NewAutoDetectingCodec(aes Codec) Codec {
+	if aes == nil {
+		return autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	}
+	if a, ok := aes.(aesCodec); ok {
+		return autoDetectingCodec{plain: plaintextCodec{}, aes: &a}
+	}
+	// Defensive: caller passed a non-aesCodec — disable encrypted path.
+	return autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+}
