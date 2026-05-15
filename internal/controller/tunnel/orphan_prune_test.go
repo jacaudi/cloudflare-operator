@@ -39,6 +39,14 @@ func pruneScheme(t *testing.T) *runtime.Scheme {
 }
 
 func makeEmittedRecord(svcName, hostname string) *v1alpha1.CloudflareDNSRecord {
+	return makeEmittedRecordInSourceNS(svcName, hostname, "ns")
+}
+
+// makeEmittedRecordInSourceNS builds a record whose Kubernetes namespace is
+// always "ns" (so client.InNamespace("ns") never filters it) but whose
+// conventions.LabelSourceNamespace label is sourceNS. This isolates the
+// label-key behaviour of the prune selector from the InNamespace behaviour.
+func makeEmittedRecordInSourceNS(svcName, hostname, sourceNS string) *v1alpha1.CloudflareDNSRecord {
 	return &v1alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      emittedDNSRecordName(svcName, hostname),
@@ -46,7 +54,7 @@ func makeEmittedRecord(svcName, hostname string) *v1alpha1.CloudflareDNSRecord {
 			Labels: map[string]string{
 				conventions.LabelSourceKind:      "Service",
 				conventions.LabelSourceName:      svcName,
-				conventions.LabelSourceNamespace: "ns",
+				conventions.LabelSourceNamespace: sourceNS,
 			},
 		},
 		Spec: v1alpha1.CloudflareDNSRecordSpec{
@@ -97,6 +105,38 @@ func TestPruneOrphanedDNSRecords_RespectsLabelScope(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(theirs), &surviving))
 }
 
+// TestPruneOrphanedDNSRecords_RespectsNamespaceLabelScope locks in that the
+// conventions.LabelSourceNamespace selector key is load-bearing. Both seeded
+// records live in Kubernetes namespace "ns" (so client.InNamespace("ns") does
+// NOT filter either out); they differ only on the LabelSourceNamespace label
+// value. If a regression dropped that key from the production MatchingLabels
+// selector, the cross-namespace-labelled CR would be wrongly pruned and this
+// test would fail.
+func TestPruneOrphanedDNSRecords_RespectsNamespaceLabelScope(t *testing.T) {
+	s := pruneScheme(t)
+	// Same kind+name (Service/svc), same k8s namespace ("ns"), but the
+	// source-namespace LABEL says it belongs to a source in "other-ns".
+	crossNS := makeEmittedRecordInSourceNS("svc", "cross-ns.example.com", "other-ns")
+	// In-scope record — should be pruned.
+	inScope := makeEmittedRecordInSourceNS("svc", "in-scope.example.com", "ns")
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(crossNS, inScope).Build()
+
+	desired := map[string]struct{}{}
+	deleted, err := pruneOrphanedDNSRecords(context.Background(), c, "Service", "svc", "ns", desired)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"in-scope.example.com"}, deleted)
+
+	// The cross-namespace-labelled CR must survive.
+	var surviving v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(crossNS), &surviving))
+
+	// The in-scope CR must be gone.
+	var gone v1alpha1.CloudflareDNSRecord
+	err = c.Get(context.Background(), client.ObjectKeyFromObject(inScope), &gone)
+	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)
+}
+
 func TestPruneOrphanedDNSRecords_EmptyExistingIsNoOp(t *testing.T) {
 	s := pruneScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).Build()
@@ -109,20 +149,29 @@ func TestPruneOrphanedDNSRecords_EmptyExistingIsNoOp(t *testing.T) {
 
 func TestPruneOrphanedDNSRecords_IgnoresConcurrentlyDeletedRecord(t *testing.T) {
 	s := pruneScheme(t)
-	record := makeEmittedRecord("svc", "race.example.com")
+	racing := makeEmittedRecord("svc", "race.example.com")
+	// A desired record that must survive the prune untouched, proving the
+	// racing delete didn't corrupt the rest of the iteration.
+	keep := makeEmittedRecord("svc", "keep.example.com")
 
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(record).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(racing, keep).Build()
 
-	// Simulate an out-of-band deletion racing our prune — delete the target CR
+	// Simulate an out-of-band deletion racing our prune — delete one target CR
 	// before calling the helper.
-	require.NoError(t, c.Delete(context.Background(), record))
+	require.NoError(t, c.Delete(context.Background(), racing))
 
-	// Desired set excludes race.example.com — the helper would want to delete it,
-	// but it's already gone. Must not error.
-	desired := map[string]struct{}{}
-	deleted, err := pruneOrphanedDNSRecords(context.Background(), c, "Service", "svc", "ns", desired)
+	// Desired set keeps keep.example.com and excludes race.example.com; the
+	// helper would want to delete the latter, but it's already gone.
+	desired := map[string]struct{}{"keep.example.com": {}}
+	_, err := pruneOrphanedDNSRecords(context.Background(), c, "Service", "svc", "ns", desired)
 	require.NoError(t, err, "a racing deletion must not cause an error")
-	// The record is already gone; its hostname may or may not appear in deleted —
-	// we only assert no error and that the client state is consistent.
-	_ = deleted
+
+	// The desired record was untouched by the prune and is still Gettable.
+	var surviving v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(keep), &surviving))
+
+	// The racing record stays gone — the helper did not resurrect it.
+	var gone v1alpha1.CloudflareDNSRecord
+	err = c.Get(context.Background(), client.ObjectKeyFromObject(racing), &gone)
+	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)
 }
