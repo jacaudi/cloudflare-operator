@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
@@ -78,8 +79,9 @@ func TestServiceSource_OptInCreatesTunnelAndDNSRecord(t *testing.T) {
 	// Pre-create the tunnel with TunnelCNAME populated so the source
 	// reconciler proceeds to emit the DNSRecord on first reconcile.
 	tn := preCreatedTunnel("cf-app-foo-payments", "app-foo")
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
@@ -137,8 +139,9 @@ func TestServiceSource_AutoCreateStampsSourceLabels(t *testing.T) {
 	}
 	// NO pre-created tunnel — exercise the auto-create path through
 	// EnsureTunnelCR so the source-labels stamp is observable.
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
@@ -166,8 +169,9 @@ func TestServiceSource_NoTunnelNameAttachesToNamespacePool(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
@@ -185,7 +189,8 @@ func TestServiceSource_OptOut_ClearsCache(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	cache.Set(tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns"},
@@ -216,7 +221,8 @@ func TestServiceSource_OptOutSweepsBothPoolAndNamed(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	cache.Set(tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-billing"},
 		tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"},
@@ -247,8 +253,9 @@ func TestServiceSource_AnnotationChangeSweepsPriorKey(t *testing.T) {
 	}
 	tnA := preCreatedTunnel("cf-ns-payments", "ns")
 	tnB := preCreatedTunnel("cf-ns-billing", "ns")
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svcA, tnA, tnB).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svcA, tnA, tnB).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
@@ -291,7 +298,8 @@ func TestServiceSource_NameTooLong_StatusEventOnly(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(8)
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
@@ -325,8 +333,9 @@ func TestServiceSource_MultipleHostnames_EmitsOneRecordEach(t *testing.T) {
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	tn := preCreatedTunnel("cf-app-foo-payments", "app-foo")
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
@@ -373,8 +382,9 @@ func TestServiceSource_TunnelCNAMEEmpty_DefersEmission(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: cache,
@@ -407,8 +417,9 @@ func TestServiceSource_ZoneRefAnnotation_ThreadedToDNSRecord(t *testing.T) {
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	tn := preCreatedTunnel("cf-app-foo-payments", "app-foo")
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
@@ -441,8 +452,9 @@ func TestServiceSource_ServiceDeletedSweepsCache(t *testing.T) {
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := preCreatedTunnel("cf-ns-payments", "ns")
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: cache,
@@ -480,7 +492,8 @@ func TestServiceSource_InvalidName_StatusEventOnly(t *testing.T) {
 		},
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(10)
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
@@ -519,8 +532,9 @@ func TestServiceSource_TranslatorWarningsEmitEvents(t *testing.T) {
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	preTun := preCreatedTunnel("cf-ns-payments", "ns")
-	c := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(10)
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
@@ -575,8 +589,8 @@ func TestEmittedDNSRecordNameDNS1123Compliant(t *testing.T) {
 // TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias verifies that two
 // hostnames which sanitize to the same prefix (because the only difference
 // is non-alphanumeric punctuation) still produce distinct CR names. Without
-// the hash suffix, the second hostname's DNSRecord would be silently dropped
-// because emitDNSRecord swallows IsAlreadyExists.
+// the hash suffix, the second hostname's DNSRecord would be
+// silently overwritten by the second SSA Apply on the same CR name.
 func TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias(t *testing.T) {
 	a := emittedDNSRecordName("svc", "foo.example.com")
 	b := emittedDNSRecordName("svc", "foo-example-com")

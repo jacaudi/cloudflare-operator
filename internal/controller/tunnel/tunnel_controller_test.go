@@ -19,7 +19,6 @@ package tunnel
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,44 +32,14 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cloudflare "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	mockcf "github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
-
-// ssaTranslatingClient mirrors the bootstrap test helper: the fake client
-// doesn't natively support server-side apply, so this interceptor rewrites
-// SSA patches into Create-or-Update so the reconciler's Apply path is
-// exercised without envtest. Real SSA behaviour is covered by the envtest
-// suite under test/envtest/.
-func ssaTranslatingClient(t *testing.T, base client.WithWatch) client.WithWatch {
-	t.Helper()
-	return interceptor.NewClient(base, interceptor.Funcs{
-		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			if patch.Type() != types.ApplyPatchType {
-				return c.Patch(ctx, obj, patch, opts...)
-			}
-			key := client.ObjectKeyFromObject(obj)
-			existing, ok := obj.DeepCopyObject().(client.Object)
-			if !ok {
-				return fmt.Errorf("DeepCopyObject did not produce client.Object")
-			}
-			err := c.Get(ctx, key, existing)
-			if apierrors.IsNotFound(err) {
-				return c.Create(ctx, obj)
-			}
-			if err != nil {
-				return err
-			}
-			obj.SetResourceVersion(existing.GetResourceVersion())
-			return c.Update(ctx, obj)
-		},
-	})
-}
 
 func tunnelScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -117,7 +86,7 @@ func TestTunnelReconciler_CreatesTunnelAndDataplane(t *testing.T) {
 		WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).
 		Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -181,7 +150,7 @@ func TestTunnelReconciler_DriftSkipsPutWhenObservedMatches(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
@@ -219,7 +188,7 @@ func TestTunnelReconciler_FinalizerDrainSequence(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
 	// Drain: with no Deployment present, the reconciler should proceed to
@@ -266,7 +235,7 @@ func TestTunnelReconciler_FinalizerDrain_TolerantOf404(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -294,7 +263,7 @@ func TestTunnelReconciler_StatusConditionsWrittenByOuterFunction(t *testing.T) {
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -347,7 +316,7 @@ func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -426,7 +395,7 @@ func TestTunnelReconciler_CredentialsHaltUpdatesStatus(t *testing.T) {
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -469,7 +438,7 @@ func TestTunnelReconciler_DuplicateHostname_EmitsEventOnLoser(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn, winnerSvc, loserSvc).
 		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	tk := tunnelsynth.TunnelKey{Namespace: "ns", Name: "tnl"}

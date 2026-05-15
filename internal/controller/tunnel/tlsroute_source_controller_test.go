@@ -33,6 +33,7 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
@@ -104,8 +105,9 @@ func TestTLSRouteSource_HappyPath_StampsClientSideClientRequired(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareTunnel{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
@@ -162,8 +164,9 @@ func TestTLSRouteSource_TCPProtocolURL(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -191,8 +194,9 @@ func TestTLSRouteSource_NoTunnelTargetedParent(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "other-gw", Namespace: ptrNs("gw-ns")}}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(otherGw, rt).
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(otherGw, rt).
 		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -230,8 +234,9 @@ func TestTLSRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
@@ -280,8 +285,9 @@ func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -325,8 +331,9 @@ func TestTLSRouteSource_DeleteSweepsCache(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 
@@ -358,8 +365,9 @@ func TestTLSRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 
@@ -395,8 +403,9 @@ func TestTLSRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
 		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
@@ -456,8 +465,9 @@ func TestTLSRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw1, gw2, tn1, tn2, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw1, gw2, tn1, tn2, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 
@@ -492,8 +502,9 @@ func TestTLSRouteSource_ParentGatewayNotFound_Skips(t *testing.T) {
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(rt).
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(rt).
 		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 
@@ -549,8 +560,9 @@ func TestTLSRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, rt).
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, rt).
 		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 
@@ -618,8 +630,9 @@ func TestTLSRouteSource_NoListenerHostname_ZeroContribs_AcceptedFalse(t *testing
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
 		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 
@@ -692,8 +705,9 @@ func TestTLSRouteSource_InheritsListenerHostname_WhenSpecEmpty(t *testing.T) {
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1a2.TLSRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: cache}
 

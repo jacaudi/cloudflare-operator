@@ -18,7 +18,6 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -30,43 +29,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 )
-
-// ssaTranslatingClient wraps a fake client to translate SSA patches into
-// create-or-update calls. The fake client doesn't natively support SSA, so
-// this helper lets bootstrap tests exercise the reconciler's Apply path
-// without envtest. Real SSA behavior is verified in T18 envtest.
-func ssaTranslatingClient(t *testing.T, base client.WithWatch) client.WithWatch {
-	t.Helper()
-	return interceptor.NewClient(base, interceptor.Funcs{
-		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			if patch.Type() != types.ApplyPatchType {
-				return c.Patch(ctx, obj, patch, opts...)
-			}
-			key := client.ObjectKeyFromObject(obj)
-			existing, ok := obj.DeepCopyObject().(client.Object)
-			if !ok {
-				return fmt.Errorf("DeepCopyObject did not produce client.Object")
-			}
-			err := c.Get(ctx, key, existing)
-			if apierrors.IsNotFound(err) {
-				return c.Create(ctx, obj)
-			}
-			if err != nil {
-				return err
-			}
-			obj.SetResourceVersion(existing.GetResourceVersion())
-			return c.Update(ctx, obj)
-		},
-	})
-}
 
 func newBootstrapScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -85,7 +54,7 @@ func TestReconcile_RejectsNonClusterName(t *testing.T) {
 		WithObjects(op).
 		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
 		Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "other"}})
 	require.NoError(t, err)
@@ -116,7 +85,7 @@ func TestReconcile_BothBundlesEnabled_CreatesAll(t *testing.T) {
 		WithObjects(op).
 		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
 		Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
 	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}})
 	require.NoError(t, err)
@@ -155,7 +124,7 @@ func TestReconcile_TunnelDisabled_DeletesTunnelDeployment(t *testing.T) {
 		WithObjects(op, existing).
 		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
 		Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}})
 	require.NoError(t, err)
@@ -207,7 +176,7 @@ func TestReconcile_StaleCRSweep_OnDisable(t *testing.T) {
 			&v1alpha1.CloudflareZone{},
 		).
 		Build()
-	c := ssaTranslatingClient(t, base)
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}})
 	require.NoError(t, err)
