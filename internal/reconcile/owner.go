@@ -28,5 +28,3 @@ func SetControllerOwner(owner, child client.Object, scheme *runtime.Scheme) erro
 	return controllerutil.SetControllerReference(owner, child, scheme)
 }
 
-// Compile-time assertion that we depend on runtime.Object via the scheme.
-var _ runtime.Object = (client.Object)(nil)
