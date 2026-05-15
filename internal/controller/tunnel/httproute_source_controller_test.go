@@ -31,6 +31,7 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
@@ -94,8 +95,9 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 			Rules: []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
@@ -148,8 +150,9 @@ func TestHTTPRouteSource_FilterRejected_PartiallyInvalid(t *testing.T) {
 			Rules:           []gwv1.HTTPRouteRule{{Filters: []gwv1.HTTPRouteFilter{{Type: gwv1.HTTPRouteFilterRequestRedirect}}}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -189,8 +192,9 @@ func TestHTTPRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 			Rules: []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
@@ -242,8 +246,9 @@ func TestHTTPRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -290,8 +295,9 @@ func TestHTTPRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 			Rules:           []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
 		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
@@ -325,8 +331,9 @@ func TestHTTPRouteSource_NoTunnelTargetedParent(t *testing.T) {
 			Rules:           []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(otherGw, rt).
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(otherGw, rt).
 		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -359,8 +366,9 @@ func TestHTTPRouteSource_DeleteSweepsCache(t *testing.T) {
 			Rules:           []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
 
@@ -408,8 +416,9 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 			Rules: []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
@@ -487,8 +496,9 @@ func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 			Rules: []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw1, gw2, tn1, tn2, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw1, gw2, tn1, tn2, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
 
@@ -523,8 +533,9 @@ func TestHTTPRouteSource_ParentGatewayNotFound_Skips(t *testing.T) {
 			Rules: []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(rt).
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(rt).
 		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
 
@@ -577,8 +588,9 @@ func TestHTTPRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 			Rules: []gwv1.HTTPRouteRule{{}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, rt).
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, rt).
 		WithStatusSubresource(&gwv1.HTTPRoute{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
 
