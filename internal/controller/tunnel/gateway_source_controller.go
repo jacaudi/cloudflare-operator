@@ -74,6 +74,7 @@ type GatewaySourceReconciler struct {
 
 	tracker     *cacheTracker
 	trackerOnce sync.Once
+	dedupe      *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
 }
 
 // ensureTracker initializes r.tracker exactly once. Safe against concurrent
@@ -84,6 +85,7 @@ func (r *GatewaySourceReconciler) ensureTracker() {
 		if r.tracker == nil {
 			r.tracker = newCacheTracker()
 		}
+		r.dedupe = newEventDedupe(0, 0)
 	})
 }
 
@@ -135,7 +137,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	hostnames := listenerHostnames(&gw)
 	if len(hostnames) == 0 {
 		if r.Recorder != nil {
-			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, conventions.ReasonNoListenerHostname,
+			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, conventions.ReasonNoListenerHostname,
 				"Gateway has no listener with a hostname; tunnel-apex synthesis requires at least one")
 		}
 		if prev, ok := r.tracker.sweep(srcKey); ok {
@@ -154,7 +156,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			reason = conventions.ReasonNameTooLong
 		}
 		if r.Recorder != nil {
-			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, reason, "%v", err)
+			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
 		}
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
@@ -174,7 +176,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			reason = conventions.ReasonGatewayServiceUnresolved
 		}
 		if r.Recorder != nil {
-			r.Recorder.Eventf(&gw, corev1.EventTypeWarning, reason, "%v", err)
+			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
 		}
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
@@ -211,8 +213,8 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			// separate contribution under the same tunnel-key without clash.
 		default:
 			if r.Recorder != nil {
-				r.Recorder.Eventf(&gw, corev1.EventTypeWarning, conventions.ReasonUnsupportedProtocol,
-					"listener %q protocol %s not supported on tunnel-apex Gateway", l.Name, l.Protocol)
+				r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, conventions.ReasonUnsupportedProtocol,
+					fmt.Sprintf("listener %q protocol %s not supported on tunnel-apex Gateway", l.Name, l.Protocol))
 			}
 		}
 	}

@@ -80,6 +80,7 @@ type HTTPRouteSourceReconciler struct {
 
 	tracker     *cacheTracker
 	trackerOnce sync.Once
+	dedupe      *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
 }
 
 // ensureTracker initializes r.tracker exactly once. Safe against concurrent
@@ -90,6 +91,7 @@ func (r *HTTPRouteSourceReconciler) ensureTracker() {
 		if r.tracker == nil {
 			r.tracker = newCacheTracker()
 		}
+		r.dedupe = newEventDedupe(0, 0)
 	})
 }
 
@@ -166,7 +168,7 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 	// Surface translator warnings as Events for operator visibility.
 	if r.Recorder != nil {
 		for _, w := range warns {
-			r.Recorder.Eventf(&rt, corev1.EventTypeWarning, w.Reason, "%s", w.Message)
+			r.dedupe.emit(r.Recorder, &rt, corev1.EventTypeWarning, w.Reason, w.Message)
 		}
 	}
 

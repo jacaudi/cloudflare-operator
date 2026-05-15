@@ -72,6 +72,7 @@ type ServiceSourceReconciler struct {
 
 	tracker     *cacheTracker
 	trackerOnce sync.Once
+	dedupe      *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
 }
 
 // ensureTracker initializes r.tracker exactly once. Safe against concurrent
@@ -82,6 +83,7 @@ func (r *ServiceSourceReconciler) ensureTracker() {
 		if r.tracker == nil {
 			r.tracker = newCacheTracker()
 		}
+		r.dedupe = newEventDedupe(0, 0)
 	})
 }
 
@@ -137,7 +139,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			reason = conventions.ReasonNameTooLong
 		}
 		if r.Recorder != nil {
-			r.Recorder.Eventf(&svc, corev1.EventTypeWarning, reason, "%v", err)
+			r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeWarning, reason, err.Error())
 		}
 		// Sweep any stale prior key — the source is now in a broken state and
 		// must not contribute to any tunnel.
@@ -156,7 +158,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	contribs, warns := tunnelsynth.TranslateService(&svc, tunnelsynth.Defaults{})
 	for _, w := range warns {
 		if r.Recorder != nil {
-			r.Recorder.Eventf(&svc, corev1.EventTypeWarning, w.Reason, "%s", w.Message)
+			r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeWarning, w.Reason, w.Message)
 		}
 	}
 
