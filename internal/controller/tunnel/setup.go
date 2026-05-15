@@ -98,6 +98,21 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		opts.DefaultConnector.GracePeriodSeconds = 30
 	}
 
+	// Field indexers so gatewayToHTTPRoutes / gatewayToTLSRoutes can List by
+	// parent gateway instead of scanning the cluster-wide route cache. See A1.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &gwv1.HTTPRoute{}, IndexKeyRouteByGatewayParent,
+		indexHTTPRouteByGatewayParent,
+	); err != nil {
+		return fmt.Errorf("register HTTPRoute parent-gateway index: %w", err)
+	}
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &gwv1a2.TLSRoute{}, IndexKeyRouteByGatewayParent,
+		indexTLSRouteByGatewayParent,
+	); err != nil {
+		return fmt.Errorf("register TLSRoute parent-gateway index: %w", err)
+	}
+
 	// Shared cache across the source reconcilers (writers) and the tunnel
 	// reconciler (reader).
 	cache := tunnelsynth.NewCache()
@@ -204,8 +219,8 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 }
 
 // gatewayToHTTPRoutes enqueues every HTTPRoute whose parentRefs include the
-// changed Gateway. List is cluster-wide; per-route parent matching narrows it
-// to the relevant ones.
+// changed Gateway. Uses the IndexKeyRouteByGatewayParent field indexer so the
+// cache returns only matching routes instead of scanning cluster-wide. See A1.
 func gatewayToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		gw, ok := obj.(*gwv1.Gateway)
@@ -213,32 +228,16 @@ func gatewayToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 			return nil
 		}
 		var routes gwv1.HTTPRouteList
-		if err := mgr.GetClient().List(ctx, &routes); err != nil {
+		if err := mgr.GetClient().List(ctx, &routes, client.MatchingFields{
+			IndexKeyRouteByGatewayParent: (types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}).String(),
+		}); err != nil {
 			return nil
 		}
-		out := make([]reconcile.Request, 0)
+		out := make([]reconcile.Request, 0, len(routes.Items))
 		for _, rt := range routes.Items {
-			for _, pr := range rt.Spec.ParentRefs {
-				// Gate on Gateway kind + gateway.networking.k8s.io group.
-				// parentRefs default to Kind=Gateway and Group=gateway.networking.k8s.io
-				// when nil, so nil-checks only reject explicit mismatches.
-				if pr.Kind != nil && *pr.Kind != "Gateway" {
-					continue
-				}
-				if pr.Group != nil && *pr.Group != "gateway.networking.k8s.io" {
-					continue
-				}
-				ns := rt.Namespace
-				if pr.Namespace != nil {
-					ns = string(*pr.Namespace)
-				}
-				if ns == gw.Namespace && string(pr.Name) == gw.Name {
-					out = append(out, reconcile.Request{
-						NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
-					})
-					break
-				}
-			}
+			out = append(out, reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
+			})
 		}
 		return out
 	}
@@ -246,6 +245,7 @@ func gatewayToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 
 // gatewayToTLSRoutes enqueues every TLSRoute whose parentRefs include the
 // changed Gateway. Mirrors gatewayToHTTPRoutes but for v1alpha2.TLSRoute.
+// Uses the IndexKeyRouteByGatewayParent field indexer. See A1.
 func gatewayToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		gw, ok := obj.(*gwv1.Gateway)
@@ -253,32 +253,16 @@ func gatewayToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 			return nil
 		}
 		var routes gwv1a2.TLSRouteList
-		if err := mgr.GetClient().List(ctx, &routes); err != nil {
+		if err := mgr.GetClient().List(ctx, &routes, client.MatchingFields{
+			IndexKeyRouteByGatewayParent: (types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}).String(),
+		}); err != nil {
 			return nil
 		}
-		out := make([]reconcile.Request, 0)
+		out := make([]reconcile.Request, 0, len(routes.Items))
 		for _, rt := range routes.Items {
-			for _, pr := range rt.Spec.ParentRefs {
-				// Gate on Gateway kind + gateway.networking.k8s.io group.
-				// parentRefs default to Kind=Gateway and Group=gateway.networking.k8s.io
-				// when nil, so nil-checks only reject explicit mismatches.
-				if pr.Kind != nil && *pr.Kind != "Gateway" {
-					continue
-				}
-				if pr.Group != nil && *pr.Group != "gateway.networking.k8s.io" {
-					continue
-				}
-				ns := rt.Namespace
-				if pr.Namespace != nil {
-					ns = string(*pr.Namespace)
-				}
-				if ns == gw.Namespace && string(pr.Name) == gw.Name {
-					out = append(out, reconcile.Request{
-						NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
-					})
-					break
-				}
-			}
+			out = append(out, reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
+			})
 		}
 		return out
 	}

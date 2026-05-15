@@ -14,17 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package reconcile
-
-import (
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-)
-
-// SetControllerOwner stamps a controller-style OwnerReference from owner onto
-// child. Both blockOwnerDeletion and controller are true.
-func SetControllerOwner(owner, child client.Object, scheme *runtime.Scheme) error {
-	return controllerutil.SetControllerReference(owner, child, scheme)
-}
-
+// Package cloudflare wraps the cloudflare-go SDK with the operator's
+// credential resolution, error classification, and (SDK-built-in) retry
+// semantics.
+//
+// interfaces.go is append-only across spec increments: spec 2 (zone bundle)
+// shipped DNSClient / ZoneClient / RulesetClient / ZoneConfigClient; spec 3
+// (tunnel bundle) appended TunnelClient. Future specs append; never remove
+// or rename a published interface.
+package cloudflare

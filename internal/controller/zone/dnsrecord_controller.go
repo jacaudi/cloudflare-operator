@@ -23,6 +23,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -93,14 +94,12 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 	if halt != nil {
-		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
-		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
-		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return *halt, nil
+		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &rec, &rec.Status.Conditions, &rec.Status.Phase, halt)
 	}
+
+	// Snapshot status so the trailing Status().Update can be skipped when
+	// nothing material changed; LastSyncedAt/ObservedGeneration are masked.
+	originalStatus := rec.Status.DeepCopy()
 
 	dc, err := r.DNSClientFn(creds)
 	if err != nil {
@@ -194,12 +193,17 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionTrue,
 		conventions.ReasonReady, "DNS record synced")
 	rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonReady)
-	now := metav1.Now()
-	rec.Status.LastSyncedAt = &now
-	rec.Status.ObservedGeneration = rec.Generation
 
-	if err := r.Status().Update(ctx, &rec); err != nil {
-		return ctrl.Result{}, err
+	candidate := rec.Status.DeepCopy()
+	candidate.LastSyncedAt = originalStatus.LastSyncedAt
+	candidate.ObservedGeneration = originalStatus.ObservedGeneration
+	if rec.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
+		now := metav1.Now()
+		rec.Status.LastSyncedAt = &now
+		rec.Status.ObservedGeneration = rec.Generation
+		if err := r.Status().Update(ctx, &rec); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	interval := defaultDNSRecordInterval

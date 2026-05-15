@@ -102,13 +102,21 @@ func envOr(key, fallback string) string {
 }
 
 func main() {
+	// Init logger first (default info level) so flag-parse errors emit
+	// structured JSON via logger.Error rather than raw text on stderr.
+	logger := zapr.NewLogger(newProductionLogger("info"))
+	ctrl.SetLogger(logger)
+	log.SetLogger(logger)
+
 	opts, err := parseFlags(os.Args[1:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		logger.Error(err, "flag parse failed")
 		os.Exit(2)
 	}
 
-	logger := zapr.NewLogger(newProductionLogger(opts.LogLevel))
+	// Replace with a logger at the user-requested level (no-op when the level
+	// already matches the default).
+	logger = zapr.NewLogger(newProductionLogger(opts.LogLevel))
 	ctrl.SetLogger(logger)
 	log.SetLogger(logger)
 

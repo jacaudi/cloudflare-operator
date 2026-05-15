@@ -119,6 +119,23 @@ type CloudflareOperatorStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
+// XValidation annotation on CloudflareOperator (below) reads as:
+//
+//	IF spec.controllers.tunnel.enabled is true,
+//	THEN spec.controllers.zone.enabled must also be true.
+//
+// The disjunct chain is the standard has()-guarded encoding:
+//
+//	1. !has(self.spec)                               → trivially OK (no spec yet)
+//	2. !has(self.spec.controllers)                   → trivially OK (no toggles)
+//	3. !has(self.spec.controllers.tunnel)            → tunnel section absent
+//	4. !has(self.spec.controllers.tunnel.enabled)    → defensive belt-and-suspenders
+//	5. self.spec.controllers.tunnel.enabled != true  → tunnel not enabled → no constraint
+//	6. has(zone) && has(zone.enabled) && zone.enabled == true → constraint satisfied
+//
+// Tests: foundation_test.go::TestFoundation_TunnelWithoutZoneRejected (reject path)
+// and TestFoundation_BothBundlesEnabled (accept path).
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:subresource:status

@@ -26,6 +26,7 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
 // LoadCredentials wraps cloudflare.ResolveCredentials with reconcile-loop
@@ -48,7 +49,7 @@ func LoadCredentials(
 	if errors.Is(err, cloudflare.ErrSecretNotFound) ||
 		errors.Is(err, cloudflare.ErrSecretKeyMissing) ||
 		errors.Is(err, cloudflare.ErrAccountIDUnset) {
-		return cloudflare.Credentials{}, FailReconcile(ctx, "CredentialsUnavailable", err.Error()), nil
+		return cloudflare.Credentials{}, FailReconcile(ctx, conventions.ReasonCredentialsUnavailable, err.Error()), nil
 	}
 	return cloudflare.Credentials{}, nil, err
 }
@@ -74,6 +75,13 @@ func EnvCredentials() (cloudflare.Credentials, bool) {
 //
 // Per-CR override wins; env-var default is the fallback. Both controllers
 // (zone, tunnel) use this helper at the top of every reconcile.
+//
+// API-shape note: this function's callees deliberately differ. LoadCredentials
+// returns (creds, *ctrl.Result, error) — the reconcile-loop idiom where a
+// missing Secret produces a halt result, not an error. EnvCredentials returns
+// (creds, bool) — the process-startup idiom where a missing env var is just
+// "no default available", not a halt condition. The shapes match their
+// callers' control flow; do not harmonize without a use case.
 func LoadCredentialsHierarchical(
 	ctx context.Context,
 	c client.Client,
@@ -85,7 +93,7 @@ func LoadCredentialsHierarchical(
 	}
 	creds, ok := EnvCredentials()
 	if !ok {
-		return cloudflare.Credentials{}, FailReconcile(ctx, "CredentialsUnavailable",
+		return cloudflare.Credentials{}, FailReconcile(ctx, conventions.ReasonCredentialsUnavailable,
 			"no per-CR credential override and CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID env vars unset"), nil
 	}
 	return creds, nil, nil

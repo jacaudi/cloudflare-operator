@@ -171,16 +171,31 @@ func BuildDeployment(tn *v1alpha1.CloudflareTunnel, defaultImage string) *appsv1
 	}
 }
 
+// annotationTokenTunnelID is the bookkeeping annotation that records which
+// Cloudflare TunnelID a cached token Secret was fetched for. ensureTokenSecret
+// uses it to detect tunnel-ID rotation and re-fetch on drift; on steady state
+// it lets the reconciler skip the GetToken API call.
+const annotationTokenTunnelID = "cloudflare.io/tunnel-id"
+
+// TokenSecretName is the stable Secret name carrying the connector-join token.
+// Exposed so callers (the reconciler's idempotency check) and tests share a
+// single source of truth with BuildTokenSecret.
+func TokenSecretName(tunnelName string) string {
+	return "cloudflared-token-" + tunnelName
+}
+
 // BuildTokenSecret renders the TUNNEL_TOKEN Secret. Stable name keyed off the
 // CR name so the cloudflared Deployment's envFrom reference is deterministic.
 // The Secret's Data["token"] is the connector-join token returned by
-// GET /cfd_tunnel/{id}/token — opaque, never logged.
-func BuildTokenSecret(tunnelName, namespace, token string) *corev1.Secret {
+// GET /cfd_tunnel/{id}/token — opaque, never logged. The tunnelID is stamped
+// as an annotation so ensureTokenSecret can detect rotation.
+func BuildTokenSecret(tunnelName, namespace, token, tunnelID string) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "cloudflared-token-" + tunnelName,
-			Namespace: namespace,
+			Name:        TokenSecretName(tunnelName),
+			Namespace:   namespace,
+			Annotations: map[string]string{annotationTokenTunnelID: tunnelID},
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{"token": []byte(token)},

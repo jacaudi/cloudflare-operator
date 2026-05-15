@@ -23,6 +23,7 @@ import (
 	stderrors "errors"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -57,6 +58,15 @@ type CloudflareZoneReconciler struct {
 	// zone hold before DeleteZone on the DeletionPolicyDelete path. Optional;
 	// when nil, the hold-drain step is skipped (best-effort).
 	CFClientFn func(cloudflare.Credentials) (*cloudflare.Client, error)
+
+	// DrainHoldFn drains the zone hold before DeleteZone on the delete path.
+	// When non-nil, this overrides the default CFClientFn → cloudflare.DrainZoneHold
+	// chain — used primarily for test injection. Production wiring leaves this nil
+	// and relies on CFClientFn.
+	//
+	// The hold drain is best-effort: any error returned is logged and execution
+	// continues to DeleteZone.
+	DrainHoldFn func(ctx context.Context, zoneID string) error
 }
 
 // +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarezones,verbs=get;list;watch;create;update;patch;delete
@@ -90,14 +100,14 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	if halt != nil {
-		z.Status.Conditions = reconcile.SetReady(z.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
-		z.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
-		if uerr := r.Status().Update(ctx, &z); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return *halt, nil
+		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &z, &z.Status.Conditions, &z.Status.Phase, halt)
 	}
+
+	// Snapshot status before reconcile work so the trailing Status().Update
+	// can be skipped when nothing material changed. reflectZoneStatus stamps
+	// LastSyncedAt + ObservedGeneration each pass; we mask those for the
+	// comparison below.
+	originalStatus := z.Status.DeepCopy()
 
 	zc, err := r.ZoneClientFn(creds)
 	if err != nil {
@@ -197,8 +207,19 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		z.Status.Phase = v1alpha1.PhasePending
 	}
 
-	if err := r.Status().Update(ctx, &z); err != nil {
-		return ctrl.Result{}, err
+	candidate := z.Status.DeepCopy()
+	candidate.LastSyncedAt = originalStatus.LastSyncedAt
+	candidate.ObservedGeneration = originalStatus.ObservedGeneration
+	if z.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
+		if err := r.Status().Update(ctx, &z); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		// No material change: roll back the LastSyncedAt + ObservedGeneration
+		// stamps reflectZoneStatus applied so the in-memory status mirrors what
+		// is in etcd.
+		z.Status.LastSyncedAt = originalStatus.LastSyncedAt
+		z.Status.ObservedGeneration = originalStatus.ObservedGeneration
 	}
 
 	interval := defaultZoneInterval
@@ -230,22 +251,11 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v1alp
 			return ctrl.Result{}, err
 		}
 
-		// Best-effort: drain any hold before delete.
-		//
-		// Test gap (deferred): unit-test coverage of this branch is not
-		// exercised by TestZone_DeleteWithDelete_RemovesZone because that
-		// fixture sets CFClientFn=nil. Adding coverage requires either (a)
-		// injecting a DrainZoneHold stub (refactor: a new DrainHoldFn field
-		// on the reconciler), or (b) wiring a real *cloudflare.Client backed
-		// by httptest. Tracked for a future task; the behaviour is itself
-		// best-effort and the error is logged-not-returned, so leaving the
-		// branch uncovered is bounded.
-		if r.CFClientFn != nil {
-			if cf, cerr := r.CFClientFn(creds); cerr == nil && cf != nil {
-				if derr := cloudflare.DrainZoneHold(ctx, cf.CF(), z.Status.ZoneID); derr != nil {
-					logger.Info("zone hold drain failed (continuing)", "err", derr.Error())
-				}
-			}
+		// Best-effort: drain any hold before delete. The hold drain is allowed to
+		// fail (logged-not-returned) so that a stuck-hold endpoint never blocks
+		// finalizer release.
+		if drainErr := r.drainZoneHold(ctx, creds, z.Status.ZoneID); drainErr != nil {
+			logger.Info("zone hold drain failed (continuing)", "err", drainErr.Error())
 		}
 
 		if derr := reconcile.WrapDeleteErr(zc.DeleteZone(ctx, z.Status.ZoneID)); derr != nil {
@@ -260,6 +270,26 @@ func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v1alp
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// drainZoneHold resolves the drain implementation: prefer DrainHoldFn (test
+// injection); fall back to CFClientFn → cloudflare.DrainZoneHold (production).
+// Returns nil if neither is configured (the drain is best-effort).
+func (r *CloudflareZoneReconciler) drainZoneHold(ctx context.Context, creds cloudflare.Credentials, zoneID string) error {
+	if r.DrainHoldFn != nil {
+		return r.DrainHoldFn(ctx, zoneID)
+	}
+	if r.CFClientFn == nil {
+		return nil
+	}
+	cf, err := r.CFClientFn(creds)
+	if err != nil {
+		return err
+	}
+	if cf == nil {
+		return nil
+	}
+	return cloudflare.DrainZoneHold(ctx, cf.CF(), zoneID)
 }
 
 // reflectZoneStatus copies observed fields from a cloudflare.Zone into the

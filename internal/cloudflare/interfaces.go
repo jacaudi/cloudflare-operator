@@ -14,12 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package cloudflare wraps the cloudflare-go SDK with the operator's
-// credential resolution, error classification, and retry semantics.
-//
-// Per Foundation §6.1.1, interfaces.go is append-only across specs:
-// spec 2 ships the four zone-bundle interfaces below; spec 3 appends
-// TunnelClient.
 package cloudflare
 
 import (

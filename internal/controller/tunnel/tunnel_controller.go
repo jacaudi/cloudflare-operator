@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -115,14 +116,13 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 	if halt != nil {
-		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
-		tn.Status.Phase = reconcilelib.DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
-		if uerr := r.Status().Update(ctx, &tn); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return *halt, nil
+		return reconcilelib.HaltCredentialsUnavailable(ctx, r.Client, &tn, &tn.Status.Conditions, &tn.Status.Phase, halt)
 	}
+
+	// Snapshot status before reconcile work so the trailing Status().Update
+	// can be skipped when nothing material changed. Avoids apiserver/watcher
+	// churn from stamping LastSyncedAt = time.Now() every pass.
+	originalStatus := tn.Status.DeepCopy()
 
 	tc, err := r.TunnelClientFn(creds)
 	if err != nil {
@@ -158,12 +158,19 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	r.observeAttachedSources(&tn)
 	r.rollupStatus(&tn, depAvailable)
 
-	now := metav1.Time{Time: time.Now()}
-	tn.Status.LastSyncedAt = &now
-	tn.Status.ObservedGeneration = tn.Generation
-
-	if err := r.Status().Update(ctx, &tn); err != nil {
-		return ctrl.Result{}, err
+	// Only persist status when something material changed or spec generation
+	// advanced. Mask LastSyncedAt and ObservedGeneration from the comparison
+	// since they would otherwise force a write every pass.
+	candidate := tn.Status.DeepCopy()
+	candidate.LastSyncedAt = originalStatus.LastSyncedAt
+	candidate.ObservedGeneration = originalStatus.ObservedGeneration
+	if tn.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
+		now := metav1.Time{Time: time.Now()}
+		tn.Status.LastSyncedAt = &now
+		tn.Status.ObservedGeneration = tn.Generation
+		if err := r.Status().Update(ctx, &tn); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	interval := defaultTunnelInterval
@@ -302,17 +309,36 @@ func (r *CloudflareTunnelReconciler) ensureTunnel(
 
 // ensureTokenSecret fetches the connector-join token and SSAs it into a
 // stable Secret name. The token is opaque and must not be logged.
+//
+// Idempotency: connector tokens are bound to the Cloudflare TunnelID and are
+// long-lived. To avoid burning a GetToken API call + Secret SSA on every
+// reconcile, we first check whether a Secret already exists, has a non-empty
+// token, and is annotated with the current TunnelID. If so, we skip both the
+// API fetch and the SSA. The Secret is re-fetched when missing, when the
+// token field is empty, or when the annotated TunnelID drifts (tunnel
+// rotation).
 func (r *CloudflareTunnelReconciler) ensureTokenSecret(
 	ctx context.Context,
 	tn *v1alpha1.CloudflareTunnel,
 	tc cloudflare.TunnelClient,
 	accountID string,
 ) error {
+	secName := TokenSecretName(tn.Name)
+	var existing corev1.Secret
+	getErr := r.Get(ctx, types.NamespacedName{Namespace: tn.Namespace, Name: secName}, &existing)
+	if getErr == nil {
+		if len(existing.Data["token"]) > 0 && existing.Annotations[annotationTokenTunnelID] == tn.Status.TunnelID {
+			return nil
+		}
+	} else if !apierrors.IsNotFound(getErr) {
+		return getErr
+	}
+
 	tok, err := tc.GetToken(ctx, accountID, tn.Status.TunnelID)
 	if err != nil {
 		return err
 	}
-	sec := BuildTokenSecret(tn.Name, tn.Namespace, string(tok))
+	sec := BuildTokenSecret(tn.Name, tn.Namespace, string(tok), tn.Status.TunnelID)
 	if err := reconcilelib.SetControllerOwner(tn, sec, r.Scheme); err != nil {
 		return err
 	}

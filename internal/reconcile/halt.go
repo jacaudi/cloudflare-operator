@@ -60,3 +60,29 @@ func HaltDependency(
 	}
 	return ctrl.Result{RequeueAfter: after}, nil
 }
+
+// HaltCredentialsUnavailable persists a CredentialsUnavailable Ready=False
+// condition and returns the halt result produced by LoadCredentials /
+// LoadCredentialsHierarchical. It is the shared form of the post-credential-
+// halt block that the zone, zoneconfig, dnsrecord, ruleset, and tunnel
+// reconcilers each previously duplicated.
+//
+// Callers pass pointers to the CR's Conditions slice and Phase field plus the
+// non-nil *ctrl.Result returned by the credential loader; the helper writes
+// through the pointers, persists status, and returns (*halt, nil) on success.
+func HaltCredentialsUnavailable(
+	ctx context.Context,
+	c client.Client,
+	obj client.Object,
+	conds *[]metav1.Condition,
+	phase *v1alpha1.Phase,
+	halt *ctrl.Result,
+) (ctrl.Result, error) {
+	*conds = SetReady(*conds, metav1.ConditionFalse,
+		conventions.ReasonCredentialsUnavailable, "cloudflare credentials unavailable")
+	*phase = DerivePhase(metav1.ConditionFalse, conventions.ReasonCredentialsUnavailable)
+	if err := c.Status().Update(ctx, obj); err != nil {
+		return ctrl.Result{}, err
+	}
+	return *halt, nil
+}

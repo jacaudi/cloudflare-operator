@@ -599,3 +599,30 @@ func TestHTTPRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: "r"}, &got))
 	require.Empty(t, got.Status.Parents)
 }
+
+func TestFirstListenerHostname_IsLexicographicallyStable(t *testing.T) {
+	h := func(s string) *gwv1.Hostname {
+		v := gwv1.Hostname(s)
+		return &v
+	}
+	gw := &gwv1.Gateway{
+		Spec: gwv1.GatewaySpec{
+			Listeners: []gwv1.Listener{
+				{Name: "https-b", Hostname: h("beta.example.com")},
+				{Name: "https-a", Hostname: h("alpha.example.com")},
+				{Name: "no-host", Hostname: nil},
+				{Name: "https-c", Hostname: h("gamma.example.com")},
+			},
+		},
+	}
+	got := firstListenerHostname(gw)
+	require.Equal(t, "alpha.example.com", got,
+		"must pick lex-smallest hostname; listener input order should not matter")
+
+	// Reverse the input order; result must not change.
+	reversed := &gwv1.Gateway{Spec: gwv1.GatewaySpec{}}
+	for i := len(gw.Spec.Listeners) - 1; i >= 0; i-- {
+		reversed.Spec.Listeners = append(reversed.Spec.Listeners, gw.Spec.Listeners[i])
+	}
+	require.Equal(t, "alpha.example.com", firstListenerHostname(reversed))
+}

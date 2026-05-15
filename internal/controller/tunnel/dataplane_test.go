@@ -178,10 +178,11 @@ func TestBuildDeployment_SecurityContext(t *testing.T) {
 }
 
 func TestBuildSecret_Naming(t *testing.T) {
-	sec := BuildTokenSecret("t", "ns", "opaque-token")
+	sec := BuildTokenSecret("t", "ns", "opaque-token", "tun-id-123")
 	require.Equal(t, "cloudflared-token-t", sec.Name)
 	require.Equal(t, "ns", sec.Namespace)
 	require.Equal(t, []byte("opaque-token"), sec.Data["token"])
+	require.Equal(t, "tun-id-123", sec.Annotations[annotationTokenTunnelID])
 }
 
 func TestBuildMetricsService_Naming(t *testing.T) {

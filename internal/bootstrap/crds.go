@@ -19,6 +19,7 @@ package bootstrap
 import (
 	"embed"
 	"fmt"
+	"strings"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -35,24 +36,25 @@ const (
 //go:embed crds/*.yaml
 var crdFS embed.FS
 
-// bundleMembership lists the CRD filenames per bundle. Filenames must match
-// what `make generate` produces.
-var bundleMembership = map[Bundle][]string{
-	BundleZone: {
-		"crds/cloudflare.io_cloudflarezones.yaml",
-		"crds/cloudflare.io_cloudflarezoneconfigs.yaml",
-		"crds/cloudflare.io_cloudflarednsrecords.yaml",
-		"crds/cloudflare.io_cloudflarerulesets.yaml",
-	},
-	BundleTunnel: {
-		"crds/cloudflare.io_cloudflaretunnels.yaml",
-	},
+// bundleMembership returns the embedded CRD filenames for a bundle, derived
+// from bundleKinds so the two stay in lockstep. Filenames follow the
+// `make generate` convention: crds/<group>_<lowercase(kind)>s.yaml.
+func bundleMembership(b Bundle) []string {
+	gvks := bundleKinds(b)
+	if len(gvks) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(gvks))
+	for _, gvk := range gvks {
+		out = append(out, fmt.Sprintf("crds/%s_%ss.yaml", gvk.Group, strings.ToLower(gvk.Kind)))
+	}
+	return out
 }
 
 // BundleCRDs returns the parsed CustomResourceDefinitions for a bundle.
 func BundleCRDs(b Bundle) ([]*apiextv1.CustomResourceDefinition, error) {
-	files, ok := bundleMembership[b]
-	if !ok {
+	files := bundleMembership(b)
+	if len(files) == 0 {
 		return nil, fmt.Errorf("unknown bundle %q", b)
 	}
 	out := make([]*apiextv1.CustomResourceDefinition, 0, len(files))
