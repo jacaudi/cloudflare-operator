@@ -494,7 +494,12 @@ func TestApplyRemoteConfig_EmitsDriftDetectedWhenLiveDiffersFromObserved(t *test
 			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
 		Status: v1alpha1.CloudflareTunnelStatus{
-			TunnelID:        created.ID,
+			TunnelID: created.ID,
+			// Deliberately equal to the resolved catch-all snapshot (empty
+			// cache → http_status:404), so wantSnap == ObservedIngress and
+			// the existing early-return fires. This isolates the assertion to
+			// pure drift detection: no PUT mutates the mock before we check
+			// for the DriftDetected event.
 			ObservedIngress: []v1alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
 		},
 	}
