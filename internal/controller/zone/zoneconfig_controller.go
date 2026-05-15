@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"golang.org/x/sync/errgroup"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
@@ -150,16 +151,9 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// Snapshot prior per-group condition statuses so we can emit transition events.
 	prior := snapshotGroupConditions(cfg.Status.Conditions)
 
-	// Apply each of the 6 groups independently. A failure in one group must
-	// not short-circuit the others.
-	results := []groupResult{
-		applySSLGroup(ctx, zcc, zoneID, cfg.Spec.SSL),
-		applySecurityGroup(ctx, zcc, zoneID, cfg.Spec.Security),
-		applyPerformanceGroup(ctx, zcc, zoneID, cfg.Spec.Performance),
-		applyNetworkGroup(ctx, zcc, zoneID, cfg.Spec.Network),
-		applyDNSGroup(ctx, zcc, zoneID, cfg.Spec.DNS),
-		applyBotManagementGroup(ctx, zcc, zoneID, cfg.Spec.BotManagement),
-	}
+	// Apply each of the 6 groups independently and concurrently. A failure in
+	// one group must not short-circuit the others.
+	results := applyAllGroups(ctx, zcc, zoneID, &cfg)
 
 	// Persist per-group conditions for configured groups only (unconfigured
 	// groups leave the slot untouched) and pick the first failure for Ready.
@@ -386,6 +380,29 @@ func applySettingsGroup[T any](
 	}
 	g.count = len(updates)
 	return g
+}
+
+// applyAllGroups fans out the 6 setting-group applies concurrently via
+// errgroup. Each group is an independent Cloudflare API chain (no cross-group
+// state), so parallelism is safe. Within a group, UpdateSetting calls remain
+// serial (Cloudflare has no bulk endpoint). Errors are captured per-result;
+// each group goroutine never returns an error to errgroup so a single group's
+// failure does not cancel its siblings.
+//
+// The cloudflare-go SDK absorbs 429s with Retry-After honoring up to its
+// configured MaxRetries (capped to 3 in NewClient), so the fan-out is
+// rate-limit-safe at scale.
+func applyAllGroups(ctx context.Context, zcc cloudflare.ZoneConfigClient, zoneID string, cfg *v1alpha1.CloudflareZoneConfig) []groupResult {
+	var ssl, sec, perf, net, dns, bot groupResult
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error { ssl = applySSLGroup(gctx, zcc, zoneID, cfg.Spec.SSL); return nil })
+	g.Go(func() error { sec = applySecurityGroup(gctx, zcc, zoneID, cfg.Spec.Security); return nil })
+	g.Go(func() error { perf = applyPerformanceGroup(gctx, zcc, zoneID, cfg.Spec.Performance); return nil })
+	g.Go(func() error { net = applyNetworkGroup(gctx, zcc, zoneID, cfg.Spec.Network); return nil })
+	g.Go(func() error { dns = applyDNSGroup(gctx, zcc, zoneID, cfg.Spec.DNS); return nil })
+	g.Go(func() error { bot = applyBotManagementGroup(gctx, zcc, zoneID, cfg.Spec.BotManagement); return nil })
+	_ = g.Wait()
+	return []groupResult{ssl, sec, perf, net, dns, bot}
 }
 
 func applySSLGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.SSLSettings) groupResult {

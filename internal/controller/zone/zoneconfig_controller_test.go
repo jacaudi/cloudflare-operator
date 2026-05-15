@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -161,3 +162,82 @@ func condReason(cs []metav1.Condition, condType string) string {
 type countingErr struct{ calls *int }
 
 func (e *countingErr) Error() string { *e.calls++; return "boom" }
+
+// TestApplyAllGroups_FansOutConcurrently asserts that the 6 setting groups
+// apply concurrently. With a fake client that sleeps perCallDelay on every
+// UpdateSetting / UpdateBotManagement call, the total elapsed time should be
+// ~1× perCallDelay, not 6×. The LessOrEqual bound of 3× provides generous
+// headroom for scheduler jitter while still catching accidental serial execution.
+func TestApplyAllGroups_FansOutConcurrently(t *testing.T) {
+	const perCallDelay = 50 * time.Millisecond
+
+	// One non-nil field per group so each applyXGroup actually invokes the
+	// Cloudflare client rather than hitting the nil-spec fast-skip path.
+	sslMode := "strict"
+	secLevel := "high"
+	perfCache := "aggressive"
+	netIPv6 := "on"
+	dnsCNAME := "flatten_at_root"
+	botEnableJS := true
+
+	cfg := &v1alpha1.CloudflareZoneConfig{
+		Spec: v1alpha1.CloudflareZoneConfigSpec{
+			SSL:           &v1alpha1.SSLSettings{Mode: &sslMode},
+			Security:      &v1alpha1.SecuritySettings{SecurityLevel: &secLevel},
+			Performance:   &v1alpha1.PerformanceSettings{CacheLevel: &perfCache},
+			Network:       &v1alpha1.NetworkSettings{IPv6: &netIPv6},
+			DNS:           &v1alpha1.DNSSettings{CNAMEFlattening: &dnsCNAME},
+			BotManagement: &v1alpha1.BotManagementSettings{EnableJS: &botEnableJS},
+		},
+	}
+
+	blocker := &blockingZoneConfigClient{delay: perCallDelay}
+
+	start := time.Now()
+	results := applyAllGroups(context.Background(), blocker, "zone-id", cfg)
+	elapsed := time.Since(start)
+
+	require.Len(t, results, 6, "expected 6 group results")
+	for _, r := range results {
+		require.False(t, r.skip, "no group should be skipped")
+		require.NoError(t, r.err, "no group should error")
+	}
+	require.LessOrEqual(t, elapsed, 3*perCallDelay,
+		"expected fan-out (≤ ~150ms); got %v — likely still serial", elapsed)
+	require.GreaterOrEqual(t, elapsed, perCallDelay,
+		"expected at least one full call delay; got %v", elapsed)
+}
+
+// blockingZoneConfigClient is a stub implementing cloudflare.ZoneConfigClient
+// that sleeps `delay` on every method to simulate per-call latency. This lets
+// the fan-out timing test verify that the 6 groups run concurrently.
+type blockingZoneConfigClient struct {
+	delay time.Duration
+}
+
+func (b *blockingZoneConfigClient) UpdateSetting(ctx context.Context, zoneID, settingID string, value any) error {
+	select {
+	case <-time.After(b.delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *blockingZoneConfigClient) GetBotManagement(ctx context.Context, zoneID string) (*cloudflare.BotManagementConfig, error) {
+	select {
+	case <-time.After(b.delay):
+		return &cloudflare.BotManagementConfig{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (b *blockingZoneConfigClient) UpdateBotManagement(ctx context.Context, zoneID string, config cloudflare.BotManagementConfig) error {
+	select {
+	case <-time.After(b.delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
