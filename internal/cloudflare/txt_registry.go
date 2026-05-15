@@ -86,6 +86,8 @@ type Codec interface {
 // Secret is configured (the v1alpha1 default).
 type plaintextCodec struct{}
 
+var _ Codec = plaintextCodec{}
+
 func (plaintextCodec) Encode(p RegistryPayload) (string, error) {
 	if p.V == 0 {
 		p.V = 1 // default — callers always intend v1 in v1alpha1

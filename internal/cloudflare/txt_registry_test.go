@@ -66,14 +66,19 @@ func TestPlaintextCodec_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, p, got)
 }
+
 func TestPlaintextCodec_RejectsUnknownVersion(t *testing.T) {
 	_, err := plaintextCodec{}.Decode(`{"v":99,"k":"X","ns":"y","n":"z"}`)
-	require.Error(t, err, "v=99 must be rejected")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "v=99 must wrap ErrUnrecognizedCodec for AdoptRefusedNoTXT branching")
 }
+
 func TestPlaintextCodec_RejectsMalformedJSON(t *testing.T) {
 	_, err := plaintextCodec{}.Decode("not-json-at-all")
 	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "malformed JSON must wrap ErrUnrecognizedCodec for AdoptRefusedNoTXT branching")
 }
+
 func TestPlaintextCodec_KindIsPlaintext(t *testing.T) {
 	require.Equal(t, "plaintext", plaintextCodec{}.Kind())
 }
