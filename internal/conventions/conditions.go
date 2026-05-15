@@ -144,6 +144,7 @@ const (
 	// cannot write Status on user-owned Gateway/HTTPRoute objects).
 	ReasonGatewayServiceUnresolved = "GatewayServiceUnresolved" // annotation present but Service Get/parse failed
 	ReasonUnsupportedProtocol      = "UnsupportedProtocol"      // listener protocol cloudflared cannot serve
+	ReasonOrphanedDNSRecordPruned  = "OrphanedDNSRecordPruned"  // emitted DNSRecord CR pruned: its hostname left the source's desired set
 )
 
 // TunnelReasons returns the reason vocabulary appended by spec 3 for the
@@ -170,5 +171,6 @@ func TunnelReasons() []string {
 		ReasonGatewayServiceUnspecified,
 		ReasonGatewayServiceUnresolved,
 		ReasonUnsupportedProtocol,
+		ReasonOrphanedDNSRecordPruned,
 	}
 }

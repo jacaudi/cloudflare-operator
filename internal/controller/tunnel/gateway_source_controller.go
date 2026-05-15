@@ -243,10 +243,26 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	}
 
 	// Emit one CloudflareDNSRecord (CNAME → tunnel CNAME) per listener hostname.
+	desired := make(map[string]struct{}, len(hostnames))
 	for _, h := range hostnames {
+		desired[h] = struct{}{}
 		if err := r.emitDNSRecord(ctx, &gw, h, tn); err != nil {
 			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", h, err)
 		}
+	}
+
+	// Prune previously-emitted DNSRecord CRs whose hostname is no longer in
+	// the desired set. Best-effort: a prune error logs and continues — the
+	// desired records are already emitted, and any surviving orphan is retried
+	// on the next reconcile. Placed strictly AFTER the emit loop on the
+	// post-emit path; never reached on the deferred-emission early-return
+	// above (where desired would be empty and would wrongly delete live CRs).
+	pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Gateway", gw.Name, gw.Namespace, desired)
+	if perr != nil {
+		logger.Error(perr, "orphan-prune failed (continuing)")
+	} else if len(pruned) > 0 {
+		r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+			fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) for hostnames no longer in spec", len(pruned)))
 	}
 
 	// No cross-controller Status write: the tunnel reconciler reads

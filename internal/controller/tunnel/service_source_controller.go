@@ -187,10 +187,26 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	}
 
 	// Emit one CloudflareDNSRecord CR per hostname.
+	desired := make(map[string]struct{}, len(contribs))
 	for _, ic := range contribs {
+		desired[ic.Hostname] = struct{}{}
 		if err := r.emitDNSRecord(ctx, &svc, ic.Hostname, tn); err != nil {
 			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", ic.Hostname, err)
 		}
+	}
+
+	// Prune previously-emitted DNSRecord CRs whose hostname is no longer in
+	// the desired set. Best-effort: a prune error logs and continues — the
+	// desired records are already emitted, and any surviving orphan is retried
+	// on the next reconcile. Placed strictly AFTER the emit loop on the
+	// post-emit path; never reached on the deferred-emission early-return
+	// above (where desired would be empty and would wrongly delete live CRs).
+	pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Service", svc.Name, svc.Namespace, desired)
+	if perr != nil {
+		logger.Error(perr, "orphan-prune failed (continuing)")
+	} else if len(pruned) > 0 {
+		r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+			fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) for hostnames no longer in spec", len(pruned)))
 	}
 
 	// Per Correction B: the cache IS the source of truth for
