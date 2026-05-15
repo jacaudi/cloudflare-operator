@@ -58,6 +58,8 @@ func TestZoneReasons_Registered(t *testing.T) {
 		ReasonDriftDetected, ReasonSSLApplied, ReasonSecurityApplied,
 		ReasonPerformanceApplied, ReasonNetworkApplied, ReasonDNSApplied,
 		ReasonBotManagementApplied,
+		ReasonAdoptRefusedNoTXT, ReasonAdoptRefusedForeign,
+		ReasonTxtRegistryKeyUnavailable, ReasonObserving,
 	}
 	for _, r := range want {
 		require.NotEmpty(t, r)
