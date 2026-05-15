@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -147,30 +148,42 @@ func TestPruneOrphanedDNSRecords_EmptyExistingIsNoOp(t *testing.T) {
 	require.Empty(t, deleted)
 }
 
-func TestPruneOrphanedDNSRecords_IgnoresConcurrentlyDeletedRecord(t *testing.T) {
+func TestPruneOrphanedDNSRecords_IgnoresRecordDeletedBetweenListAndDelete(t *testing.T) {
 	s := pruneScheme(t)
+	// racing is present at List time (the helper WILL see it and decide to
+	// delete it), but a concurrent actor removes it in the window between the
+	// helper's List and its Delete. keep proves the iteration over the
+	// remaining records is unaffected by the swallowed NotFound.
 	racing := makeEmittedRecord("svc", "race.example.com")
-	// A desired record that must survive the prune untouched, proving the
-	// racing delete didn't corrupt the rest of the iteration.
 	keep := makeEmittedRecord("svc", "keep.example.com")
 
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(racing, keep).Build()
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(racing, keep).Build()
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if obj.GetName() == racing.Name {
+				// First delegated Delete actually removes it (the concurrent
+				// actor's deletion taking effect); the second returns the
+				// genuine apierrors NotFound the store now produces — exactly
+				// what the helper's c.Delete observes mid-iteration.
+				_ = cl.Delete(ctx, obj, opts...)
+				return cl.Delete(ctx, obj, opts...)
+			}
+			return cl.Delete(ctx, obj, opts...)
+		},
+	})
 
-	// Simulate an out-of-band deletion racing our prune — delete one target CR
-	// before calling the helper.
-	require.NoError(t, c.Delete(context.Background(), racing))
-
-	// Desired set keeps keep.example.com and excludes race.example.com; the
-	// helper would want to delete the latter, but it's already gone.
+	// Desired excludes race.example.com, so the helper lists it, attempts the
+	// Delete, and must tolerate the NotFound surfaced by the interceptor.
 	desired := map[string]struct{}{"keep.example.com": {}}
 	_, err := pruneOrphanedDNSRecords(context.Background(), c, "Service", "svc", "ns", desired)
-	require.NoError(t, err, "a racing deletion must not cause an error")
+	require.NoError(t, err, "a deletion racing between List and Delete must be swallowed")
 
 	// The desired record was untouched by the prune and is still Gettable.
 	var surviving v1alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(keep), &surviving))
 
-	// The racing record stays gone — the helper did not resurrect it.
+	// The racing record is gone (the concurrent actor removed it; the helper
+	// did not resurrect it).
 	var gone v1alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(racing), &gone)
 	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)

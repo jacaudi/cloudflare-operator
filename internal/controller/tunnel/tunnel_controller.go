@@ -420,6 +420,14 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	// observed config to drift from, and an empty live config vs a nil
 	// ObservedIngress would otherwise reflect.DeepEqual-mismatch and emit a
 	// spurious DriftDetected on the very first reconcile.
+	//
+	// The comparison is order-sensitive by design: it reuses
+	// snapshotFromConfig so it shares the exact basis the PUT-skip below
+	// (line ~435) already trusts — diverging here would make drift and
+	// PUT-skip disagree. This assumes Cloudflare preserves ingress order
+	// (cloudflared ingress is semantically ordered: the catch-all is last).
+	// If DriftDetected ever becomes chronically noisy, server-side ingress
+	// reordering is the first thing to check here.
 	if tn.Status.TunnelID != "" && len(tn.Status.ObservedIngress) > 0 {
 		if live, gerr := tc.GetConfiguration(ctx, accountID, tn.Status.TunnelID); gerr != nil {
 			log.FromContext(ctx).V(1).Info("GetConfiguration drift-check failed (continuing)", "err", gerr.Error())
