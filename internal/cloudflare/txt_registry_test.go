@@ -17,6 +17,7 @@ limitations under the License.
 package cloudflare
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -40,6 +41,18 @@ func TestAffixName_DeepSubdomain(t *testing.T) {
 	require.Equal(t, "cf-txt-foo-bar.test", AffixName("cf-txt", "foo.bar.test"))
 }
 
+func TestRegistryPayload_JSONTags(t *testing.T) {
+	p := RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "default", N: "root"}
+	b, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"v":1,"k":"CloudflareDNSRecord","ns":"default","n":"root"}`, string(b))
+	p.H = "sha256:abc"
+	b, err = json.Marshal(p)
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"h":"sha256:abc"`)
+}
+
 func TestErrUnrecognizedCodec_Is(t *testing.T) {
 	require.ErrorIs(t, ErrUnrecognizedCodec, ErrUnrecognizedCodec)
+	require.EqualError(t, ErrUnrecognizedCodec, "txt registry: unrecognized codec or malformed payload")
 }

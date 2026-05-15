@@ -55,17 +55,12 @@ type RegistryPayload struct {
 //	AffixName("cf-txt", "foo.test")    → "cf-txt-foo.test"
 //	AffixName("cf-txt", "foo.bar.test") → "cf-txt-foo-bar.test"
 func AffixName(prefix, name string) string {
-	dot := strings.IndexByte(name, '.')
-	if dot < 0 {
+	if !strings.ContainsRune(name, '.') {
 		return prefix + "." + name
 	}
 	segs := strings.Split(name, ".")
-	if len(segs) == 2 {
-		return prefix + "-" + segs[0] + "." + segs[1]
-	}
 	head := strings.Join(segs[:len(segs)-1], "-")
-	tail := segs[len(segs)-1]
-	return prefix + "-" + head + "." + tail
+	return prefix + "-" + head + "." + segs[len(segs)-1]
 }
 
 // ErrUnrecognizedCodec is returned by codec decoders when the TXT
