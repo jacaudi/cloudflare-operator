@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 )
@@ -126,7 +127,7 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 			Labels:    labels,
 		},
 		Spec: appsv1.DeploymentSpec{
-			Replicas: ptr32(a.Replicas),
+			Replicas: ptr.To(a.Replicas),
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -184,6 +185,5 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 	}
 }
 
-func ptr32(v int32) *int32    { return &v }
 func ptrBool(b bool) *bool    { return &b }
 func ptrInt64(i int64) *int64 { return &i }
