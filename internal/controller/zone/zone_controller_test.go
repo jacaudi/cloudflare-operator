@@ -18,6 +18,7 @@ package zone
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -167,4 +168,102 @@ func TestZone_DeleteWithDelete_RemovesZone(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Zone.GetZone(context.Background(), created.ID)
 	require.Error(t, err, "zone deleted on CF side")
+}
+
+func TestZone_DeleteWithDelete_CallsDrainHoldFn(t *testing.T) {
+	m := mock.New()
+	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
+	now := metav1.Now()
+	z := &v1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "default",
+			Finalizers:        []string{conventions.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec:   v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyDelete},
+		Status: v1alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
+	}
+	s := zoneTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	var drainCalls []string
+	r := &CloudflareZoneReconciler{
+		Client: c,
+		Scheme: s,
+		ZoneClientFn: func(_ cloudflare.Credentials) (cloudflare.ZoneClient, error) { return m.Zone, nil },
+		DrainHoldFn: func(_ context.Context, zoneID string) error {
+			drainCalls = append(drainCalls, zoneID)
+			return nil
+		},
+	}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "example", Namespace: "default"}})
+	require.NoError(t, err)
+
+	// DrainHoldFn called exactly once with the correct zoneID.
+	require.Len(t, drainCalls, 1)
+	require.Equal(t, created.ID, drainCalls[0])
+
+	// DeleteZone ran — zone no longer exists on CF side.
+	_, err = m.Zone.GetZone(context.Background(), created.ID)
+	require.Error(t, err, "zone deleted on CF side")
+
+	// Finalizer removed: the fake client deletes the object when the finalizer
+	// is cleared while DeletionTimestamp is set, so "not found" is the expected
+	// outcome — it confirms the finalizer was stripped.
+	var got v1alpha1.CloudflareZone
+	getErr := c.Get(context.Background(), types.NamespacedName{Name: "example", Namespace: "default"}, &got)
+	if getErr == nil {
+		require.NotContains(t, got.Finalizers, conventions.FinalizerName)
+	} else {
+		require.True(t, client.IgnoreNotFound(getErr) == nil, "unexpected error: %v", getErr)
+	}
+}
+
+func TestZone_DeleteWithDelete_DrainHoldFnErrorIsLogged(t *testing.T) {
+	m := mock.New()
+	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
+	now := metav1.Now()
+	z := &v1alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "default",
+			Finalizers:        []string{conventions.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec:   v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyDelete},
+		Status: v1alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
+	}
+	s := zoneTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	drainErr := errors.New("hold drain failed")
+	r := &CloudflareZoneReconciler{
+		Client: c,
+		Scheme: s,
+		ZoneClientFn: func(_ cloudflare.Credentials) (cloudflare.ZoneClient, error) { return m.Zone, nil },
+		DrainHoldFn: func(_ context.Context, _ string) error {
+			return drainErr
+		},
+	}
+	// Error is logged-not-returned: Reconcile must return nil even when DrainHoldFn errors.
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "example", Namespace: "default"}})
+	require.NoError(t, err, "drain error must not be returned from Reconcile")
+	require.Equal(t, ctrl.Result{}, result)
+
+	// DeleteZone still ran — zone no longer exists on CF side.
+	_, err = m.Zone.GetZone(context.Background(), created.ID)
+	require.Error(t, err, "zone deleted on CF side despite drain error")
+
+	// Finalizer still removed: the fake client deletes the object when the
+	// finalizer is cleared while DeletionTimestamp is set.
+	var got v1alpha1.CloudflareZone
+	getErr := c.Get(context.Background(), types.NamespacedName{Name: "example", Namespace: "default"}, &got)
+	if getErr == nil {
+		require.NotContains(t, got.Finalizers, conventions.FinalizerName)
+	} else {
+		require.True(t, client.IgnoreNotFound(getErr) == nil, "unexpected error: %v", getErr)
+	}
 }
