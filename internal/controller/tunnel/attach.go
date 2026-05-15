@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,8 +31,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -181,6 +184,134 @@ func isOrphaned(tn *v1alpha1.CloudflareTunnel) bool {
 	return isAutoCreated(tn) &&
 		len(tn.OwnerReferences) == 0 &&
 		len(tn.Status.AttachedSources) == 0
+}
+
+// transferOwnershipMaxAttempts bounds how many AttachedSources candidates
+// TransferOwnershipIfNeeded will probe in a single call. The list is
+// lex-sorted first, so the cap deterministically prefers the lex-smallest
+// candidates. A bound exists so a pathological AttachedSources list (many
+// stale entries that are all NotFound/terminating) cannot turn one reconcile
+// into an unbounded apiserver-Get loop — the next reconcile retries the
+// remainder once the state stabilizes.
+const transferOwnershipMaxAttempts = 5
+
+// getSourceObject resolves an empty typed object for the given AttachedSource
+// kind so the caller can issue a typed Get against the live apiserver state
+// (rather than trusting the possibly-stale AttachedSources snapshot).
+//
+// Returns an error for an unrecognized kind — that is a programming/config
+// error, not a transient one, so callers propagate it rather than skip.
+func getSourceObject(src v1alpha1.AttachedSource) (client.Object, error) {
+	switch src.Kind {
+	case "Service":
+		return &corev1.Service{}, nil
+	case "Gateway":
+		return &gwv1.Gateway{}, nil
+	case "HTTPRoute":
+		return &gwv1.HTTPRoute{}, nil
+	case "TLSRoute":
+		return &gwv1a2.TLSRoute{}, nil
+	default:
+		return nil, fmt.Errorf("unknown source kind %q", src.Kind)
+	}
+}
+
+// TransferOwnershipIfNeeded promotes the lex-smallest LIVE remaining source in
+// tn.Status.AttachedSources to be the new controller-owner of tn, via an
+// optimistic-locked client.MergeFrom Patch. See design §4.2.
+//
+// Candidates are sorted lexicographically by (Kind, Namespace, Name) and
+// probed up to transferOwnershipMaxAttempts. For each candidate a fresh typed
+// Get is issued: an IsNotFound (the source was deleted between the snapshot
+// and now) or a non-nil DeletionTimestamp (the source is itself leaving)
+// causes a skip to the next candidate. The first viable candidate becomes the
+// new controller owner.
+//
+// Return contract:
+//   - (true, nil)  — ownership transferred; the in-memory tn.OwnerReferences
+//     is updated so the caller observes the post-patch state.
+//   - (false, nil) — either every candidate was NotFound/terminating (the next
+//     reconcile retries once state stabilizes), OR the Patch hit a
+//     ResourceVersion Conflict (the optimistic-lock contract — the next
+//     reconcile retries with a fresh RV). Neither is an error.
+//   - (false, err) — an unexpected error (unknown kind, non-Conflict Patch
+//     failure, owner-ref construction failure).
+//
+// Owner-ref construction reuses reconcile.SetControllerOwner
+// (controllerutil.SetControllerReference) rather than a hand-built
+// apiutil.GVKForObject OwnerReference: project code-reuse mandate, identical
+// Controller/BlockOwnerDeletion/GVK shape, and it derives the GVK from the
+// scheme so the typed Get clearing TypeMeta is a non-issue. needsOwnerTransfer
+// guarantees zero pre-existing owner refs before this is ever called, so the
+// single-owner replace cannot collide with SetControllerReference's
+// "different controller already set" guard.
+func TransferOwnershipIfNeeded(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	tn *v1alpha1.CloudflareTunnel,
+	recorder record.EventRecorder,
+) (bool, error) {
+	candidates := make([]v1alpha1.AttachedSource, len(tn.Status.AttachedSources))
+	copy(candidates, tn.Status.AttachedSources)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
+
+	for i, cand := range candidates {
+		if i >= transferOwnershipMaxAttempts {
+			break
+		}
+
+		live, err := getSourceObject(cand)
+		if err != nil {
+			return false, err
+		}
+		key := types.NamespacedName{Namespace: cand.Namespace, Name: cand.Name}
+		if err := c.Get(ctx, key, live); err != nil {
+			if apierrors.IsNotFound(err) {
+				// Deleted between the AttachedSources snapshot and now.
+				continue
+			}
+			return false, fmt.Errorf("get source %s/%s/%s: %w", cand.Kind, cand.Namespace, cand.Name, err)
+		}
+		if live.GetDeletionTimestamp() != nil {
+			// It's leaving too — don't promote a terminating source.
+			continue
+		}
+
+		patched := tn.DeepCopy()
+		patched.OwnerReferences = nil // single-owner replace; defensive even though needsOwnerTransfer guarantees empty
+		if err := reconcilelib.SetControllerOwner(live, patched, scheme); err != nil {
+			return false, fmt.Errorf("set controller owner %s/%s/%s: %w", cand.Kind, cand.Namespace, cand.Name, err)
+		}
+		if err := c.Patch(ctx, patched, client.MergeFrom(tn)); err != nil {
+			if apierrors.IsConflict(err) {
+				// Optimistic-lock contract: stale RV. The next reconcile
+				// retries with a fresh ResourceVersion. NOT an error.
+				return false, nil
+			}
+			return false, fmt.Errorf("patch ownerReferences: %w", err)
+		}
+		if recorder != nil {
+			recorder.Eventf(tn, corev1.EventTypeNormal, conventions.ReasonOwnerTransferred,
+				"ownership transferred to %s/%s/%s", cand.Kind, cand.Namespace, cand.Name)
+		}
+		// Reflect the post-patch refs so the caller sees the new owner.
+		tn.OwnerReferences = patched.OwnerReferences
+		return true, nil
+	}
+
+	// Every candidate was NotFound or terminating — the next reconcile retries
+	// when state stabilizes. NOT an error.
+	return false, nil
 }
 
 // cacheTracker is the shared per-controller "last attached tunnel-key" index
