@@ -263,6 +263,17 @@ func TestPredicates_MutuallyExclusive(t *testing.T) {
 		{Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a"}}}},
 		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}}},
 		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}, OwnerReferences: []metav1.OwnerReference{{UID: "u"}}}},
+		// 4th case: auto-created + sources + no owners — the only state where a
+		// regression dropping isOrphaned's AttachedSources==0 clause would make
+		// both predicates return true simultaneously.
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+			},
+			Status: v1alpha1.CloudflareTunnelStatus{
+				AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a"}},
+			},
+		},
 	} {
 		nt, io := needsOwnerTransfer(tn), isOrphaned(tn)
 		require.False(t, nt && io, "needsOwnerTransfer + isOrphaned cannot both be true: %+v", tn.Status)
