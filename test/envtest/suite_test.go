@@ -119,6 +119,7 @@ func TestMain(m *testing.M) {
 	// Skip envtest when KUBEBUILDER_ASSETS isn't set (so unit-test CI without
 	// envtest still passes); the `make test` target sets it correctly.
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
+		fmt.Fprintln(os.Stderr, "skipping envtest suite: KUBEBUILDER_ASSETS unset (run `make envtest` to set it)")
 		os.Exit(0)
 	}
 
