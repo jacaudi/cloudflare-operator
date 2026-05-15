@@ -30,4 +30,3 @@ func TestControllerSpec_DefaultReplicas(t *testing.T) {
 	s := ControllerSpec{}
 	require.Equal(t, int32(0), s.Replicas, "replicas should default to zero so CEL/defaulting can fill it")
 }
-
