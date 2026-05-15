@@ -104,10 +104,12 @@ func loadCodec(ctx context.Context, c client.Client, keyRef *v1alpha1.SecretRefe
 // and encrypted TXT records. It wraps the configured encoder so that existing
 // records written with either format can be read back correctly.
 func autoDetectingFor(encoder cloudflare.Codec) cloudflare.Codec {
-	if encoder.Kind() == "aes-gcm" {
-		return cloudflare.NewAutoDetectingCodec(encoder)
-	}
-	return cloudflare.NewAutoDetectingCodec(nil)
+	// NewAutoDetectingCodec already type-asserts internally: an aesCodec
+	// enables the v1: AES branch, anything else (plaintext) yields a
+	// plaintext-only read-side decoder that refuses v1: input. Passing the
+	// configured encoder straight through avoids a brittle Kind() string
+	// compare and keeps the read codec consistent with the write codec.
+	return cloudflare.NewAutoDetectingCodec(encoder)
 }
 
 // verifyTXTOwnership decodes a TXT companion record's content using the

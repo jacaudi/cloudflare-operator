@@ -42,6 +42,23 @@ func zoneScheme(t *testing.T) *runtime.Scheme {
 
 // --- loadCodec tests ---
 
+func TestLoadCodec_EmptyKeyName_DefaultsToKey(t *testing.T) {
+	s := zoneScheme(t)
+	var raw [32]byte
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "txt-key", Namespace: "default"},
+		Data:       map[string][]byte{"key": raw[:]},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
+	ref := &v1alpha1.SecretReference{Name: "txt-key"} // Key intentionally empty
+	codec, err := loadCodec(context.Background(), c, ref, "default")
+	require.NoError(t, err)
+	require.Equal(t, "aes-gcm", codec.Kind())
+}
+
 func TestLoadCodec_NoKey_ReturnsPlaintext(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).Build()
@@ -107,7 +124,41 @@ func TestLoadCodec_MissingKeyInSecret_Errors(t *testing.T) {
 	require.ErrorIs(t, err, cloudflare.ErrSecretKeyMissing)
 }
 
-// --- verifyTXTOwnership tests ---
+// --- autoDetectingFor tests ---
+
+func TestAutoDetectingFor_AESEncoder_ReadsAESAndPlaintext(t *testing.T) {
+	var k [32]byte
+	for i := range k {
+		k[i] = byte(i)
+	}
+	enc := cloudflare.NewAESCodec(k) // aes-gcm encoder
+	rd := autoDetectingFor(enc)
+	// AES-written content round-trips:
+	aesContent, err := enc.Encode(cloudflare.RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "ns", N: "n"})
+	require.NoError(t, err)
+	got, err := rd.Decode(aesContent)
+	require.NoError(t, err)
+	require.Equal(t, "n", got.N)
+	// plaintext content also still decodes via the dispatcher:
+	pt, _ := cloudflare.NewPlaintextCodec().Encode(cloudflare.RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "ns", N: "p"})
+	gp, err := rd.Decode(pt)
+	require.NoError(t, err)
+	require.Equal(t, "p", gp.N)
+}
+
+func TestAutoDetectingFor_PlaintextEncoder_RefusesEncrypted(t *testing.T) {
+	rd := autoDetectingFor(cloudflare.NewPlaintextCodec()) // no key
+	// plaintext decodes:
+	pt, _ := cloudflare.NewPlaintextCodec().Encode(cloudflare.RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "ns", N: "p"})
+	gp, err := rd.Decode(pt)
+	require.NoError(t, err)
+	require.Equal(t, "p", gp.N)
+	// v1: encrypted input with no key configured → ErrUnrecognizedCodec:
+	_, err = rd.Decode("v1:AAAA:BBBB")
+	require.ErrorIs(t, err, cloudflare.ErrUnrecognizedCodec)
+}
+
+// --- loadCodec tests ---
 
 func TestVerifyTXTOwnership_MatchOurUID(t *testing.T) {
 	codec := cloudflare.NewPlaintextCodec()
