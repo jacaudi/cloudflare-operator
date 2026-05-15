@@ -18,6 +18,7 @@ package envtest_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -275,16 +276,35 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 	// The strip only removes the dead owner's ref — the production reconciler is
 	// responsible for stamping LastOrphanedAt, waiting the grace window, and
 	// self-deleting. Conflict-tolerant: stale ResourceVersion just retries.
+	//
+	// Isolation-safety: we gate completion on BOTH ownerRefs==0 AND observed
+	// AttachedSources==0. Without this, if the tunnel reconciler fires before the
+	// ServiceSourceReconciler clears the deleted Service from the shared cache,
+	// observeAttachedSources still sees solo-svc → isOrphaned is false → the
+	// reconciler requeues at defaultTunnelInterval (30m) → the test stalls in
+	// strict isolation.
+	//
+	// The strip loop bumps a test-only label on every iteration to produce a
+	// real k8s write (real rv change → real watch event → tunnel reconciler
+	// re-runs). k8s 1.30+ skips rv bumps for no-op writes, so a plain Update
+	// with only the already-stripped ownerRefs would be a no-op after the first
+	// strip. The label value changes on every tick; the tunnel reconciler
+	// ignores labels, so this is purely a mechanical retriggering device.
+	// The tunnel reconciler re-running each tick is what eventually catches the
+	// moment the ServiceSourceReconciler has drained the cache, so isOrphaned
+	// can fire without depending on the 30-min defaultTunnelInterval requeue.
 	require.Eventually(t, func() bool {
 		var tn v1alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false // tunnel not yet visible or already gone
 		}
-		// No dangling ref remaining — strip is complete.
-		if len(tn.OwnerReferences) == 0 {
+		t.Logf("strip loop: ownerRefs=%d attachedSources=%v rv=%s", len(tn.OwnerReferences), tn.Status.AttachedSources, tn.ResourceVersion)
+		// Both the dangling ownerRef is gone AND observed sources have drained —
+		// isOrphaned can now fire; strip is complete.
+		if len(tn.OwnerReferences) == 0 && len(tn.Status.AttachedSources) == 0 {
 			return true
 		}
-		// Still carries the dead owner's ref — remove it (GC emulation).
+		// Strip the dead owner's ref from ownerReferences (GC emulation).
 		kept := tn.OwnerReferences[:0]
 		for _, or := range tn.OwnerReferences {
 			if or.Name != "solo-svc" {
@@ -292,10 +312,22 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 			}
 		}
 		tn.OwnerReferences = kept
-		_ = f.c.Update(ctx, &tn) // conflict => retried next tick
+		// Bump a test-only label so every iteration is a real (non-no-op) write.
+		// Without this, k8s returns the same rv for identical content, producing
+		// no watch event and leaving the tunnel reconciler stuck on its 30-min
+		// requeue. The tunnel reconciler ignores this label entirely.
+		if tn.Labels == nil {
+			tn.Labels = map[string]string{}
+		}
+		tn.Labels["cloudflare.io/test-strip-tick"] = strconv.FormatInt(time.Now().UnixNano(), 10)
+		if err := f.c.Update(ctx, &tn); err != nil {
+			t.Logf("update err: %v (rv=%s)", err, tn.ResourceVersion)
+		} else {
+			t.Logf("update ok: new rv=%s", tn.ResourceVersion)
+		}
 		return false
-	}, 30*time.Second, 250*time.Millisecond,
-		"dangling solo-svc ownerReference must be stripped (GC emulation)")
+	}, 45*time.Second, 250*time.Millisecond,
+		"dangling solo-svc ownerReference must be stripped and AttachedSources drained (GC emulation)")
 
 	// Production stamps LastOrphanedAt on the first orphan observation
 	// (len(OwnerReferences)==0 && len(AttachedSources)==0 && auto-created==true).
