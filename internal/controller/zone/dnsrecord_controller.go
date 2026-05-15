@@ -24,8 +24,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -96,6 +98,30 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	if halt != nil {
 		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &rec, &rec.Status.Conditions, &rec.Status.Phase, halt)
 	}
+
+	// Fetch the CloudflareOperator singleton to resolve the TXT-registry key.
+	// NotFound is treated as no key configured (bootstrap creates it eventually).
+	// Any other Get error is hard-returned so the reconciler retries.
+	var op v1alpha1.CloudflareOperator
+	if err := r.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &op); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("get CloudflareOperator/cluster: %w", err)
+		}
+		// Singleton absent: treat as no TXT key configured (plaintext mode).
+	}
+
+	encoder, cerr := loadCodec(ctx, r.Client, op.Spec.Cloudflare.TxtRegistryKeySecretRef, rec.Namespace)
+	if cerr != nil {
+		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+			conventions.ReasonTxtRegistryKeyUnavailable, cerr.Error())
+		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonTxtRegistryKeyUnavailable)
+		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+			return ctrl.Result{}, uerr
+		}
+		return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+	}
+	readCodec := autoDetectingFor(encoder)
+	_ = readCodec // consumed by tasks 11-12; variable retained to avoid future churn
 
 	// Snapshot status so the trailing Status().Update can be skipped when
 	// nothing material changed; LastSyncedAt/ObservedGeneration are masked.
