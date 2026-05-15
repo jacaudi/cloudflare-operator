@@ -229,7 +229,7 @@ func gatewayToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 		}
 		var routes gwv1.HTTPRouteList
 		if err := mgr.GetClient().List(ctx, &routes, client.MatchingFields{
-			IndexKeyRouteByGatewayParent: gw.Namespace + "/" + gw.Name,
+			IndexKeyRouteByGatewayParent: (types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}).String(),
 		}); err != nil {
 			return nil
 		}
@@ -254,7 +254,7 @@ func gatewayToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 		}
 		var routes gwv1a2.TLSRouteList
 		if err := mgr.GetClient().List(ctx, &routes, client.MatchingFields{
-			IndexKeyRouteByGatewayParent: gw.Namespace + "/" + gw.Name,
+			IndexKeyRouteByGatewayParent: (types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}).String(),
 		}); err != nil {
 			return nil
 		}

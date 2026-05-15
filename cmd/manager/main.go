@@ -114,12 +114,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Replace with a logger at the user-requested level (no-op if same).
-	if opts.LogLevel != "info" {
-		logger = zapr.NewLogger(newProductionLogger(opts.LogLevel))
-		ctrl.SetLogger(logger)
-		log.SetLogger(logger)
-	}
+	// Replace with a logger at the user-requested level (no-op when the level
+	// already matches the default).
+	logger = zapr.NewLogger(newProductionLogger(opts.LogLevel))
+	ctrl.SetLogger(logger)
+	log.SetLogger(logger)
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

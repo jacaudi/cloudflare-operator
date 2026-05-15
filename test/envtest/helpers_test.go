@@ -29,8 +29,12 @@ import (
 
 // setupSingleton ensures no leftover CloudflareOperator/cluster CR is present
 // at the start of a test. Deletes it if present (tolerating NotFound) and
-// polls via waitFor until the apiserver confirms removal. Use at the top of
-// any envtest that creates its own singleton.
+// polls via waitFor until the apiserver confirms removal.
+//
+// Callers MUST invoke this before creating a new singleton — particularly
+// rejection-path tests (e.g. CEL-validation rejection): without the prior
+// cleanup, Create would fail with AlreadyExists, masking the intended
+// admission error.
 func setupSingleton(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -38,7 +42,11 @@ func setupSingleton(t *testing.T) {
 
 	existing := &v1alpha1.CloudflareOperator{}
 	if err := sharedClient.Get(ctx, key, existing); err == nil {
-		_ = sharedClient.Delete(ctx, existing)
+		if derr := sharedClient.Delete(ctx, existing); derr != nil {
+			// Best-effort: a real error here will surface as the subsequent
+			// waitFor poll timing out, but logging makes the cause discoverable.
+			t.Logf("setupSingleton: delete existing singleton: %v", derr)
+		}
 		waitFor(t, 10*time.Second, func() bool {
 			err := sharedClient.Get(ctx, key, &v1alpha1.CloudflareOperator{})
 			return apierrors.IsNotFound(err)

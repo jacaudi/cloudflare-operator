@@ -394,13 +394,17 @@ func applySettingsGroup[T any](
 // rate-limit-safe at scale.
 func applyAllGroups(ctx context.Context, zcc cloudflare.ZoneConfigClient, zoneID string, cfg *v1alpha1.CloudflareZoneConfig) []groupResult {
 	var ssl, sec, perf, net, dns, bot groupResult
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { ssl = applySSLGroup(gctx, zcc, zoneID, cfg.Spec.SSL); return nil })
-	g.Go(func() error { sec = applySecurityGroup(gctx, zcc, zoneID, cfg.Spec.Security); return nil })
-	g.Go(func() error { perf = applyPerformanceGroup(gctx, zcc, zoneID, cfg.Spec.Performance); return nil })
-	g.Go(func() error { net = applyNetworkGroup(gctx, zcc, zoneID, cfg.Spec.Network); return nil })
-	g.Go(func() error { dns = applyDNSGroup(gctx, zcc, zoneID, cfg.Spec.DNS); return nil })
-	g.Go(func() error { bot = applyBotManagementGroup(gctx, zcc, zoneID, cfg.Spec.BotManagement); return nil })
+	var g errgroup.Group
+	// Each closure writes to a distinct outer-scoped groupResult; g.Wait
+	// establishes the happens-before edge for the post-Wait reads. Each
+	// goroutine returns nil so a single group's failure never cancels its
+	// siblings — that's the intended contract.
+	g.Go(func() error { ssl = applySSLGroup(ctx, zcc, zoneID, cfg.Spec.SSL); return nil })
+	g.Go(func() error { sec = applySecurityGroup(ctx, zcc, zoneID, cfg.Spec.Security); return nil })
+	g.Go(func() error { perf = applyPerformanceGroup(ctx, zcc, zoneID, cfg.Spec.Performance); return nil })
+	g.Go(func() error { net = applyNetworkGroup(ctx, zcc, zoneID, cfg.Spec.Network); return nil })
+	g.Go(func() error { dns = applyDNSGroup(ctx, zcc, zoneID, cfg.Spec.DNS); return nil })
+	g.Go(func() error { bot = applyBotManagementGroup(ctx, zcc, zoneID, cfg.Spec.BotManagement); return nil })
 	_ = g.Wait()
 	return []groupResult{ssl, sec, perf, net, dns, bot}
 }

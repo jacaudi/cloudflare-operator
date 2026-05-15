@@ -19,14 +19,11 @@ generate: tools
 	# Copy CRD YAML to chart for the CloudflareOperator only
 	-cp internal/bootstrap/crds/cloudflare.io_cloudflareoperators.yaml chart/cloudflare-operator/templates/crd.yaml
 	# Inject helm.sh/resource-policy: keep annotation to preserve CRD on helm uninstall
-	@if ! grep -q "helm.sh/resource-policy" chart/cloudflare-operator/templates/crd.yaml; then \
-		awk '/controller-gen\.kubebuilder\.io\/version:/ {print $$0; print "    helm.sh/resource-policy: keep"; next} {print}' \
-			chart/cloudflare-operator/templates/crd.yaml > chart/cloudflare-operator/templates/crd.yaml.tmp && \
-		mv chart/cloudflare-operator/templates/crd.yaml.tmp chart/cloudflare-operator/templates/crd.yaml; \
-		echo "Added helm.sh/resource-policy annotation"; \
-	else \
-		echo "helm.sh/resource-policy annotation already present"; \
-	fi
+	@awk '/controller-gen\.kubebuilder\.io\/version:/ {print $$0; print "    helm.sh/resource-policy: keep"; next} {print}' \
+		chart/cloudflare-operator/templates/crd.yaml > chart/cloudflare-operator/templates/crd.yaml.tmp && \
+		mv chart/cloudflare-operator/templates/crd.yaml.tmp chart/cloudflare-operator/templates/crd.yaml
+	@grep -q "helm.sh/resource-policy: keep" chart/cloudflare-operator/templates/crd.yaml \
+		|| (echo "ERROR: failed to inject helm.sh/resource-policy into chart/cloudflare-operator/templates/crd.yaml"; exit 1)
 
 .PHONY: test
 test: tools

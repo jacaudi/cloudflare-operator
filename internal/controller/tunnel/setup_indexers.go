@@ -17,6 +17,7 @@ limitations under the License.
 package tunnel
 
 import (
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -65,7 +66,7 @@ func parentKeysOf(routeNS string, refs []gwv1.ParentReference) []string {
 		if pr.Namespace != nil {
 			ns = string(*pr.Namespace)
 		}
-		out = append(out, ns+"/"+string(pr.Name))
+		out = append(out, (types.NamespacedName{Namespace: ns, Name: string(pr.Name)}).String())
 	}
 	return out
 }
