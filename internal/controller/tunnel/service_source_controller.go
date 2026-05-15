@@ -27,7 +27,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,7 +35,6 @@ import (
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
-	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
@@ -201,42 +199,21 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	return reconcile.Result{}, nil
 }
 
-// emitDNSRecord creates (idempotently) a CloudflareDNSRecord CR for the given
-// hostname, owner-reffed to the Service and stamped with source labels.
+// emitDNSRecord upserts the CloudflareDNSRecord CR for this Service +
+// hostname pair via the shared SSA-based helper. Annotation drift
+// (cloudflare.io/adopt, cloudflare.io/zone-ref) propagates to the emitted
+// CR because EmitDNSRecord uses SSA.
 //
-// Per spec 2 contract:
-//   - spec.zoneRef.name (resolved by the zone reconciler from
-//     cloudflare.io/zone-ref OR longest-suffix match) — never spec.zoneID
-//   - spec.type = CNAME
-//   - spec.name = hostname
-//   - spec.content = tunnel CNAME (populated; guarded by caller)
+// Operator-edits-win: a user `kubectl edit` on the emitted CR will be
+// reverted on the next reconcile.
 func (r *ServiceSourceReconciler) emitDNSRecord(ctx context.Context, svc *corev1.Service, hostname string, tn *v1alpha1.CloudflareTunnel) error {
-	content := tn.Status.TunnelCNAME // copy to take address; caller guards non-empty
-	dr := &v1alpha1.CloudflareDNSRecord{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      emittedDNSRecordName(svc.Name, hostname),
-			Namespace: svc.Namespace,
-		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
-			Type:    "CNAME",
-			Name:    hostname,
-			Content: &content,
-		},
-	}
-	reconcilelib.StampSourceLabels(dr, "Service", svc.Name, svc.Namespace)
-	if err := reconcilelib.SetControllerOwner(svc, dr, r.Scheme); err != nil {
-		return err
-	}
-	if zr := svc.Annotations[conventions.AnnotationZoneRef]; zr != "" {
-		dr.Spec.ZoneRef = &v1alpha1.ZoneReference{Name: zr, Namespace: svc.Namespace}
-	}
-	if adopt, _ := conventions.ParseTruthy(svc.Annotations[conventions.AnnotationAdopt]); adopt {
-		dr.Spec.Adopt = true
-	}
-	if err := r.Create(ctx, dr); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
+		Owner:       svc,
+		OwnerKind:   "Service",
+		Hostname:    hostname,
+		Content:     tn.Status.TunnelCNAME,
+		Annotations: svc.GetAnnotations(),
+	})
 }
 
 // emittedDNSRecordName produces a stable, DNS-1123-compliant CR name combining
