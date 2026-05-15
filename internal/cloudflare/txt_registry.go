@@ -77,9 +77,10 @@ func AffixName(prefix, name string) string {
 var ErrUnrecognizedCodec = errors.New("txt registry: unrecognized codec or malformed payload")
 
 // Codec encodes/decodes a RegistryPayload to/from a TXT record's content
-// string. Implementations: plaintextCodec (bare JSON; default),
-// aesCodec (v1:<nonce>:<ciphertext> AES-256-GCM; opt-in via key Secret),
-// autoDetectingCodec (read-side dispatcher; sniffs the v1: prefix).
+// string. Current implementations: plaintextCodec (bare JSON; default) and
+// aesCodec (v1:<nonce>:<ciphertext> AES-256-GCM; opt-in via key Secret).
+// A read-side auto-detecting decoder that dispatches across both formats is
+// added separately.
 type Codec interface {
 	Encode(payload RegistryPayload) (string, error)
 	Decode(s string) (RegistryPayload, error)
@@ -118,9 +119,9 @@ func (plaintextCodec) Decode(s string) (RegistryPayload, error) {
 func (plaintextCodec) Kind() string { return "plaintext" }
 
 // aesCodec writes "v1:<base64-nonce>:<base64-ciphertext>" using AES-256-GCM
-// with a 32-byte key loaded from the operator-configured Secret. The wire
-// format's "v1:" prefix is intentional — it lets autoDetectingCodec
-// dispatch by sniffing the first 3 bytes without parsing the rest.
+// with a 32-byte key loaded from the operator-configured Secret. The "v1:"
+// prefix is a stable, self-identifying envelope marker for the encrypted
+// format.
 type aesCodec struct {
 	key [32]byte
 }
