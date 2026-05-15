@@ -190,10 +190,26 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 	}
 
 	// Emit per-Route DNSRecord CRs: CNAME <hostname> → <gateway-apex>.
+	desired := make(map[string]struct{}, len(rt.Spec.Hostnames))
 	for _, h := range rt.Spec.Hostnames {
-		if err := r.emitChainDNSRecord(ctx, &rt, string(h), gwApex); err != nil {
+		desired[string(h)] = struct{}{}
+		if err := r.emitChainDNSRecord(ctx, &rt, string(h), gwApex, gw); err != nil {
 			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", h, err)
 		}
+	}
+
+	// Prune previously-emitted DNSRecord CRs whose hostname is no longer in
+	// the desired set. Best-effort: a prune error logs and continues — the
+	// desired records are already emitted, and any surviving orphan is retried
+	// on the next reconcile. Placed strictly AFTER the emit loop on the
+	// post-emit path; never reached on the deferred-emission early-return
+	// above (where desired would be empty and would wrongly delete live CRs).
+	pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "HTTPRoute", rt.Name, rt.Namespace, desired)
+	if perr != nil {
+		logger.Error(perr, "orphan-prune failed (continuing)")
+	} else if len(pruned) > 0 {
+		r.dedupe.emit(r.Recorder, &rt, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+			fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) for hostnames no longer in spec", len(pruned)))
 	}
 
 	if err := r.writeParentStatus(ctx, &rt, *parent, warns, len(contribs) > 0); err != nil {
@@ -287,18 +303,23 @@ func firstListenerHostname(gw *gwv1.Gateway) string {
 // emitChainDNSRecord upserts the chain CloudflareDNSRecord CR (route
 // hostname → Gateway apex) for this HTTPRoute + hostname pair via the
 // shared SSA-based helper. Annotation drift (cloudflare.io/adopt,
-// cloudflare.io/zone-ref) propagates to the emitted CR because
+// cloudflare.io/zone-ref, etc.) propagates to the emitted CR because
 // EmitDNSRecord uses SSA.
+//
+// cloudflare.io/* annotations are merged via inheritedAnnotations: the
+// route's own value wins when set; missing values fall through to the
+// parent Gateway. This implements the per-route override / per-gateway
+// default pattern from design §5.
 //
 // Operator-edits-win: a user `kubectl edit` on the emitted CR will be
 // reverted on the next reconcile.
-func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, gwApex string) error {
+func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, gwApex string, gw *gwv1.Gateway) error {
 	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
 		Owner:       rt,
 		OwnerKind:   "HTTPRoute",
 		Hostname:    hostname,
 		Content:     gwApex,
-		Annotations: rt.GetAnnotations(),
+		Annotations: inheritedAnnotations(rt.GetAnnotations(), gw),
 	})
 }
 

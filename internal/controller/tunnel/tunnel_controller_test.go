@@ -469,6 +469,169 @@ func TestTunnelReconciler_DuplicateHostname_EmitsEventOnLoser(t *testing.T) {
 	require.True(t, sawDuplicate, "lex-loser Service must receive DuplicateHostname Event")
 }
 
+func TestApplyRemoteConfig_EmitsDriftDetectedWhenLiveDiffersFromObserved(t *testing.T) {
+	// Out-of-band drift (Design E2): the live Cloudflare config differs from
+	// what the operator last observed. applyRemoteConfig must emit a single
+	// DriftDetected Warning Event for operator visibility.
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	created, err := m.Tunnel.CreateTunnel(context.Background(), "acct-1",
+		cloudflare.CreateTunnelParams{Name: "cf-ns"})
+	require.NoError(t, err)
+	// Live config has a real ingress entry someone added via the dashboard.
+	_, err = m.Tunnel.PutConfiguration(context.Background(), "acct-1", created.ID,
+		cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
+			{Hostname: "rogue.example.com", Service: "http://rogue.ns.svc:80"},
+		}})
+	require.NoError(t, err)
+
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name:      "cf-ns",
+			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			TunnelID: created.ID,
+			// Deliberately equal to the resolved catch-all snapshot (empty
+			// cache → http_status:404), so wantSnap == ObservedIngress and
+			// the existing early-return fires. This isolates the assertion to
+			// pure drift detection: no PUT mutates the mock before we check
+			// for the DriftDetected event.
+			ObservedIngress: []v1alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	rec := record.NewFakeRecorder(16)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	var sawDrift bool
+	close(rec.Events)
+	for ev := range rec.Events {
+		if containsAll(ev, conventions.ReasonDriftDetected) {
+			sawDrift = true
+		}
+	}
+	require.True(t, sawDrift, "live config differs from observed → DriftDetected Warning Event expected")
+}
+
+func TestApplyRemoteConfig_NoDriftWhenLiveMatchesObserved(t *testing.T) {
+	// When the live Cloudflare config matches Status.ObservedIngress (built
+	// from the same projection that produced the PUT), no DriftDetected
+	// Event must fire.
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	created, err := m.Tunnel.CreateTunnel(context.Background(), "acct-1",
+		cloudflare.CreateTunnelParams{Name: "cf-ns"})
+	require.NoError(t, err)
+	liveCfg := cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{{Service: "http_status:404"}}}
+	_, err = m.Tunnel.PutConfiguration(context.Background(), "acct-1", created.ID, liveCfg)
+	require.NoError(t, err)
+
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name:      "cf-ns",
+			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			TunnelID: created.ID,
+			// Built via the same projection the production code compares against,
+			// so live and observed are byte-equal — no drift.
+			ObservedIngress: snapshotFromConfig(liveCfg),
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	rec := record.NewFakeRecorder(16)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	var sawDrift bool
+	close(rec.Events)
+	for ev := range rec.Events {
+		if containsAll(ev, conventions.ReasonDriftDetected) {
+			sawDrift = true
+		}
+	}
+	require.False(t, sawDrift, "live config matches observed → no DriftDetected Event")
+}
+
+func TestApplyRemoteConfig_NoDriftWhenObservedEmpty(t *testing.T) {
+	// First-reconcile guard: with Status.ObservedIngress empty/nil there is
+	// no baseline to drift from. Even with a non-empty live config, no
+	// DriftDetected Event must fire (otherwise every fresh tunnel would emit
+	// a spurious drift on first reconcile).
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	created, err := m.Tunnel.CreateTunnel(context.Background(), "acct-1",
+		cloudflare.CreateTunnelParams{Name: "cf-ns"})
+	require.NoError(t, err)
+	_, err = m.Tunnel.PutConfiguration(context.Background(), "acct-1", created.ID,
+		cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
+			{Hostname: "live.example.com", Service: "http://live.ns.svc:80"},
+		}})
+	require.NoError(t, err)
+
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name:      "cf-ns",
+			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			TunnelID: created.ID,
+			// ObservedIngress intentionally nil — no baseline yet.
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	rec := record.NewFakeRecorder(16)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	var sawDrift bool
+	close(rec.Events)
+	for ev := range rec.Events {
+		if containsAll(ev, conventions.ReasonDriftDetected) {
+			sawDrift = true
+		}
+	}
+	require.False(t, sawDrift, "empty ObservedIngress → first-reconcile guard suppresses DriftDetected")
+}
+
 // containsAll returns true when s contains every substring.
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {

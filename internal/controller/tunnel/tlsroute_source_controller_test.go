@@ -674,6 +674,87 @@ func TestTLSRouteSource_NoListenerHostname_ZeroContribs_AcceptedFalse(t *testing
 	require.True(t, sawClientSide, "expected PartiallyInvalid=True/ClientSideClientRequired always stamped")
 }
 
+// TestTLSRouteSource_InheritsAdoptFromGateway verifies Design E1 §5: when the
+// TLSRoute omits cloudflare.io/adopt, the value falls through from the parent
+// Gateway's annotation. The emitted CloudflareDNSRecord must carry Spec.Adopt
+// reflecting the Gateway's setting.
+func TestTLSRouteSource_InheritsAdoptFromGateway(t *testing.T) {
+	// Gateway carries adopt=true; TLSRoute has no adopt annotation.
+	gw := mkTLSParentGw("gw", "gw-ns")
+	gw.Annotations[conventions.AnnotationAdopt] = "true"
+
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+	}
+	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
+	rt := &gwv1a2.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "r",
+			Namespace: "app",
+			// No adopt annotation — must inherit from Gateway.
+		},
+		Spec: gwv1a2.TLSRouteSpec{
+			Hostnames:       []gwv1.Hostname{"secure.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: tunnelsynth.NewCache()}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+	require.NoError(t, err)
+
+	// Re-Get the emitted DNSRecord and assert Spec.Adopt reflects the Gateway's annotation.
+	drName := emittedDNSRecordName("r", "secure.example.com")
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: drName}, &got))
+	require.True(t, got.Spec.Adopt, "Spec.Adopt must be true (inherited from parent Gateway)")
+}
+
+// TestTLSRouteSource_RouteOverridesGatewayAdopt verifies Design E1 §5: when
+// the TLSRoute explicitly sets cloudflare.io/adopt, its value wins over the
+// parent Gateway's value. Route-side annotations have priority.
+func TestTLSRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
+	// Gateway carries adopt=true; TLSRoute overrides to adopt=false.
+	gw := mkTLSParentGw("gw", "gw-ns")
+	gw.Annotations[conventions.AnnotationAdopt] = "true"
+
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+	}
+	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
+	rt := &gwv1a2.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "r",
+			Namespace: "app",
+			Annotations: map[string]string{
+				conventions.AnnotationAdopt: "false",
+			},
+		},
+		Spec: gwv1a2.TLSRouteSpec{
+			Hostnames:       []gwv1.Hostname{"secure.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := &TLSRouteSourceReconciler{Client: c, Scheme: tlsRtScheme(t), Cache: tunnelsynth.NewCache()}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+	require.NoError(t, err)
+
+	// Re-Get the emitted DNSRecord and assert the route's own annotation wins.
+	drName := emittedDNSRecordName("r", "secure.example.com")
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: drName}, &got))
+	require.False(t, got.Spec.Adopt, "Spec.Adopt must be false (TLSRoute annotation overrides Gateway)")
+}
+
 // TestTLSRouteSource_InheritsListenerHostname_WhenSpecEmpty covers the
 // TLSRoute-specific Gateway-API fallback at tlsroute_source_controller.go
 // lines 162-164: when Spec.Hostnames is empty AND the parent Gateway's
