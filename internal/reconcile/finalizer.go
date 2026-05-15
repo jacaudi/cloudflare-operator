@@ -31,7 +31,15 @@ func EnsureFinalizer(obj client.Object, finalizer string) bool {
 }
 
 // RemoveFinalizer removes the given finalizer if present and reports whether
-// the object was changed.
+// it was actually removed. Callers immediately follow with SetFinalizers on
+// the same object; the implementation rewrites the underlying slice in place
+// via `fs[:0]` for that reason.
+//
+// In-place-rewrite contract: callers MUST NOT hold a reference to the
+// finalizers slice across this call. If they do, the slice they hold gets
+// mutated under them. All current callers SetFinalizers immediately, so this
+// is safe today; if you add a caller that diverges from that pattern, switch
+// the implementation to a copy-on-write rewrite.
 func RemoveFinalizer(obj client.Object, finalizer string) bool {
 	fs := obj.GetFinalizers()
 	out := fs[:0]
