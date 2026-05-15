@@ -19,6 +19,7 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -259,15 +260,24 @@ func (r *HTTPRouteSourceReconciler) findTunnelTargetedParent(
 	return nil, nil, nil, nil, 0, nil
 }
 
-// firstListenerHostname returns the first non-empty hostname from the
-// Gateway's listeners. Used as the CNAME chain hop target.
+// firstListenerHostname returns the lexicographically-smallest non-empty
+// hostname across the Gateway's listeners. Apiserver listener order is not
+// stable across reconciles, so we sort to guarantee deterministic CNAME
+// emission — otherwise two reconciles of the same Gateway could pick
+// different hostnames when multiple listeners declare hostnames.
 func firstListenerHostname(gw *gwv1.Gateway) string {
+	hosts := make([]string, 0, len(gw.Spec.Listeners))
 	for _, l := range gw.Spec.Listeners {
-		if l.Hostname != nil && *l.Hostname != "" {
-			return string(*l.Hostname)
+		if l.Hostname == nil || *l.Hostname == "" {
+			continue
 		}
+		hosts = append(hosts, string(*l.Hostname))
 	}
-	return ""
+	if len(hosts) == 0 {
+		return ""
+	}
+	sort.Strings(hosts)
+	return hosts[0]
 }
 
 // emitChainDNSRecord creates (idempotently) a CloudflareDNSRecord CR for one
