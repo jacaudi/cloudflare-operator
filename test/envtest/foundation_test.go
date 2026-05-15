@@ -50,15 +50,7 @@ func TestFoundation_BothBundlesEnabled(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cloudflare-system"}}
 	_ = c.Create(ctx, ns) // ignore AlreadyExists
 
-	// Clean up any leftover singleton from a previous test run.
-	existing := &v1alpha1.CloudflareOperator{}
-	if err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, existing); err == nil {
-		_ = c.Delete(ctx, existing)
-		waitFor(t, 10*time.Second, func() bool {
-			err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &v1alpha1.CloudflareOperator{})
-			return apierrors.IsNotFound(err)
-		})
-	}
+	setupSingleton(t)
 
 	op := &v1alpha1.CloudflareOperator{
 		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
@@ -134,15 +126,7 @@ func TestFoundation_TunnelDisabled_RemovesDeployment(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cloudflare-system"}}
 	_ = c.Create(ctx, ns)
 
-	// Clean up any leftover singleton.
-	existing := &v1alpha1.CloudflareOperator{}
-	if err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, existing); err == nil {
-		_ = c.Delete(ctx, existing)
-		waitFor(t, 10*time.Second, func() bool {
-			err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &v1alpha1.CloudflareOperator{})
-			return apierrors.IsNotFound(err)
-		})
-	}
+	setupSingleton(t)
 
 	op := &v1alpha1.CloudflareOperator{
 		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
@@ -199,15 +183,7 @@ func TestFoundation_TunnelWithoutZoneRejected(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "cloudflare-system"}}
 	_ = c.Create(ctx, ns)
 
-	// Ensure no leftover singleton so we get a CEL error, not AlreadyExists.
-	existing := &v1alpha1.CloudflareOperator{}
-	if err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, existing); err == nil {
-		_ = c.Delete(ctx, existing)
-		waitFor(t, 10*time.Second, func() bool {
-			err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &v1alpha1.CloudflareOperator{})
-			return apierrors.IsNotFound(err)
-		})
-	}
+	setupSingleton(t)
 
 	op := &v1alpha1.CloudflareOperator{
 		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
