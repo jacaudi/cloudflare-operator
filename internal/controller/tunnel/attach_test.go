@@ -194,3 +194,77 @@ func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T)
 	require.Empty(t, tn.Annotations[conventions.AnnotationAutoCreated],
 		"adopt path must NOT retroactively stamp the annotation (no backfill)")
 }
+
+func TestNeedsOwnerTransfer_OwnerGoneSourcesExist(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{
+		Status: v1alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.True(t, needsOwnerTransfer(tn))
+}
+
+func TestNeedsOwnerTransfer_OwnerExists(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
+		},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.False(t, needsOwnerTransfer(tn))
+}
+
+func TestNeedsOwnerTransfer_OwnerGoneNoSources(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{}
+	require.False(t, needsOwnerTransfer(tn), "no sources → delegated to isOrphaned, not transfer")
+}
+
+func TestIsOrphaned_AutoCreatedAllConditionsMet(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+	}
+	require.True(t, isOrphaned(tn))
+}
+
+func TestIsOrphaned_DirectCreateNeverOrphaned(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{} // no annotation
+	require.False(t, isOrphaned(tn),
+		"direct-create CRs are never orphaned regardless of OwnerReferences or AttachedSources state")
+}
+
+func TestIsOrphaned_AutoCreatedWithSourcesNotOrphaned(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.False(t, isOrphaned(tn), "sources present → not orphaned, may need transfer")
+}
+
+func TestIsOrphaned_AutoCreatedWithOwnerNotOrphaned(t *testing.T) {
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
+		},
+	}
+	require.False(t, isOrphaned(tn), "owner ref present → not orphaned")
+}
+
+func TestPredicates_MutuallyExclusive(t *testing.T) {
+	for _, tn := range []*v1alpha1.CloudflareTunnel{
+		{Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}}},
+		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}, OwnerReferences: []metav1.OwnerReference{{UID: "u"}}}},
+	} {
+		nt, io := needsOwnerTransfer(tn), isOrphaned(tn)
+		require.False(t, nt && io, "needsOwnerTransfer + isOrphaned cannot both be true: %+v", tn.Status)
+	}
+}

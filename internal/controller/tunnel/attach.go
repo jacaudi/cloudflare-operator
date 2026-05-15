@@ -160,6 +160,29 @@ func isAutoCreated(tn *v1alpha1.CloudflareTunnel) bool {
 	return tn.Annotations[conventions.AnnotationAutoCreated] == "true"
 }
 
+// needsOwnerTransfer reports whether the tunnel CR has lost its
+// OwnerReferences but still has attaching sources tracked in
+// Status.AttachedSources. When true, the reconciler should attempt to
+// promote one of the remaining attachers to owner. See design §4.2 for
+// the algorithm.
+func needsOwnerTransfer(tn *v1alpha1.CloudflareTunnel) bool {
+	return len(tn.OwnerReferences) == 0 && len(tn.Status.AttachedSources) > 0
+}
+
+// isOrphaned reports whether the tunnel CR is an auto-created CR with no
+// remaining attaching sources and no owner. The cascade-GC self-delete
+// path uses this predicate (subject to the two-tick grace window on
+// Status.LastOrphanedAt). Mutually exclusive with needsOwnerTransfer.
+//
+// Direct-create CRs (no AnnotationAutoCreated marker) are NEVER orphaned
+// regardless of OwnerReferences / AttachedSources state — they survive
+// indefinitely without operator-driven removal.
+func isOrphaned(tn *v1alpha1.CloudflareTunnel) bool {
+	return isAutoCreated(tn) &&
+		len(tn.OwnerReferences) == 0 &&
+		len(tn.Status.AttachedSources) == 0
+}
+
 // cacheTracker is the shared per-controller "last attached tunnel-key" index
 // used by every source reconciler. The map is mutex-guarded because
 // controller-runtime may call Reconcile concurrently from its worker pool.
