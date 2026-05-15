@@ -124,7 +124,11 @@ func EnsureTunnelCR(
 	}
 	// Not found — create.
 	tn := &v1alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: derivedName, Namespace: owner.GetNamespace()},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        derivedName,
+			Namespace:   owner.GetNamespace(),
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
 		Spec: v1alpha1.CloudflareTunnelSpec{
 			Name:      derivedName,
 			Connector: defaults,

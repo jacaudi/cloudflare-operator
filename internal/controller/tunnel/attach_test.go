@@ -17,10 +17,17 @@ limitations under the License.
 package tunnel
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
 func TestDeriveTunnelName_WithName(t *testing.T) {
@@ -128,4 +135,37 @@ func TestParseGatewayServiceRef(t *testing.T) {
 			require.Equal(t, c.wantPort, port)
 		})
 	}
+}
+
+func TestEnsureTunnelCR_StampsAutoCreatedAnnotation(t *testing.T) {
+	s := tunnelScheme(t)
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
+
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v1alpha1.ConnectorSpec{
+		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "true", tn.Annotations[conventions.AnnotationAutoCreated],
+		"newly-created tunnel CR must carry the auto-created marker")
+}
+
+func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T) {
+	s := tunnelScheme(t)
+	existing := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-ns", Namespace: "ns"},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(existing, svc).Build()
+
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v1alpha1.ConnectorSpec{
+		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.Empty(t, tn.Annotations[conventions.AnnotationAutoCreated],
+		"adopt path must NOT retroactively stamp the annotation (no backfill)")
 }
