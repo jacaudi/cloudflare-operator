@@ -22,36 +22,46 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
 func TestInheritAnnotation_RouteWins(t *testing.T) {
-	route := map[string]string{"cloudflare.io/adopt": "true"}
-	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"cloudflare.io/adopt": "false"}}}
-	require.Equal(t, "true", inheritAnnotation(route, gw, "cloudflare.io/adopt"))
+	route := map[string]string{conventions.AnnotationAdopt: "true"}
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAdopt: "false"}}}
+	require.Equal(t, "true", inheritAnnotation(route, gw, conventions.AnnotationAdopt))
 }
 
 func TestInheritAnnotation_FallsThroughToGateway(t *testing.T) {
 	route := map[string]string{}
-	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"cloudflare.io/adopt": "true"}}}
-	require.Equal(t, "true", inheritAnnotation(route, gw, "cloudflare.io/adopt"))
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAdopt: "true"}}}
+	require.Equal(t, "true", inheritAnnotation(route, gw, conventions.AnnotationAdopt))
+}
+
+func TestInheritAnnotation_EmptyRouteValueFallsThroughToGateway(t *testing.T) {
+	// Route key present but explicitly empty must fall through to the
+	// Gateway value (the "set AND non-empty" half of the precedence rule).
+	route := map[string]string{conventions.AnnotationAdopt: ""}
+	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAdopt: "true"}}}
+	require.Equal(t, "true", inheritAnnotation(route, gw, conventions.AnnotationAdopt))
 }
 
 func TestInheritAnnotation_EmptyOnBothIsEmpty(t *testing.T) {
-	require.Equal(t, "", inheritAnnotation(map[string]string{}, &gwv1.Gateway{}, "cloudflare.io/adopt"))
+	require.Equal(t, "", inheritAnnotation(map[string]string{}, &gwv1.Gateway{}, conventions.AnnotationAdopt))
 }
 
 func TestInheritAnnotation_NilGatewayTolerated(t *testing.T) {
-	route := map[string]string{"cloudflare.io/adopt": "true"}
-	require.Equal(t, "true", inheritAnnotation(route, nil, "cloudflare.io/adopt"))
+	route := map[string]string{conventions.AnnotationAdopt: "true"}
+	require.Equal(t, "true", inheritAnnotation(route, nil, conventions.AnnotationAdopt))
 }
 
 func TestInheritedAnnotations_MergesFamily(t *testing.T) {
-	route := map[string]string{"cloudflare.io/adopt": "true"}
+	route := map[string]string{conventions.AnnotationAdopt: "true"}
 	gw := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-		"cloudflare.io/adopt":    "false", // route wins
-		"cloudflare.io/zone-ref": "shared-zone",
+		conventions.AnnotationAdopt:   "false", // route wins
+		conventions.AnnotationZoneRef: "shared-zone",
 	}}}
 	got := inheritedAnnotations(route, gw)
-	require.Equal(t, "true", got["cloudflare.io/adopt"], "route override wins")
-	require.Equal(t, "shared-zone", got["cloudflare.io/zone-ref"], "gateway value inherited when route unset")
+	require.Equal(t, "true", got[conventions.AnnotationAdopt], "route override wins")
+	require.Equal(t, "shared-zone", got[conventions.AnnotationZoneRef], "gateway value inherited when route unset")
 }
