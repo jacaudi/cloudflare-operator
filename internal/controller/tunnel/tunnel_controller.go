@@ -364,9 +364,10 @@ func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v1
 }
 
 // applyRemoteConfig: compute effective ingress from the shared cache, append
-// the catch-all, drift-check against status.observedIngress, and PUT if
-// different. The PUT is a full replace — Cloudflare has no merge semantics
-// on /configurations.
+// the catch-all, detect out-of-band drift (live config vs observed → a single
+// DriftDetected Warning Event, detection only), then diff against
+// status.observedIngress and PUT if different. The PUT is a full replace —
+// Cloudflare has no merge semantics on /configurations.
 func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	ctx context.Context,
 	tn *v1alpha1.CloudflareTunnel,
@@ -401,6 +402,31 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 			// deleted between cache-write and conflict-emit) is swallowed.
 			if err := r.emitDuplicateHostnameEvent(ctx, conflict); err != nil && !apierrors.IsNotFound(err) {
 				logger.V(1).Info("emit DuplicateHostname event failed", "err", err.Error())
+			}
+		}
+	}
+
+	// Out-of-band drift detection (Design E2): ask Cloudflare for the live
+	// tunnel config and compare it to what we last observed/pushed. A
+	// divergence means someone edited the config via the dashboard or
+	// another tool between reconciles. We surface this as a single
+	// DriftDetected Warning Event for operator visibility — detection only;
+	// the operator does NOT force a re-push here (the existing PUT path
+	// below already restores operator-desired config whenever the
+	// operator's own inputs changed). Best-effort: a GetConfiguration error
+	// must not fail the reconcile.
+	//
+	// Guarded on a populated baseline: before the first PUT there is no
+	// observed config to drift from, and an empty live config vs a nil
+	// ObservedIngress would otherwise reflect.DeepEqual-mismatch and emit a
+	// spurious DriftDetected on the very first reconcile.
+	if tn.Status.TunnelID != "" && len(tn.Status.ObservedIngress) > 0 {
+		if live, gerr := tc.GetConfiguration(ctx, accountID, tn.Status.TunnelID); gerr != nil {
+			log.FromContext(ctx).V(1).Info("GetConfiguration drift-check failed (continuing)", "err", gerr.Error())
+		} else if live != nil && !reflect.DeepEqual(snapshotFromConfig(live.Config), tn.Status.ObservedIngress) {
+			if r.Recorder != nil {
+				r.Recorder.Eventf(tn, corev1.EventTypeWarning, conventions.ReasonDriftDetected,
+					"live tunnel configuration differs from operator-observed config (out-of-band edit detected)")
 			}
 		}
 	}
