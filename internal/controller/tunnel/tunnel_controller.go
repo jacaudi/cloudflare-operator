@@ -119,6 +119,24 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return reconcilelib.HaltCredentialsUnavailable(ctx, r.Client, &tn, &tn.Status.Conditions, &tn.Status.Phase, halt)
 	}
 
+	// Owner-transfer (design §4.1 step 5): if the original owner was deleted
+	// but >=1 attaching source remains, promote the lex-smallest live
+	// candidate to controller-owner. Runs early so all subsequent reconcile
+	// work sees a valid OwnerReference. Successful transfer requeues
+	// immediately for a fresh, ownership-consistent view.
+	if needsOwnerTransfer(&tn) {
+		transferred, err := TransferOwnershipIfNeeded(ctx, r.Client, r.Scheme, &tn, r.Recorder)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if transferred {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		// No live candidates this pass (all NotFound / terminating). Fall
+		// through; orphan-state management (later, Task 9) handles the case
+		// where AttachedSources stabilizes as empty.
+	}
+
 	// Snapshot status before reconcile work so the trailing Status().Update
 	// can be skipped when nothing material changed. Avoids apiserver/watcher
 	// churn from stamping LastSyncedAt = time.Now() every pass.

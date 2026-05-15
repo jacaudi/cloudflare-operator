@@ -632,6 +632,48 @@ func TestApplyRemoteConfig_NoDriftWhenObservedEmpty(t *testing.T) {
 	require.False(t, sawDrift, "empty ObservedIngress → first-reconcile guard suppresses DriftDetected")
 }
 
+func TestReconcile_OwnerTransferPromotesLexSmallest(t *testing.T) {
+	// Design §4.1 step 5: with an empty OwnerReferences list but two live
+	// AttachedSources, the owner-transfer block must promote the
+	// lex-smallest live source to controller-owner and requeue.
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
+	svcC := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "c-svc", Namespace: "ns", UID: "uid-c"}}
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Spec: v1alpha1.CloudflareTunnelSpec{
+			Name:      "cf-ns",
+			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+		Status: v1alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v1alpha1.AttachedSource{
+				{Kind: "Service", Namespace: "ns", Name: "c-svc"},
+				{Kind: "Service", Namespace: "ns", Name: "b-svc"},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svcB, svcC).
+		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(10)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	var got v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Len(t, got.OwnerReferences, 1)
+	require.Equal(t, "b-svc", got.OwnerReferences[0].Name)
+}
+
 // containsAll returns true when s contains every substring.
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
