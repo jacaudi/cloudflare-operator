@@ -267,42 +267,22 @@ func (r *TLSRouteSourceReconciler) findTunnelTargetedParent(
 // Route hostname pointing at the Gateway apex (the CNAME chain's middle hop).
 //
 // Per design §4.2 / §4.3: <route-hostname> → <gateway-apex> → <tunnel-CNAME>.
-// Per spec 2 contract:
-//   - spec.zoneRef.name (resolved by the zone reconciler) when
-//     cloudflare.io/zone-ref is set on the Route — never spec.zoneID;
-//   - spec.type = CNAME;
-//   - spec.name = hostname;
-//   - spec.content = gateway apex (caller guards non-empty);
-//   - spec.adopt threaded from cloudflare.io/adopt.
+// emitChainDNSRecord upserts the chain CloudflareDNSRecord CR (route
+// hostname → Gateway apex) for this TLSRoute + hostname pair via the
+// shared SSA-based helper. Annotation drift (cloudflare.io/adopt,
+// cloudflare.io/zone-ref) propagates to the emitted CR because
+// EmitDNSRecord uses SSA.
 //
-// Uses emittedDNSRecordName (attach.go) for collision-safe CR naming.
+// Operator-edits-win: a user `kubectl edit` on the emitted CR will be
+// reverted on the next reconcile.
 func (r *TLSRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1a2.TLSRoute, hostname, gwApex string) error {
-	content := gwApex // copy so we can take its address (Spec.Content is *string)
-	dr := &v1alpha1.CloudflareDNSRecord{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      emittedDNSRecordName(rt.Name, hostname),
-			Namespace: rt.Namespace,
-		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
-			Type:    "CNAME",
-			Name:    hostname,
-			Content: &content,
-		},
-	}
-	reconcilelib.StampSourceLabels(dr, "TLSRoute", rt.Name, rt.Namespace)
-	if err := reconcilelib.SetControllerOwner(rt, dr, r.Scheme); err != nil {
-		return err
-	}
-	if zr := rt.Annotations[conventions.AnnotationZoneRef]; zr != "" {
-		dr.Spec.ZoneRef = &v1alpha1.ZoneReference{Name: zr, Namespace: rt.Namespace}
-	}
-	if adopt, _ := conventions.ParseTruthy(rt.Annotations[conventions.AnnotationAdopt]); adopt {
-		dr.Spec.Adopt = true
-	}
-	if err := r.Create(ctx, dr); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
+	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
+		Owner:       rt,
+		OwnerKind:   "TLSRoute",
+		Hostname:    hostname,
+		Content:     gwApex,
+		Annotations: rt.GetAnnotations(),
+	})
 }
 
 // writeParentStatus is the parent-only status write. Touches ONLY the
