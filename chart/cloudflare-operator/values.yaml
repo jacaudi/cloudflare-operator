@@ -5,6 +5,3 @@ image:
 
 namespace: cloudflare-system
 
-# Optional: bootstrap CloudflareOperator CR via post-install hook.
-# Disabled by default — users typically kubectl apply their own.
-createBootstrapCR: false
