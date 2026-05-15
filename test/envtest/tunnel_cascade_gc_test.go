@@ -483,9 +483,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 // TestEnvtest_CascadeGC_DirectCreateNeverGCd pins the contract (design §8.2)
 // that user-authored (direct-create) CloudflareTunnel CRs are NEVER
 // auto-GC'd: the orphan block is skipped at `if isAutoCreated(&tn)` because
-// the cloudflare.io/auto-created annotation is absent. No GC emulation is
-// needed because the orphan path never runs regardless of ownerRefs or
-// AttachedSources state.
+// the cloudflare.io/auto-created annotation is absent.
 //
 // Sequence:
 //  1. Create a CloudflareTunnel CR directly with the derived name
@@ -496,13 +494,35 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 //     NOT stamp auto-created (no backfill; Task-4 contract).
 //  3. Wait for the Service to appear in Status.AttachedSources.
 //  4. Delete the Service.
-//  5. Assert via require.Never (~8s, > 3s grace) that the tunnel CR is
-//     NEVER NotFound. Finally assert LastOrphanedAt==nil (never stamped)
+//  5. Assert via require.Never (12s, 250ms tick) that the tunnel CR is
+//     NEVER NotFound. Each tick strips any dangling ownerReference whose
+//     owner is the deleted service (envtest has no garbage collector, so a
+//     deleted source's ownerRef stays until explicitly removed; without this
+//     strip, len(OwnerReferences)>0 would permanently block isOrphaned from
+//     evaluating — the isAutoCreated gate under test would never be reached,
+//     leaving the test vacuous) AND bumps a benign envtest.local/retrigger-tick
+//     label so the tunnel reconciler is actively retriggered throughout the
+//     window. The production orphan block re-evaluates on every tick while
+//     the source is gone. Finally assert LastOrphanedAt==nil (never stamped)
 //     and the auto-created annotation is still absent.
 //
-// This test is non-vacuous: if the isAutoCreated guard in the orphan block
-// were removed, the tunnel would self-delete after the grace window and the
-// require.Never assertion would fail.
+// Harness-fidelity note: although EnsureTunnelCR's adopt path does NOT set
+// an ownerReference (the direct-create CR is returned untouched), the tunnel
+// reconciler's needsOwnerTransfer path promotes the first attaching source
+// (the Service) to controller-owner on a subsequent reconcile. envtest has
+// no kube-controller-manager, so deleting the Service leaves a dangling
+// ownerRef. The per-tick strip in require.Never emulates real-cluster GC
+// (identical to the gcEmulateStripDeadOwner helper used by the T11 and T10
+// tests) and enables isOrphaned to evaluate correctly.
+//
+// Non-vacuity (mutation-verified): if the isAutoCreated gate in the orphan
+// block is forced to return true, the tunnel has no annotation guard,
+// isOrphaned fires once ownerRefs are stripped and the cache drains,
+// LastOrphanedAt is stamped, and after the 3s grace the tunnel self-deletes
+// — require.Never trips because the tunnel is NotFound. With the gate intact
+// (isAutoCreated returns false for the unannotated direct-create tunnel)
+// the orphan block is never entered, LastOrphanedAt stays nil, and the
+// tunnel survives the full window.
 func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	if sharedConfig == nil {
 		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
@@ -589,15 +609,45 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	// Step 4: delete the Service.
 	require.NoError(t, f.c.Delete(ctx, svc))
 
-	// Step 5: assert the tunnel is NEVER deleted over ~8s (> 3s grace + reconcile).
-	// No GC emulation required — the orphan path is gated on isAutoCreated, which
-	// returns false for this tunnel; LastOrphanedAt is never stamped regardless of
-	// ownerRefs or AttachedSources.
+	// Step 5: assert the tunnel is NEVER deleted over 12s (> 3s grace + stamp + 3s
+	// requeue + drain, with margin). Each tick strips any dangling ownerRef whose
+	// owner is the deleted service (envtest GC emulation — without this,
+	// len(OwnerReferences)>0 would permanently block isOrphaned and the test
+	// would be vacuous with respect to the isAutoCreated gate) AND bumps a benign
+	// envtest.local/retrigger-tick label so the tunnel reconciler is retriggered
+	// throughout the window. With the isAutoCreated gate intact the orphan block
+	// is never entered (tunnel is not auto-created) — no stamp, no self-delete.
+	// With the gate mutated to return true the tunnel self-deletes within the
+	// window and require.Never trips. Conflict-tolerant: error ignored, next tick
+	// retries with a fresh Get.
 	require.Never(t, func() bool {
 		var tn v1alpha1.CloudflareTunnel
-		err := f.c.Get(ctx, tnKey, &tn)
-		return apierrors.IsNotFound(err)
-	}, 8*time.Second, 250*time.Millisecond,
+		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
+			return apierrors.IsNotFound(err)
+		}
+		// Strip any dangling ownerReference whose owner is the now-deleted service
+		// (envtest has no garbage collector, so a deleted source's ownerRef stays
+		// until explicitly removed). Without this, len(OwnerReferences)>0 would
+		// block isOrphaned from ever evaluating — the gate under test would never
+		// be reached, leaving the test vacuous again.
+		kept := tn.OwnerReferences[:0]
+		for _, or := range tn.OwnerReferences {
+			if or.Name != "direct-svc" {
+				kept = append(kept, or)
+			}
+		}
+		tn.OwnerReferences = kept
+		// Bump a test-only label to force a real resourceVersion change and generate
+		// a watch event so the tunnel reconciler re-runs this tick. The label key
+		// uses the envtest.local/ prefix — NOT cloudflare.io/ — because this is a
+		// test-only mechanical device, not an operator annotation.
+		if tn.Labels == nil {
+			tn.Labels = map[string]string{}
+		}
+		tn.Labels["envtest.local/retrigger-tick"] = strconv.FormatInt(time.Now().UnixNano(), 10)
+		_ = f.c.Update(ctx, &tn) // conflict-tolerant: error ignored, next tick retries
+		return false
+	}, 12*time.Second, 250*time.Millisecond,
 		"direct-create tunnel must never be auto-GC'd (isAutoCreated gate skips orphan path)")
 
 	// Final state: LastOrphanedAt never stamped; auto-created annotation absent.
