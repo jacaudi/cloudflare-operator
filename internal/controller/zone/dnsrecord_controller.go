@@ -20,6 +20,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -121,7 +122,6 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
 	}
 	readCodec := autoDetectingFor(encoder)
-	_ = readCodec // consumed by tasks 11-12; variable retained to avoid future churn
 
 	// Snapshot status so the trailing Status().Update can be skipped when
 	// nothing material changed; LastSyncedAt/ObservedGeneration are masked.
@@ -145,6 +145,65 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return r.haltDependency(ctx, &rec, "zoneRef target has no status.zoneID yet")
 	}
 	zoneID := zres.ZoneID
+
+	// Observe-mode early-exit: read CF state, populate Status, return without
+	// any mutating calls. Spec.Adopt is a no-op in this mode. Direct
+	// Status().Update + return — does NOT route through the terminal DeepEqual
+	// gate because that gate uses originalStatus captured before we had the
+	// zone ID (and it manages LastSyncedAt / ObservedGeneration which observe
+	// mode deliberately leaves untouched).
+	if !reconcile.ShouldMutate(string(rec.Spec.Mode)) {
+		observed, oerr := dc.ListRecordsByNameAndType(ctx, zoneID, rec.Spec.Name, rec.Spec.Type)
+		if oerr != nil {
+			return ctrl.Result{}, fmt.Errorf("observe: list record: %w", oerr)
+		}
+		if len(observed) > 0 {
+			rec.Status.RecordID = observed[0].ID
+			rec.Status.CurrentContent = observed[0].Content
+		} else {
+			rec.Status.RecordID = ""
+			rec.Status.CurrentContent = ""
+		}
+
+		txtName := cloudflare.AffixName("cf-txt", rec.Spec.Name)
+		txtRecs, terr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
+		if terr != nil {
+			return ctrl.Result{}, fmt.Errorf("observe: list TXT: %w", terr)
+		}
+		if len(txtRecs) > 0 {
+			obs := &v1alpha1.ObservedTXTPayload{}
+			if payload, derr := readCodec.Decode(txtRecs[0].Content); derr != nil {
+				obs.RawContent = txtRecs[0].Content
+				obs.Codec = "unrecognized"
+			} else {
+				obs.Version = payload.V
+				obs.Kind = payload.K
+				obs.Namespace = payload.NS
+				obs.Name = payload.N
+				obs.ContentHash = payload.H
+				if strings.HasPrefix(txtRecs[0].Content, "v1:") {
+					obs.Codec = "aes-gcm"
+				} else {
+					obs.Codec = "plaintext"
+				}
+			}
+			rec.Status.ObservedTXT = obs
+		} else {
+			rec.Status.ObservedTXT = nil
+		}
+
+		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionTrue,
+			conventions.ReasonObserving, "Spec.Mode=Observe; operator is reading but not mutating")
+		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonObserving)
+		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+			return ctrl.Result{}, uerr
+		}
+		interval := defaultDNSRecordInterval
+		if rec.Spec.Interval != nil && rec.Spec.Interval.Duration > 0 {
+			interval = rec.Spec.Interval.Duration
+		}
+		return ctrl.Result{RequeueAfter: interval}, nil
+	}
 
 	content, err := r.resolveContent(ctx, &rec)
 	if err != nil {
@@ -251,6 +310,17 @@ func (r *CloudflareDNSRecordReconciler) haltDependency(ctx context.Context, rec 
 // finalizer.
 func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec *v1alpha1.CloudflareDNSRecord) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
+
+	// Observe mode never wrote anything to Cloudflare; drop the finalizer
+	// immediately without any CF calls.
+	if !reconcile.ShouldMutate(string(rec.Spec.Mode)) {
+		if reconcile.RemoveFinalizer(rec, conventions.FinalizerName) {
+			if err := r.Update(ctx, rec); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
 
 	if rec.Status.RecordID != "" {
 		creds, halt, err := reconcile.LoadCredentialsHierarchical(ctx, r.Client, rec.Spec.Cloudflare, rec.Namespace)

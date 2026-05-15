@@ -335,3 +335,297 @@ func TestDNS_Delete_RemovesUpstream(t *testing.T) {
 	_, err = m.DNS.GetRecord(context.Background(), "z1", created.ID)
 	require.Error(t, err, "record deleted on CF side")
 }
+
+// --- Observe mode tests (Task 11) ---
+
+// observeModeRec builds a minimal CloudflareDNSRecord in Observe mode with
+// the finalizer already set and the given ZoneID pre-resolved.
+func observeModeRec(name, ns, zoneID string, extra ...func(*v1alpha1.CloudflareDNSRecord)) *v1alpha1.CloudflareDNSRecord {
+	content := "1.1.1.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  ns,
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:   "test.example.com",
+			Type:   "A",
+			ZoneID: zoneID,
+			Mode:   v1alpha1.RecordModeObserve,
+			// Content set so admission CEL is satisfied in fake client;
+			// observe mode does NOT read this to mutate CF.
+			Content: &content,
+		},
+	}
+	for _, fn := range extra {
+		fn(rec)
+	}
+	return rec
+}
+
+// findReadyCondition returns the Ready condition or nil.
+func findReadyCondition(conds []metav1.Condition) *metav1.Condition {
+	for i := range conds {
+		if conds[i].Type == conventions.ConditionTypeReady {
+			return &conds[i]
+		}
+	}
+	return nil
+}
+
+// seedARecord creates an A record in the mock DNS store and returns its ID.
+func seedARecord(t *testing.T, m *mock.Mock, zoneID, name, content string) string {
+	t.Helper()
+	r, err := m.DNS.CreateRecord(context.Background(), zoneID, cloudflare.DNSRecordParams{
+		Name: name, Type: "A", Content: content, TTL: 1,
+	})
+	require.NoError(t, err)
+	return r.ID
+}
+
+// seedPlaintextTXT creates a plaintext TXT companion record encoding the given
+// namespace/name identity and returns its Cloudflare record ID.
+func seedPlaintextTXT(t *testing.T, m *mock.Mock, zoneID, recordName, encNS, encName string) string {
+	t.Helper()
+	codec := cloudflare.NewPlaintextCodec()
+	content, err := codec.Encode(cloudflare.RegistryPayload{
+		V:  1,
+		K:  "CloudflareDNSRecord",
+		NS: encNS,
+		N:  encName,
+	})
+	require.NoError(t, err)
+	txtName := cloudflare.AffixName("cf-txt", recordName)
+	r, err := m.DNS.CreateRecord(context.Background(), zoneID, cloudflare.DNSRecordParams{
+		Name: txtName, Type: "TXT", Content: content, TTL: 1,
+	})
+	require.NoError(t, err)
+	return r.ID
+}
+
+// TestReconcile_ObserveMode_RecordExists_PopulatesStatus verifies that
+// Spec.Mode=Observe lists the existing A record and TXT companion, populates
+// Status fields, sets Reason=Observing, and does NOT invoke any mutating CF
+// calls (Create/Update/Delete).
+func TestReconcile_ObserveMode_RecordExists_PopulatesStatus(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := observeModeRec("r", "ns", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Pre-seed A record and matching plaintext TXT companion.
+	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "ns", "r")
+
+	// Snapshot mutating-call counters BEFORE reconcile.
+	createBefore := m.Calls("DNS.CreateRecord")
+	updateBefore := m.Calls("DNS.UpdateRecord")
+	deleteBefore := m.Calls("DNS.DeleteRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "r", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+	require.Greater(t, result.RequeueAfter.Nanoseconds(), int64(0), "expect non-zero RequeueAfter in observe mode")
+
+	// Zero mutating calls.
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "observe must not call CreateRecord")
+	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not call UpdateRecord")
+	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not call DeleteRecord")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
+
+	require.Equal(t, "1.1.1.1", got.Status.CurrentContent, "Status.CurrentContent must be populated from CF")
+	require.NotEmpty(t, got.Status.RecordID, "Status.RecordID must be set")
+	require.NotNil(t, got.Status.ObservedTXT, "Status.ObservedTXT must be populated when TXT companion exists")
+	require.Equal(t, "ns", got.Status.ObservedTXT.Namespace)
+	require.Equal(t, "r", got.Status.ObservedTXT.Name)
+	require.Equal(t, "plaintext", got.Status.ObservedTXT.Codec)
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond, "Ready condition must be set")
+	require.Equal(t, metav1.ConditionTrue, cond.Status)
+	require.Equal(t, conventions.ReasonObserving, cond.Reason)
+}
+
+// TestReconcile_ObserveMode_AdoptHasNoEffect verifies that Adopt=true is a
+// no-op in Observe mode: a foreign TXT companion still yields Reason=Observing
+// (NOT AdoptRefusedForeign) and ObservedTXT reflects the foreign owner.
+func TestReconcile_ObserveMode_AdoptHasNoEffect(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := observeModeRec("r", "ns", "z1", func(r *v1alpha1.CloudflareDNSRecord) {
+		r.Spec.Adopt = true
+	})
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Pre-seed A record and a FOREIGN TXT companion (different ns/name).
+	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "other-ns", "other-r")
+
+	createBefore := m.Calls("DNS.CreateRecord")
+	updateBefore := m.Calls("DNS.UpdateRecord")
+	deleteBefore := m.Calls("DNS.DeleteRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "r", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// Zero mutating calls — Adopt is a no-op in observe.
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "observe must not call CreateRecord")
+	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not call UpdateRecord")
+	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not call DeleteRecord")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, conventions.ReasonObserving, cond.Reason, "Adopt is no-op in observe; reason must be Observing not AdoptRefusedForeign")
+
+	require.NotNil(t, got.Status.ObservedTXT, "TXT companion must still be decoded")
+	require.Equal(t, "other-ns", got.Status.ObservedTXT.Namespace)
+	require.Equal(t, "other-r", got.Status.ObservedTXT.Name)
+}
+
+// TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately verifies that
+// when a record in Observe mode has a deletion timestamp set, the reconciler
+// removes the finalizer without making any CF calls.
+func TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately(t *testing.T) {
+	now := metav1.Now()
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := observeModeRec("r", "ns", "z1", func(r *v1alpha1.CloudflareDNSRecord) {
+		r.DeletionTimestamp = &now
+	})
+	// Seed a CF record so we can confirm DeleteRecord is never called.
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+
+	deleteBefore := m.Calls("DNS.DeleteRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "r", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// No CF delete.
+	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe delete must not call CF DeleteRecord")
+
+	// Finalizer must be removed (object either not found or has no finalizers).
+	var got v1alpha1.CloudflareDNSRecord
+	err = c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got)
+	if err == nil {
+		require.Empty(t, got.Finalizers, "finalizer must be cleared after observe deletion")
+	}
+	// If the object is gone entirely that's also fine (fake client GC).
+}
+
+// TestReconcile_ObserveMode_RecordAbsent_NoOp verifies that when no matching
+// record exists in Cloudflare, Observe mode still returns Reason=Observing with
+// empty status fields and makes no mutating calls.
+func TestReconcile_ObserveMode_RecordAbsent_NoOp(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := observeModeRec("r", "ns", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+	// No records seeded — CF is empty.
+
+	createBefore := m.Calls("DNS.CreateRecord")
+	updateBefore := m.Calls("DNS.UpdateRecord")
+	deleteBefore := m.Calls("DNS.DeleteRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "r", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "observe must not create")
+	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not update")
+	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not delete")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
+
+	require.Empty(t, got.Status.RecordID, "RecordID must be empty when no CF record found")
+	require.Empty(t, got.Status.CurrentContent, "CurrentContent must be empty when no CF record found")
+	require.Nil(t, got.Status.ObservedTXT, "ObservedTXT must be nil when no TXT companion found")
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, conventions.ReasonObserving, cond.Reason)
+}
+
+// TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK verifies that
+// when the CloudflareOperator singleton is absent (no TXT key configured),
+// Observe mode still populates Status.ObservedTXT via plaintext decoding.
+func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	// No CloudflareOperator object in client — singleton absent.
+	rec := observeModeRec("r", "ns", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	seedARecord(t, m, "z1", "test.example.com", "2.2.2.2")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "ns", "r")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "r", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
+
+	require.NotNil(t, got.Status.ObservedTXT, "plaintext TXT must decode even without singleton")
+	require.Equal(t, "ns", got.Status.ObservedTXT.Namespace)
+	require.Equal(t, "r", got.Status.ObservedTXT.Name)
+	require.Equal(t, "plaintext", got.Status.ObservedTXT.Codec)
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, conventions.ReasonObserving, cond.Reason)
+}
