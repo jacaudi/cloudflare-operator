@@ -45,7 +45,7 @@ import (
 // The label key uses the envtest.local/ prefix rather than cloudflare.io/ —
 // this is a test-only mechanical retriggering device, not an operator
 // annotation, so it must not occupy the reserved cloudflare.io namespace.
-func gcEmulateStripDeadOwner(t *testing.T, ctx context.Context, c client.Client, tnKey client.ObjectKey, deadName string) {
+func gcEmulateStripDeadOwner(ctx context.Context, t *testing.T, c client.Client, tnKey client.ObjectKey, deadName string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		var tn v1alpha1.CloudflareTunnel
@@ -110,7 +110,7 @@ func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v1alpha1.Cloudf
 // which stamps a source as the tunnel CR's Controller+BlockOwnerDeletion
 // owner. If that fired for a direct-create CR, deleting the Service would
 // let Kubernetes GC cascade-delete the user's tunnel — exactly the §7
-// violation Task 14 closes. The isAutoCreated gate on needsOwnerTransfer
+// violation the §7 gate closes. The isAutoCreated gate on needsOwnerTransfer
 // must keep the operator from ever taking controller-ownership of a user's
 // CR. (The negative form — "never self-deleted" — is covered by
 // TestEnvtest_CascadeGC_DirectCreateNeverGCd; this test pins the upstream
@@ -131,7 +131,7 @@ func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v1alpha1.Cloudf
 //     the test would be vacuous).
 //
 // Non-vacuity (mutation-verified): with needsOwnerTransfer ungated (the
-// pre-Task-14 form, len(OwnerReferences)==0 && len(AttachedSources)>0), the
+// pre-§7-gate form, len(OwnerReferences)==0 && len(AttachedSources)>0), the
 // reconciler promotes the attaching Service to controller-owner within a
 // few reconciles → OwnerReferences becomes non-empty → require.Never trips.
 // With the isAutoCreated gate intact, needsOwnerTransfer is false for the
@@ -222,9 +222,9 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 	// OwnerReferences must NEVER become non-empty and the auto-created
 	// annotation must stay absent. Each tick bumps a benign retrigger label
 	// so the tunnel reconciler keeps running (otherwise needsOwnerTransfer
-	// would never be exercised — vacuity guard). Pre-Task-14 (ungated
-	// needsOwnerTransfer) the Service is promoted to controller-owner within
-	// a few reconciles and this require.Never trips.
+	// would never be exercised — vacuity guard). Without the §7 isAutoCreated
+	// gate, the Service is promoted to controller-owner within a few reconciles
+	// and this require.Never trips.
 	require.Never(t, func() bool {
 		var tn v1alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
@@ -425,8 +425,9 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 //     dangling ownerReference on the tunnel CR. isOrphaned requires
 //     len(OwnerReferences)==0 && len(AttachedSources)==0, so the test emulates
 //     real-cluster GC by stripping the dead owner's ref via the same
-//     conflict-tolerant Eventually loop Task 10 established. The strip only
-//     removes that ownerRef — stamping LastOrphanedAt, respecting the grace
+//     conflict-tolerant Eventually loop (the gcEmulateStripDeadOwner helper).
+//     The strip only removes that ownerRef — stamping LastOrphanedAt,
+//     respecting the grace
 //     window, emitting the Warning, and self-deleting are all production code.
 //
 //   - Short grace. setupServiceEnv sets PendingDeletionGrace to 3s on the tunnel
@@ -495,7 +496,7 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 	// defaultTunnelInterval, stalling the test in strict isolation. The helper
 	// bumps a metadata label each tick (envtest.local/strip-tick) to force a
 	// real resourceVersion change and trigger a watch event.
-	gcEmulateStripDeadOwner(t, ctx, f.c, tnKey, "solo-svc")
+	gcEmulateStripDeadOwner(ctx, t, f.c, tnKey, "solo-svc")
 
 	// Production stamps LastOrphanedAt on the first orphan observation
 	// (len(OwnerReferences)==0 && len(AttachedSources)==0 && auto-created==true).
@@ -603,7 +604,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	// Step 2: delete "first" and emulate GC — strip its ownerRef and wait for
 	// AttachedSources to drain so production isOrphaned becomes true.
 	require.NoError(t, f.c.Delete(ctx, first))
-	gcEmulateStripDeadOwner(t, ctx, f.c, tnKey, "first")
+	gcEmulateStripDeadOwner(ctx, t, f.c, tnKey, "first")
 
 	// Step 3: wait for production to stamp LastOrphanedAt (first orphan observation).
 	// Do NOT sleep — capture the stamp time and immediately proceed to step 4.
@@ -657,7 +658,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 //     finalizer so it reconciles like a real CR.
 //  2. Create an annotated Service (tunnel-name: direct-tnl). EnsureTunnelCR
 //     finds the existing CR (adopt path) and returns it UNTOUCHED — it must
-//     NOT stamp auto-created (no backfill; Task-4 contract).
+//     NOT stamp auto-created (no backfill; §4 adopt-path contract).
 //  3. Wait for the Service to appear in Status.AttachedSources.
 //  4. Delete the Service.
 //  5. Assert via require.Never (12s, 250ms tick) that the tunnel CR is
@@ -672,14 +673,17 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 //     the source is gone. Finally assert LastOrphanedAt==nil (never stamped)
 //     and the auto-created annotation is still absent.
 //
-// Harness-fidelity note: although EnsureTunnelCR's adopt path does NOT set
-// an ownerReference (the direct-create CR is returned untouched), the tunnel
-// reconciler's needsOwnerTransfer path promotes the first attaching source
-// (the Service) to controller-owner on a subsequent reconcile. envtest has
-// no kube-controller-manager, so deleting the Service leaves a dangling
-// ownerRef. The per-tick strip in require.Never emulates real-cluster GC
-// (identical to the gcEmulateStripDeadOwner helper used by the T11 and T10
-// tests) and enables isOrphaned to evaluate correctly.
+// Harness-fidelity note: the §7 isAutoCreated gate means needsOwnerTransfer
+// returns false for this unannotated direct-create CR, so the tunnel
+// reconciler never stamps a controller-ownerRef on it. The per-tick strip in
+// require.Never is therefore defensive scaffolding only — in the unmutated run
+// no controller-ownerRef is ever acquired and the strip is a no-op. The strip
+// only becomes load-bearing under the gate-defeating mutation (isAutoCreated
+// forced true), which would let needsOwnerTransfer fire and stamp the Service
+// as controller-owner. The helper emulates real-cluster GC (identical
+// mechanism to the gcEmulateStripDeadOwner helper used by the §8.2
+// owner-transfer and last-source self-delete tests) and enables isOrphaned to
+// evaluate correctly under mutation.
 //
 // Non-vacuity (mutation-verified): if the isAutoCreated gate in the orphan
 // block is forced to return true, the tunnel has no annotation guard,
@@ -803,15 +807,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 			}
 		}
 		tn.OwnerReferences = kept
-		// Bump a test-only label to force a real resourceVersion change and generate
-		// a watch event so the tunnel reconciler re-runs this tick. The label key
-		// uses the envtest.local/ prefix — NOT cloudflare.io/ — because this is a
-		// test-only mechanical device, not an operator annotation.
-		if tn.Labels == nil {
-			tn.Labels = map[string]string{}
-		}
-		tn.Labels["envtest.local/retrigger-tick"] = strconv.FormatInt(time.Now().UnixNano(), 10)
-		_ = f.c.Update(ctx, &tn) // conflict-tolerant: error ignored, next tick retries
+		bumpRetriggerTick(ctx, f.c, &tn) // stamps retrigger-tick label + Update; conflict-tolerant
 		return false
 	}, 12*time.Second, 250*time.Millisecond,
 		"direct-create tunnel must never be auto-GC'd (isAutoCreated gate skips orphan path)")

@@ -157,8 +157,8 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{Requeue: true}, nil
 		}
 		// No live candidates this pass (all NotFound / terminating). Fall
-		// through; orphan-state management (later, Task 9) handles the case
-		// where AttachedSources stabilizes as empty.
+		// through; orphan-state management (later in this function) handles
+		// the case where AttachedSources stabilizes as empty.
 	}
 
 	// Snapshot status before reconcile work so the trailing Status().Update
