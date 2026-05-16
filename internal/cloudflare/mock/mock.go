@@ -36,6 +36,12 @@ import (
 // errors.Is to match.
 var ErrNotFound = errors.New("mock cloudflare: not found")
 
+// nthInjector holds an error to inject on a specific (1-based) call number.
+type nthInjector struct {
+	callN int
+	err   error
+}
+
 // Mock is the central state holder. Construct via New; pass the typed
 // sub-fields (Mock.Zone, Mock.DNS, etc.) to reconcilers under test.
 type Mock struct {
@@ -45,14 +51,15 @@ type Mock struct {
 	ZoneConfig *zoneConfigMock
 	Tunnel     *tunnelMock
 
-	mu        sync.Mutex
-	injectors map[string]error
-	calls     map[string]int
+	mu           sync.Mutex
+	injectors    map[string]error
+	nthInjectors map[string]nthInjector
+	calls        map[string]int
 }
 
 // New returns an initialized Mock.
 func New() *Mock {
-	m := &Mock{injectors: map[string]error{}, calls: map[string]int{}}
+	m := &Mock{injectors: map[string]error{}, nthInjectors: map[string]nthInjector{}, calls: map[string]int{}}
 	m.Zone = &zoneMock{parent: m, zones: map[string]*cloudflare.Zone{}}
 	m.DNS = &dnsMock{parent: m, records: map[string]map[string]*cloudflare.DNSRecord{}}
 	m.Ruleset = &rulesetMock{parent: m, entries: map[string]map[string]*cloudflare.Ruleset{}}
@@ -76,6 +83,17 @@ func (m *Mock) InjectError(method string, err error) {
 	m.injectors[method] = err
 }
 
+// InjectErrorOnCall schedules err to fire on the Nth overall invocation
+// (1-based) of method. Unlike InjectError (which fires on the very next
+// call), this lets tests target, for example, the 2nd DNS.CreateRecord
+// so that the first (main record) succeeds and only the second (TXT
+// companion) fails. The injector is consumed on the matching call.
+func (m *Mock) InjectErrorOnCall(method string, callN int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nthInjectors[method] = nthInjector{callN: callN, err: err}
+}
+
 // take records a call attempt for method (incrementing the call counter before
 // checking for an injected error, so that even error-injected calls are
 // counted as "attempted") and returns any injected error. The increment
@@ -85,9 +103,15 @@ func (m *Mock) take(method string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls[method]++
+	// Check simple (next-call) injector first.
 	if err, ok := m.injectors[method]; ok {
 		delete(m.injectors, method)
 		return err
+	}
+	// Check Nth-call injector.
+	if inj, ok := m.nthInjectors[method]; ok && m.calls[method] == inj.callN {
+		delete(m.nthInjectors, method)
+		return inj.err
 	}
 	return nil
 }

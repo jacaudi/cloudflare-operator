@@ -18,6 +18,9 @@ package zone
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,6 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -814,6 +818,208 @@ func TestReconcile_AdoptWithMatchingTXT_Succeeds(t *testing.T) {
 	require.NotNil(t, cond)
 	require.Equal(t, metav1.ConditionTrue, cond.Status, "Ready condition must be True after successful adoption")
 	require.Equal(t, conventions.ReasonReady, cond.Reason, "Ready reason must be ReasonReady after successful adoption")
+}
+
+// --- TXT companion write/refresh tests (Task 13) ---
+
+// sha256HexFor returns the expected sha256 hex string for s, matching the
+// production sha256Hex helper: "sha256:" + hex(sha256(s)).
+func sha256HexFor(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// TestReconcile_CreateWritesTxtCompanion verifies that a fresh Create of the
+// main DNS record is paired with a TXT companion write. Status.TxtRecordID and
+// TxtAffix must be set; the TXT payload must decode to our identity + the
+// sha256 of the written content.
+func TestReconcile_CreateWritesTxtCompanion(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	content := "192.0.2.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "app.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  "z1",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+	r := newDNSReconciler(t, c, s, m)
+
+	// First reconcile sets the finalizer and requeues.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+	// Second reconcile: main A record created + TXT companion created.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	require.NotEmpty(t, got.Status.RecordID, "main record must be created")
+	require.NotEmpty(t, got.Status.TxtRecordID, "TXT companion must be created")
+	require.Equal(t, "cf-txt", got.Status.TxtAffix, "TxtAffix must be cf-txt")
+
+	// Verify TXT companion exists in the mock and decodes correctly.
+	txtName := cloudflare.AffixName("cf-txt", "app.example.com")
+	txtRecs, err := m.DNS.ListRecordsByNameAndType(context.Background(), "z1", txtName, "TXT")
+	require.NoError(t, err)
+	require.Len(t, txtRecs, 1, "exactly one TXT companion must exist")
+
+	codec := cloudflare.NewPlaintextCodec()
+	payload, err := codec.Decode(txtRecs[0].Content)
+	require.NoError(t, err, "TXT companion must be decodable with plaintext codec")
+	require.Equal(t, "CloudflareDNSRecord", payload.K)
+	require.Equal(t, "default", payload.NS)
+	require.Equal(t, "rec", payload.N)
+	require.Equal(t, sha256HexFor("192.0.2.1"), payload.H, "TXT H must be sha256 of the written content")
+}
+
+// TestReconcile_UpdateRefreshesTxtHash verifies that when the main record is
+// updated (content drift), the TXT companion is refreshed with the new content
+// hash. Status.TxtRecordID must remain set.
+func TestReconcile_UpdateRefreshesTxtHash(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	newContent := "192.0.2.99"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "app.example.com",
+			Type:    "A",
+			Content: &newContent, // desired new content
+			ZoneID:  "z1",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Pre-seed the A record with OLD content.
+	oldContent := "192.0.2.1"
+	aID := seedARecord(t, m, "z1", "app.example.com", oldContent)
+
+	// Pre-seed the TXT companion with the hash of the OLD content.
+	txtID := seedPlaintextTXT(t, m, "z1", "app.example.com", "default", "rec", sha256HexFor(oldContent))
+
+	// Persist Status.RecordID + TxtRecordID so reconciler starts in update path.
+	rec.Status.RecordID = aID
+	rec.Status.TxtRecordID = txtID
+	rec.Status.TxtAffix = "cf-txt"
+	rec.Status.CurrentContent = oldContent
+	require.NoError(t, c.Status().Update(context.Background(), rec))
+
+	// Snapshot update call counts before reconcile.
+	updatesBefore := m.Calls("DNS.UpdateRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+
+	// At least one UpdateRecord must have been called (main + TXT).
+	require.Greater(t, m.Calls("DNS.UpdateRecord"), updatesBefore, "UpdateRecord must be called for drift")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	require.NotEmpty(t, got.Status.TxtRecordID, "TxtRecordID must remain set after update")
+	require.Equal(t, "cf-txt", got.Status.TxtAffix)
+
+	// Verify TXT companion now carries the NEW content hash.
+	txtName := cloudflare.AffixName("cf-txt", "app.example.com")
+	txtRecs, err := m.DNS.ListRecordsByNameAndType(context.Background(), "z1", txtName, "TXT")
+	require.NoError(t, err)
+	require.Len(t, txtRecs, 1, "exactly one TXT companion must exist")
+
+	codec := cloudflare.NewPlaintextCodec()
+	payload, err := codec.Decode(txtRecs[0].Content)
+	require.NoError(t, err, "TXT companion must be decodable")
+	require.Equal(t, sha256HexFor(newContent), payload.H, "TXT H must be updated to sha256 of the new content")
+}
+
+// TestReconcile_TxtWriteFailsAfterDnsCreate_Partial verifies the partial-failure
+// contract: when the main A record create succeeds but the TXT companion create
+// fails, the reconcile must NOT return an error, must leave Status.TxtRecordID
+// unset, must emit a Warning Event with reason TxtRegistryWriteFailed, and must
+// return a non-zero RequeueAfter (so a later reconcile retries the TXT write).
+func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	content := "192.0.2.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "app.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  "z1",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Inject an error on the 2nd DNS.CreateRecord call:
+	//   call #1 = main A record create (must succeed)
+	//   call #2 = TXT companion create (must fail — partial failure)
+	m.InjectErrorOnCall("DNS.CreateRecord", 2, errors.New("simulated TXT create failure"))
+
+	// Wire a real fake recorder so we can assert the Warning Event.
+	fakeRecorder := record.NewFakeRecorder(10)
+	r := newDNSReconciler(t, c, s, m)
+	r.Recorder = fakeRecorder
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+
+	// Partial failure: reconcile must NOT return an error.
+	require.NoError(t, err, "partial TXT failure must not fail the reconcile")
+	// Reconciler must requeue so the TXT write is retried.
+	require.Greater(t, result.RequeueAfter.Nanoseconds(), int64(0), "expect non-zero RequeueAfter so TXT write is retried")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	// Main record was created.
+	require.NotEmpty(t, got.Status.RecordID, "main RecordID must be set even on partial TXT failure")
+	// TXT companion was NOT persisted (partial failure).
+	require.Empty(t, got.Status.TxtRecordID, "TxtRecordID must be empty when TXT companion write failed")
+
+	// A Warning Event with reason TxtRegistryWriteFailed must have been emitted.
+	select {
+	case event := <-fakeRecorder.Events:
+		require.Contains(t, event, conventions.ReasonTxtRegistryWriteFailed,
+			"Warning Event must contain TxtRegistryWriteFailed reason")
+	default:
+		t.Fatal("expected a Warning Event for TxtRegistryWriteFailed but none was emitted")
+	}
 }
 
 // TestReconcile_AdoptWithUnparseableTXT_Refused verifies that Adopt:true with

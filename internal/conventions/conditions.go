@@ -113,6 +113,12 @@ const (
 	// operator reads but does not mutate; Status reflects current
 	// Cloudflare state.
 	ReasonObserving = "Observing"
+
+	// ReasonTxtRegistryWriteFailed marks a partial failure: the Cloudflare
+	// DNS record was written but its TXT companion write failed. The
+	// reconcile does NOT fail (DNS is correct); the TXT write retries on
+	// the next reconcile. Surfaced as a Warning Event.
+	ReasonTxtRegistryWriteFailed = "TxtRegistryWriteFailed"
 )
 
 // ZoneReasons returns the reason vocabulary appended by spec 2.
@@ -133,6 +139,7 @@ func ZoneReasons() []string {
 		ReasonAdoptRefusedForeign,
 		ReasonTxtRegistryKeyUnavailable,
 		ReasonObserving,
+		ReasonTxtRegistryWriteFailed,
 	}
 }
 

@@ -18,6 +18,8 @@ package zone
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	stderrors "errors"
 	"fmt"
 	"strings"
@@ -297,6 +299,25 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		rec.Status.RecordID = created.ID
 		rec.Status.CurrentContent = created.Content
 		logger.Info("created DNS record", "recordID", created.ID)
+
+		// Pair: write TXT companion for the newly created record.
+		contentHash := sha256Hex(content)
+		txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
+		if terr != nil {
+			// Partial failure: DNS record created successfully, but TXT companion
+			// write failed. Emit a Warning Event and continue so the terminal
+			// status path still runs. The next reconcile retries the TXT write.
+			logger.Info("TXT companion write failed after DNS create; will retry next reconcile", "error", terr)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
+					"DNS record created but TXT companion write failed: %s", terr.Error())
+			}
+			// Do NOT set rec.Status.TxtRecordID — leave it empty so the next
+			// reconcile re-enters the create path for the TXT.
+		} else {
+			rec.Status.TxtRecordID = txtID
+			rec.Status.TxtAffix = txtAffix
+		}
 	} else {
 		// Update path: confirm existence, then converge drift.
 		existing, gerr := dc.GetRecord(ctx, zoneID, rec.Status.RecordID)
@@ -321,6 +342,22 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			if r.Recorder != nil {
 				r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
 					"corrected drift on %s record %s", rec.Spec.Type, rec.Spec.Name)
+			}
+
+			// Pair: refresh TXT companion hash to match the newly written content.
+			contentHash := sha256Hex(content)
+			txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
+			if terr != nil {
+				// Partial failure: DNS record updated successfully, but TXT
+				// companion refresh failed. Emit a Warning Event and continue.
+				logger.Info("TXT companion refresh failed after DNS update; will retry next reconcile", "error", terr)
+				if r.Recorder != nil {
+					r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
+						"DNS record updated but TXT companion refresh failed: %s", terr.Error())
+				}
+			} else {
+				rec.Status.TxtRecordID = txtID
+				rec.Status.TxtAffix = txtAffix
 			}
 		} else {
 			rec.Status.CurrentContent = existing.Content
@@ -527,6 +564,13 @@ func srvDriftDetected(observed map[string]any, spec *v1alpha1.SRVData) bool {
 		return true
 	}
 	return false
+}
+
+// sha256Hex returns the sha256 hex digest of s, prefixed with "sha256:".
+// It is used to compute the content hash stored in TXT companion records.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // intField normalizes any-typed numeric values (float64 from JSON, int from
