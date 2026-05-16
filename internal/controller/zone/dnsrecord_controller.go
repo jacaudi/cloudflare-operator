@@ -306,14 +306,16 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		if terr != nil {
 			// Partial failure: DNS record created successfully, but TXT companion
 			// write failed. Emit a Warning Event and continue so the terminal
-			// status path still runs. The next reconcile retries the TXT write.
-			logger.Info("TXT companion write failed after DNS create; will retry next reconcile", "error", terr)
+			// status path still runs. The next reconcile re-enters the update
+			// path (RecordID is now set) and the TxtRecordID-empty guard there
+			// retries the companion write even without content drift.
+			logger.Error(terr, "TXT companion write failed after DNS create; will retry next reconcile")
 			if r.Recorder != nil {
 				r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
 					"DNS record created but TXT companion write failed: %s", terr.Error())
 			}
-			// Do NOT set rec.Status.TxtRecordID — leave it empty so the next
-			// reconcile re-enters the create path for the TXT.
+			// Do NOT set rec.Status.TxtRecordID — the update-path retry guard
+			// (TxtRecordID == "") will call writeTXTCompanion on the next reconcile.
 		} else {
 			rec.Status.TxtRecordID = txtID
 			rec.Status.TxtAffix = txtAffix
@@ -350,7 +352,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			if terr != nil {
 				// Partial failure: DNS record updated successfully, but TXT
 				// companion refresh failed. Emit a Warning Event and continue.
-				logger.Info("TXT companion refresh failed after DNS update; will retry next reconcile", "error", terr)
+				logger.Error(terr, "TXT companion refresh failed after DNS update; will retry next reconcile")
 				if r.Recorder != nil {
 					r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
 						"DNS record updated but TXT companion refresh failed: %s", terr.Error())
@@ -361,6 +363,28 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			}
 		} else {
 			rec.Status.CurrentContent = existing.Content
+			// Retry guard: the main record is in sync (no content drift) but
+			// TxtRecordID is empty — this means a prior create or update wrote
+			// the main record successfully but the TXT companion write failed.
+			// This arm is only reachable for a record THIS operator created or
+			// adopt-matched (adopt-refused outcomes return before reaching here;
+			// observe mode early-exits before the create/update block). Write
+			// the missing companion now. Same partial-failure handling: emit a
+			// Warning Event and continue; the next reconcile will retry again.
+			if rec.Status.TxtRecordID == "" {
+				contentHash := sha256Hex(content)
+				txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
+				if terr != nil {
+					logger.Error(terr, "TXT companion retry failed (no-drift path); will retry next reconcile")
+					if r.Recorder != nil {
+						r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
+							"TXT companion retry failed (no content drift): %s", terr.Error())
+					}
+				} else {
+					rec.Status.TxtRecordID = txtID
+					rec.Status.TxtAffix = txtAffix
+				}
+			}
 		}
 	}
 

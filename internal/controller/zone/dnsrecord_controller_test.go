@@ -1022,6 +1022,90 @@ func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
 	}
 }
 
+// TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift verifies the retry
+// contract for the Important bug fixed in P5-T13: when the main record exists
+// (RecordID set) but TxtRecordID is empty (partial TXT failure on create), a
+// subsequent reconcile with NO content drift must still write the missing TXT
+// companion. Previously the no-drift else-branch skipped writeTXTCompanion
+// entirely, leaving the companion permanently missing.
+//
+// This test is DESIGNED TO FAIL against the pre-fix production code (where the
+// no-drift arm does not call writeTXTCompanion) and PASS after the fix.
+func TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	content := "192.0.2.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "rec",
+			Namespace:  "default",
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "app.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  "z1",
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// First reconcile: inject TXT create failure so RecordID is set but
+	// TxtRecordID is left empty (simulating a partial failure).
+	m.InjectErrorOnCall("DNS.CreateRecord", 2, errors.New("simulated TXT create failure"))
+	fakeRecorder := record.NewFakeRecorder(10)
+	r := newDNSReconciler(t, c, s, m)
+	r.Recorder = fakeRecorder
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err, "partial TXT failure must not fail the first reconcile")
+
+	var afterFirst v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &afterFirst))
+	require.NotEmpty(t, afterFirst.Status.RecordID, "RecordID must be set after first reconcile")
+	require.Empty(t, afterFirst.Status.TxtRecordID, "TxtRecordID must be empty after partial TXT failure")
+
+	// Drain the Warning Event from the first reconcile.
+	select {
+	case <-fakeRecorder.Events:
+	default:
+	}
+
+	// Second reconcile: NO content drift, NO injected errors. The retry guard
+	// (TxtRecordID == "") must cause writeTXTCompanion to run and write the
+	// companion.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err, "second reconcile must not fail")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	// The retry must have written the TXT companion.
+	require.NotEmpty(t, got.Status.TxtRecordID, "TxtRecordID must be set after retry reconcile")
+	require.Equal(t, "cf-txt", got.Status.TxtAffix, "TxtAffix must be cf-txt after retry")
+
+	// Verify the TXT companion exists in the mock with correct identity + hash.
+	txtName := cloudflare.AffixName("cf-txt", "app.example.com")
+	txtRecs, err := m.DNS.ListRecordsByNameAndType(context.Background(), "z1", txtName, "TXT")
+	require.NoError(t, err)
+	require.Len(t, txtRecs, 1, "exactly one TXT companion must exist after retry")
+
+	codec := cloudflare.NewPlaintextCodec()
+	payload, err := codec.Decode(txtRecs[0].Content)
+	require.NoError(t, err, "TXT companion must be decodable with plaintext codec")
+	require.Equal(t, "CloudflareDNSRecord", payload.K)
+	require.Equal(t, "default", payload.NS)
+	require.Equal(t, "rec", payload.N)
+	require.Equal(t, sha256HexFor(content), payload.H, "TXT H must be sha256 of the record's content")
+}
+
 // TestReconcile_AdoptWithUnparseableTXT_Refused verifies that Adopt:true with
 // a pre-existing A record and a TXT companion whose content is gibberish is
 // treated conservatively as AdoptRefusedNoTXT (unrecognized ⇒ refuse).
