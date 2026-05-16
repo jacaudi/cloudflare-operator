@@ -26,6 +26,7 @@ jobs:
     outputs:
       slug: ${{ steps.vars.outputs.slug }}
       sha7: ${{ steps.vars.outputs.sha7 }}
+      date: ${{ steps.vars.outputs.date }}
     steps:
       - name: Refuse main
         if: github.ref_name == 'main'
@@ -47,9 +48,11 @@ jobs:
             | tr '[:upper:]' '[:lower:]' \
             | sed -e 's/[^a-z0-9-]/-/g' -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
           sha7="${SHA:0:7}"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           echo "slug=${slug}" >> "${GITHUB_OUTPUT}"
           echo "sha7=${sha7}" >> "${GITHUB_OUTPUT}"
-          echo "Test build: slug='${slug}' sha7='${sha7}'" >> "${GITHUB_STEP_SUMMARY}"
+          echo "date=${date}" >> "${GITHUB_OUTPUT}"
+          echo "Test build: slug='${slug}' sha7='${sha7}' date='${date}'" >> "${GITHUB_STEP_SUMMARY}"
 
   # Multi-arch TEST image pushed to GHCR (parity with the release pipeline).
   container:
@@ -62,6 +65,10 @@ jobs:
       image-name: ${{ github.repository }}
       platforms: 'linux/amd64,linux/arm64'
       version: test-${{ needs.guard.outputs.slug }}-${{ needs.guard.outputs.sha7 }}
+      build-args: |
+        VERSION=test-${{ needs.guard.outputs.slug }}-${{ needs.guard.outputs.sha7 }}
+        COMMIT=${{ needs.guard.outputs.sha7 }}
+        DATE=${{ needs.guard.outputs.date }}
       tags: |
         ghcr.io/${{ github.repository }}:test-${{ needs.guard.outputs.slug }}-${{ needs.guard.outputs.sha7 }}
         ghcr.io/${{ github.repository }}:test-${{ needs.guard.outputs.slug }}
