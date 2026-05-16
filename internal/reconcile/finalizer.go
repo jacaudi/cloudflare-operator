@@ -16,7 +16,11 @@ limitations under the License.
 
 package reconcile
 
-import "sigs.k8s.io/controller-runtime/pkg/client"
+import (
+	"slices"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
 
 // EnsureFinalizer adds the given finalizer if missing and reports whether
 // the object was changed.
@@ -31,26 +35,14 @@ func EnsureFinalizer(obj client.Object, finalizer string) bool {
 }
 
 // RemoveFinalizer removes the given finalizer if present and reports whether
-// it was actually removed. Callers immediately follow with SetFinalizers on
-// the same object; the implementation rewrites the underlying slice in place
-// via `fs[:0]` for that reason.
-//
-// In-place-rewrite contract: callers MUST NOT hold a reference to the
-// finalizers slice across this call. If they do, the slice they hold gets
-// mutated under them. All current callers SetFinalizers immediately, so this
-// is safe today; if you add a caller that diverges from that pattern, switch
-// the implementation to a copy-on-write rewrite.
+// it was actually removed. The caller's existing finalizers slice is left
+// untouched (copy-on-write); callers may safely retain a reference to it.
 func RemoveFinalizer(obj client.Object, finalizer string) bool {
 	fs := obj.GetFinalizers()
-	out := fs[:0]
-	changed := false
-	for _, f := range fs {
-		if f == finalizer {
-			changed = true
-			continue
-		}
-		out = append(out, f)
+	out := slices.DeleteFunc(slices.Clone(fs), func(f string) bool { return f == finalizer })
+	if len(out) == len(fs) {
+		return false
 	}
 	obj.SetFinalizers(out)
-	return changed
+	return true
 }
