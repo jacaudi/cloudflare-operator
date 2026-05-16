@@ -21,6 +21,7 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -55,6 +56,8 @@ const (
 	ModeZone   Mode = "zone"
 	ModeTunnel Mode = "tunnel"
 )
+
+var errMissingCloudflareEnv = errors.New("zone/tunnel mode requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID env vars")
 
 // Options is the parsed flag set.
 type Options struct {
@@ -106,7 +109,14 @@ func envOr(key, fallback string) string {
 func main() {
 	// Init logger first (default info level) so flag-parse errors emit
 	// structured JSON via logger.Error rather than raw text on stderr.
-	logger := zapr.NewLogger(newProductionLogger("info"))
+	zl, lerr := newProductionLogger("info")
+	if lerr != nil {
+		// No logger yet — this one raw stderr line is unavoidable (the
+		// logger itself failed to build).
+		fmt.Fprintln(os.Stderr, "init logger:", lerr)
+		os.Exit(2)
+	}
+	logger := zapr.NewLogger(zl)
 	ctrl.SetLogger(logger)
 	log.SetLogger(logger)
 
@@ -116,11 +126,16 @@ func main() {
 		os.Exit(2)
 	}
 
-	// Replace with a logger at the user-requested level (no-op when the level
-	// already matches the default).
-	logger = zapr.NewLogger(newProductionLogger(opts.LogLevel))
-	ctrl.SetLogger(logger)
-	log.SetLogger(logger)
+	// Reconfigure to the user-requested level. On failure keep the
+	// already-installed info-level logger (degraded but functional) and
+	// surface it structurally rather than aborting.
+	if zl2, rerr := newProductionLogger(opts.LogLevel); rerr != nil {
+		logger.Error(rerr, "reconfigure logger to requested level; keeping info-level logger", "level", opts.LogLevel)
+	} else {
+		logger = zapr.NewLogger(zl2)
+		ctrl.SetLogger(logger)
+		log.SetLogger(logger)
+	}
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -173,6 +188,7 @@ func startManager(opts Options, scheme *runtime.Scheme, cfg *rest.Config, regist
 
 // runMeta starts the controller-runtime manager with the bootstrap reconciler.
 func runMeta(opts Options, scheme *runtime.Scheme) {
+	log := ctrl.Log.WithName(string(opts.Mode))
 	err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
 		return (&bootstrap.Reconciler{
 			Client:            mgr.GetClient(),
@@ -182,7 +198,7 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 		}).SetupWithManager(mgr)
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Error(err, "fatal")
 		os.Exit(1)
 	}
 }
@@ -192,14 +208,15 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 // Per-reconcile credentials are resolved via reconcile.LoadCredentialsHierarchical;
 // the env vars below are smoke-checked here as a fail-fast.
 func runZone(opts Options, scheme *runtime.Scheme) {
+	log := ctrl.Log.WithName(string(opts.Mode))
 	if os.Getenv("CLOUDFLARE_API_TOKEN") == "" || os.Getenv("CLOUDFLARE_ACCOUNT_ID") == "" {
-		fmt.Fprintln(os.Stderr, "zone mode requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars")
+		log.Error(errMissingCloudflareEnv, "preflight failed")
 		os.Exit(1)
 	}
 	if err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
 		return zone.AddToManager(mgr, zone.Options{})
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Error(err, "fatal")
 		os.Exit(1)
 	}
 }
@@ -211,19 +228,20 @@ func runZone(opts Options, scheme *runtime.Scheme) {
 // here as a fail-fast (the bootstrap reconciler injects them into the tunnel
 // controller Deployment, but a hand-rolled deployment could omit them).
 func runTunnel(opts Options, scheme *runtime.Scheme) {
+	log := ctrl.Log.WithName(string(opts.Mode))
 	if os.Getenv("CLOUDFLARE_API_TOKEN") == "" || os.Getenv("CLOUDFLARE_ACCOUNT_ID") == "" {
-		fmt.Fprintln(os.Stderr, "tunnel mode requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars")
+		log.Error(errMissingCloudflareEnv, "preflight failed")
 		os.Exit(1)
 	}
 	if err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
 		return tunnel.AddToManager(mgr, tunnel.Options{})
 	}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.Error(err, "fatal")
 		os.Exit(1)
 	}
 }
 
-func newProductionLogger(level string) *zap.Logger {
+func newProductionLogger(level string) (*zap.Logger, error) {
 	cfg := zap.NewProductionConfig()
 	switch level {
 	case "debug":
@@ -235,6 +253,5 @@ func newProductionLogger(level string) *zap.Logger {
 	default:
 		cfg.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 	}
-	l, _ := cfg.Build()
-	return l
+	return cfg.Build()
 }

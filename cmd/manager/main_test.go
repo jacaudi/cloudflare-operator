@@ -87,3 +87,11 @@ func TestStartManager_RegisterErrorPropagates(t *testing.T) {
 	)
 	require.ErrorIs(t, err, wantErr)
 }
+
+func TestNewProductionLogger_ReturnsLoggerForAllLevels(t *testing.T) {
+	for _, lvl := range []string{"debug", "info", "warn", "error", "bogus"} {
+		l, err := newProductionLogger(lvl)
+		require.NoError(t, err)
+		require.NotNil(t, l)
+	}
+}
