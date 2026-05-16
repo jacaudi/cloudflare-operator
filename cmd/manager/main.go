@@ -16,7 +16,8 @@ limitations under the License.
 
 // Package main is the cloudflare-operator binary entrypoint. It dispatches
 // on --mode=meta|zone|tunnel: meta runs the bootstrap reconciler, zone runs
-// the zone-bundle reconcilers, tunnel runs a stub no-op (spec 3 fills it in).
+// the zone-bundle reconcilers, and tunnel runs the tunnel-bundle reconcilers
+// (CloudflareTunnel + Service/Gateway/HTTPRoute/TLSRoute sources).
 package main
 
 import (
