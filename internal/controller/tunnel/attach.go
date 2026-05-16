@@ -468,3 +468,46 @@ func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port
 	}
 	return defaultNS, hostPart, port, nil
 }
+
+// findTunnelTargetedParentRef scans parentRefs for the first parent Gateway
+// that opts into tunnel attachment (cloudflare.io/tunnel truthy), has a
+// derivable tunnel name, an existing CloudflareTunnel, and a resolvable
+// Gateway Service. Returns all-nil when none qualifies. Get failures on a
+// candidate are treated as "not this parent" (skip, don't fail). Shared by
+// the HTTPRoute and TLSRoute source reconcilers.
+func findTunnelTargetedParentRef(
+	ctx context.Context,
+	c client.Client,
+	defaultNamespace string,
+	parentRefs []gwv1.ParentReference,
+) (*gwv1.ParentReference, *gwv1.Gateway, *v1alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
+	for i := range parentRefs {
+		pr := parentRefs[i]
+		gwNS := defaultNamespace
+		if pr.Namespace != nil {
+			gwNS = string(*pr.Namespace)
+		}
+		var gw gwv1.Gateway
+		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: string(pr.Name)}, &gw); err != nil {
+			continue
+		}
+		enabled, _ := conventions.ParseTruthy(gw.Annotations[conventions.AnnotationTunnel])
+		if !enabled {
+			continue
+		}
+		derived, err := DeriveTunnelName(gwNS, gw.Annotations[conventions.AnnotationTunnelName])
+		if err != nil {
+			continue
+		}
+		var tn v1alpha1.CloudflareTunnel
+		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: derived}, &tn); err != nil {
+			continue
+		}
+		gwSvc, port, err := resolveGatewayService(ctx, c, &gw)
+		if err != nil {
+			continue
+		}
+		return &pr, &gw, &tn, gwSvc, port, nil
+	}
+	return nil, nil, nil, nil, 0, nil
+}

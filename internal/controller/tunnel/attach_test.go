@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -524,4 +525,110 @@ func TestTransferOwnership_NotFoundSkipsToNextLive(t *testing.T) {
 	var got v1alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Equal(t, "b-svc", got.OwnerReferences[0].Name, "NotFound on a-svc skips to live b-svc")
+}
+
+// TestFindTunnelTargetedParentRef exercises the to-be-extracted shared helper
+// findTunnelTargetedParentRef that will delegate the near-identical per-controller
+// findTunnelTargetedParent methods in httproute_source_controller.go and
+// tlsroute_source_controller.go.
+//
+// Positive case: a tunnel-targeted Gateway with the required
+// cloudflare.io/gateway-service annotation yields all five non-nil return values.
+//
+// Negative case: a plain Gateway without the cloudflare.io/tunnel annotation
+// yields all-nil/zero returns (no match, no error).
+func TestFindTunnelTargetedParentRef(t *testing.T) {
+	t.Run("positive: tunnel-targeted gateway resolves all fields", func(t *testing.T) {
+		// Build the tunnel-targeted Gateway (mirrors mkParentGw("gw","ns1")).
+		gw := mkParentGw("gw", "ns1")
+
+		// Build the Gateway's backing Service (mirrors mkGwSvc("gw-svc","ns1")).
+		// Port is 80 — the Service's first port, used when the annotation omits
+		// an explicit port (mirrored from the assertion in TestHTTPRouteSource_HappyPath:
+		//   "http://gw-svc.gw-ns.svc.cluster.local:80").
+		gwSvc := mkGwSvc("gw-svc", "ns1")
+
+		// Build the CloudflareTunnel CR the helper must locate.
+		// Name = DeriveTunnelName("ns1","edge") = "cf-ns1-edge", matching the
+		// pattern used by every existing test (e.g. Name: "cf-gw-ns-edge" in
+		// TestHTTPRouteSource_HappyPath for namespace "gw-ns" and tunnel-name "edge").
+		tnName, err := DeriveTunnelName("ns1", "edge")
+		require.NoError(t, err)
+		tn := &v1alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: tnName, Namespace: "ns1"},
+		}
+
+		c := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(gw, tn, gwSvc).
+			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, pr)
+		require.Equal(t, gwv1.ObjectName("gw"), pr.Name)
+		require.NotNil(t, foundGw)
+		require.Equal(t, "gw", foundGw.Name)
+		require.NotNil(t, foundTn)
+		require.Equal(t, tnName, foundTn.Name)
+		require.NotNil(t, svc)
+		require.Equal(t, "gw-svc", svc.Name)
+		// Port falls back to Service.Spec.Ports[0].Port (80) because the
+		// gateway-service annotation omits an explicit port — same expectation
+		// as TestHTTPRouteSource_HappyPath's "port from the Service's first port".
+		require.Equal(t, int32(80), port)
+	})
+
+	t.Run("negative: plain gateway without tunnel annotation returns all-nil", func(t *testing.T) {
+		// A Gateway with no cloudflare.io/tunnel annotation must not qualify.
+		plainGw := &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "ns1"},
+		}
+
+		c := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(plainGw).
+			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("plain")}},
+		)
+
+		require.NoError(t, err)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
+
+	t.Run("negative: tunnel-annotated gateway but missing CloudflareTunnel CR returns all-nil", func(t *testing.T) {
+		// Gateway opts in (tunnel=true, derivable name) but no matching
+		// CloudflareTunnel exists — exercises the continue-after-tunnel-Get-fail
+		// branch. The helper must skip the parent and return all-nil.
+		gw := mkParentGw("gw", "ns1")
+		gwSvc := mkGwSvc("gw-svc", "ns1")
+
+		c := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(gw, gwSvc). // deliberately NO CloudflareTunnel
+			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.NoError(t, err)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
 }

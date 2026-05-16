@@ -246,41 +246,7 @@ func (r *TLSRouteSourceReconciler) findTunnelTargetedParent(
 	ctx context.Context,
 	rt *gwv1a2.TLSRoute,
 ) (*gwv1.ParentReference, *gwv1.Gateway, *v1alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
-	for i := range rt.Spec.ParentRefs {
-		pr := rt.Spec.ParentRefs[i]
-		gwNS := rt.Namespace
-		if pr.Namespace != nil {
-			gwNS = string(*pr.Namespace)
-		}
-		var gw gwv1.Gateway
-		if err := r.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: string(pr.Name)}, &gw); err != nil {
-			// Treat as "not this parent" — missing or RBAC-denied parent
-			// shouldn't fail the whole reconcile.
-			continue
-		}
-		enabled, _ := conventions.ParseTruthy(gw.Annotations[conventions.AnnotationTunnel])
-		if !enabled {
-			continue
-		}
-		derived, err := DeriveTunnelName(gwNS, gw.Annotations[conventions.AnnotationTunnelName])
-		if err != nil {
-			// Bad annotation on the parent Gateway — the Gateway reconciler
-			// surfaces NameTooLong / InvalidName on the Gateway itself.
-			continue
-		}
-		var tn v1alpha1.CloudflareTunnel
-		if err := r.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: derived}, &tn); err != nil {
-			continue
-		}
-		gwSvc, port, err := resolveGatewayService(ctx, r.Client, &gw)
-		if err != nil {
-			// Gateway reconciler surfaces GatewayServiceUnspecified /
-			// GatewayServiceUnresolved on the Gateway itself.
-			continue
-		}
-		return &pr, &gw, &tn, gwSvc, port, nil
-	}
-	return nil, nil, nil, nil, 0, nil
+	return findTunnelTargetedParentRef(ctx, r.Client, rt.Namespace, rt.Spec.ParentRefs)
 }
 
 // emitChainDNSRecord upserts the chain CloudflareDNSRecord CR (route
