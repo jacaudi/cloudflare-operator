@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -385,8 +386,9 @@ func seedARecord(t *testing.T, m *mock.Mock, zoneID, name, content string) strin
 }
 
 // seedPlaintextTXT creates a plaintext TXT companion record encoding the given
-// namespace/name identity and returns its Cloudflare record ID.
-func seedPlaintextTXT(t *testing.T, m *mock.Mock, zoneID, recordName, encNS, encName string) string {
+// namespace/name identity (and optional content hash encH) and returns its
+// Cloudflare record ID.
+func seedPlaintextTXT(t *testing.T, m *mock.Mock, zoneID, recordName, encNS, encName, encH string) string {
 	t.Helper()
 	codec := cloudflare.NewPlaintextCodec()
 	content, err := codec.Encode(cloudflare.RegistryPayload{
@@ -394,6 +396,7 @@ func seedPlaintextTXT(t *testing.T, m *mock.Mock, zoneID, recordName, encNS, enc
 		K:  "CloudflareDNSRecord",
 		NS: encNS,
 		N:  encName,
+		H:  encH,
 	})
 	require.NoError(t, err)
 	txtName := cloudflare.AffixName("cf-txt", recordName)
@@ -421,9 +424,9 @@ func TestReconcile_ObserveMode_RecordExists_PopulatesStatus(t *testing.T) {
 		Build()
 	m := mock.New()
 
-	// Pre-seed A record and matching plaintext TXT companion.
+	// Pre-seed A record and matching plaintext TXT companion with a content hash.
 	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
-	seedPlaintextTXT(t, m, "z1", "test.example.com", "ns", "r")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "ns", "r", "sha256:deadbeef")
 
 	// Snapshot mutating-call counters BEFORE reconcile.
 	createBefore := m.Calls("DNS.CreateRecord")
@@ -451,6 +454,7 @@ func TestReconcile_ObserveMode_RecordExists_PopulatesStatus(t *testing.T) {
 	require.Equal(t, "ns", got.Status.ObservedTXT.Namespace)
 	require.Equal(t, "r", got.Status.ObservedTXT.Name)
 	require.Equal(t, "plaintext", got.Status.ObservedTXT.Codec)
+	require.Equal(t, "sha256:deadbeef", got.Status.ObservedTXT.ContentHash, "ContentHash must round-trip from TXT payload H field")
 
 	cond := findReadyCondition(got.Status.Conditions)
 	require.NotNil(t, cond, "Ready condition must be set")
@@ -478,7 +482,7 @@ func TestReconcile_ObserveMode_AdoptHasNoEffect(t *testing.T) {
 
 	// Pre-seed A record and a FOREIGN TXT companion (different ns/name).
 	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
-	seedPlaintextTXT(t, m, "z1", "test.example.com", "other-ns", "other-r")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "other-ns", "other-r", "")
 
 	createBefore := m.Calls("DNS.CreateRecord")
 	updateBefore := m.Calls("DNS.UpdateRecord")
@@ -509,25 +513,47 @@ func TestReconcile_ObserveMode_AdoptHasNoEffect(t *testing.T) {
 
 // TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately verifies that
 // when a record in Observe mode has a deletion timestamp set, the reconciler
-// removes the finalizer without making any CF calls.
+// removes the finalizer without making any CF calls. The test is non-vacuous:
+// Status.RecordID is set to a real mock record ID so that the non-short-circuit
+// path WOULD have called dc.DeleteRecord (Status.RecordID != ""), but the
+// observe-mode short-circuit in reconcileDelete skips it entirely.
 func TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately(t *testing.T) {
 	now := metav1.Now()
 	s := zoneTestScheme(t)
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
+	// Build the CR with DeletionTimestamp + finalizer. The finalizer must be
+	// present so the fake client retains the object after DeletionTimestamp is
+	// set.
 	rec := observeModeRec("r", "ns", "z1", func(r *v1alpha1.CloudflareDNSRecord) {
 		r.DeletionTimestamp = &now
 	})
-	// Seed a CF record so we can confirm DeleteRecord is never called.
+
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
 		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
-	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
 
+	// Seed a real A record in the mock and capture its ID. This ID will be
+	// written into Status.RecordID so that a non-short-circuited reconcileDelete
+	// (i.e. without the observe-mode guard) WOULD call dc.DeleteRecord.
+	aID := seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+
+	// Persist Status.RecordID via the status subresource. Because the fake
+	// client uses WithStatusSubresource, setting fields on the struct before
+	// WithObjects does NOT persist them — Status().Update is required.
+	rec.Status.RecordID = aID
+	require.NoError(t, c.Status().Update(context.Background(), rec))
+
+	// Verify the Status round-tripped correctly before reconciling.
+	var check v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &check))
+	require.Equal(t, aID, check.Status.RecordID, "test setup: Status.RecordID must be persisted before Reconcile")
+
+	// Snapshot the delete-call counter AFTER seeding.
 	deleteBefore := m.Calls("DNS.DeleteRecord")
 
 	r := newDNSReconciler(t, c, s, m)
@@ -536,16 +562,22 @@ func TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// No CF delete.
+	// Load-bearing assertion: the observe short-circuit suppressed a CF delete
+	// that the non-short-circuit path (Status.RecordID != "") WOULD have made.
+	// If reconcileDelete's observe guard were removed, DeleteRecord would be
+	// called and this assertion would fail.
 	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe delete must not call CF DeleteRecord")
 
-	// Finalizer must be removed (object either not found or has no finalizers).
+	// Finalizer must be removed. Use a strict check: if the object is gone
+	// (fake client GC after finalizer cleared), NotFound is acceptable; if it
+	// still exists, Finalizers must be empty.
 	var got v1alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got)
-	if err == nil {
+	if err != nil {
+		require.True(t, apierrors.IsNotFound(err), "unexpected get error: %v", err)
+	} else {
 		require.Empty(t, got.Finalizers, "finalizer must be cleared after observe deletion")
 	}
-	// If the object is gone entirely that's also fine (fake client GC).
 }
 
 // TestReconcile_ObserveMode_RecordAbsent_NoOp verifies that when no matching
@@ -609,7 +641,7 @@ func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
 	m := mock.New()
 
 	seedARecord(t, m, "z1", "test.example.com", "2.2.2.2")
-	seedPlaintextTXT(t, m, "z1", "test.example.com", "ns", "r")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "ns", "r", "")
 
 	r := newDNSReconciler(t, c, s, m)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
