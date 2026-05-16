@@ -216,20 +216,70 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
 	}
 
-	// Adopt branch: bare takeover by (name, type) match. No ownership
-	// verification (TXT registry deferred). Adopted ID flows into the update
-	// branch below to converge content/TTL/proxied drift in the same pass.
+	// Adopt branch: TXT-verified takeover by (name, type) match. Ownership is
+	// confirmed via a companion TXT record before adoption proceeds. If no
+	// companion exists, or the companion claims a foreign owner, adoption is
+	// refused and the reconciler halts (Ready=False). NEVER auto-writes a TXT
+	// for a pre-existing record (design §2 Q2 — the load-bearing safety
+	// property). Pre-feature records follow the §5.4 migration procedure.
+	// Adopted IDs flow into the update branch below to converge any drift.
 	if rec.Spec.Adopt && rec.Status.RecordID == "" {
 		list, lerr := dc.ListRecordsByNameAndType(ctx, zoneID, rec.Spec.Name, rec.Spec.Type)
 		if lerr != nil {
 			return ctrl.Result{}, fmt.Errorf("list records for adopt: %w", lerr)
 		}
 		if len(list) > 0 {
-			rec.Status.RecordID = list[0].ID
-			logger.Info("adopted existing DNS record", "recordID", list[0].ID, "name", rec.Spec.Name, "type", rec.Spec.Type)
-			if r.Recorder != nil {
-				r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonAdoptedExistingRecord,
-					"adopted existing %s record for %s (id=%s)", rec.Spec.Type, rec.Spec.Name, list[0].ID)
+			txtName := cloudflare.AffixName("cf-txt", rec.Spec.Name)
+			txtRecs, terr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
+			if terr != nil {
+				return ctrl.Result{}, fmt.Errorf("list TXT companion for adopt: %w", terr)
+			}
+			if len(txtRecs) == 0 {
+				// No TXT companion — refuse adoption. DO NOT create a TXT.
+				msg := "record exists but has no TXT companion; adoption refused (no silent backfill). " +
+					"See docs/plans/2026-05-14-txt-registry-design.md §5.4 migration procedure."
+				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+					conventions.ReasonAdoptRefusedNoTXT, msg)
+				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedNoTXT)
+				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+					return ctrl.Result{}, uerr
+				}
+				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+			}
+			switch verifyTXTOwnership(txtRecs[0].Content, readCodec, "CloudflareDNSRecord", rec.Namespace, rec.Name) {
+			case TxtOwnershipMatch:
+				// TXT companion confirms this CR owns the record — adopt it.
+				rec.Status.RecordID = list[0].ID
+				rec.Status.TxtRecordID = txtRecs[0].ID
+				rec.Status.TxtAffix = "cf-txt"
+				logger.Info("adopted existing DNS record with TXT verification",
+					"recordID", list[0].ID, "txtRecordID", txtRecs[0].ID,
+					"name", rec.Spec.Name, "type", rec.Spec.Type)
+				if r.Recorder != nil {
+					r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonAdoptedExistingRecord,
+						"adopted existing %s record for %s (id=%s)", rec.Spec.Type, rec.Spec.Name, list[0].ID)
+				}
+				// Fall through to the normal update/sync path below.
+			case TxtOwnershipForeign:
+				// TXT companion claims a different owner — refuse adoption.
+				msg := "TXT companion claims a different owner; refusing adoption"
+				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+					conventions.ReasonAdoptRefusedForeign, msg)
+				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedForeign)
+				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+					return ctrl.Result{}, uerr
+				}
+				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+			default: // TxtOwnershipUnrecognized
+				// TXT content is not decodable — refuse conservatively.
+				msg := "TXT companion content not decodable; refusing adoption (see design §5.4)"
+				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+					conventions.ReasonAdoptRefusedNoTXT, msg)
+				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedNoTXT)
+				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+					return ctrl.Result{}, uerr
+				}
+				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
 			}
 		}
 	}

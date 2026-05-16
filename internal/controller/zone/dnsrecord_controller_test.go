@@ -126,8 +126,9 @@ func TestDNS_DriftDetected_TriggersUpdate(t *testing.T) {
 }
 
 func TestDNS_AdoptBareTakeover(t *testing.T) {
-	// adopt: true + an existing matching (name, type) record on CF — take it
-	// over without TXT verification (TXT registry is deferred this phase).
+	// adopt: true + an existing matching (name, type) record on CF but NO TXT
+	// companion — TXT-verified adoption refuses the takeover (design §2 Q2).
+	// The old bare-takeover behavior is superseded by TXT-verified adoption.
 	s := zoneTestScheme(t)
 	content := "192.0.2.50"
 	rec := &v1alpha1.CloudflareDNSRecord{
@@ -140,18 +141,22 @@ func TestDNS_AdoptBareTakeover(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
-	// Pre-existing record at the same (name, type) — bare adopt should take it.
-	existing, _ := m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{Name: "app.example.com", Type: "A", Content: "1.1.1.1", TTL: 1})
+	// Pre-existing A record with no TXT companion — adoption must be refused.
+	_, _ = m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{Name: "app.example.com", Type: "A", Content: "1.1.1.1", TTL: 1})
 	r := newDNSReconciler(t, c, s, m)
-	// Converge.
+	// Finalizer pass.
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
+	// Adopt attempt — must refuse.
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
 	var got v1alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
-	require.Equal(t, existing.ID, got.Status.RecordID, "adopted by (name, type) match — same record ID")
-	require.Equal(t, "192.0.2.50", got.Status.CurrentContent, "drift corrected after adopt")
+	require.Empty(t, got.Status.RecordID, "adoption must be refused — no TXT companion")
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, conventions.ReasonAdoptRefusedNoTXT, cond.Reason)
 }
 
 func TestDNS_AdoptNoMatch_CreatesNew(t *testing.T) {
@@ -660,4 +665,198 @@ func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
 	cond := findReadyCondition(got.Status.Conditions)
 	require.NotNil(t, cond)
 	require.Equal(t, conventions.ReasonObserving, cond.Reason)
+}
+
+// --- TXT-verified adoption tests (Task 12) ---
+
+// adoptRec builds a Managed-mode CloudflareDNSRecord with Adopt:true,
+// Status.RecordID empty, and the finalizer already set (to skip the finalizer
+// requeue and land directly in the Adopt branch).
+func adoptRec(name, ns, zoneID string) *v1alpha1.CloudflareDNSRecord {
+	content := "1.1.1.1"
+	return &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  ns,
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "test.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  zoneID,
+			Adopt:   true,
+			// Mode unset → defaults to Managed.
+		},
+	}
+}
+
+// TestReconcile_AdoptWithNoTXT_Refused verifies that Adopt:true with a
+// pre-existing A record but NO TXT companion is refused (design §2 Q2 — no
+// silent backfill). RecordID must stay empty; no TXT is created.
+func TestReconcile_AdoptWithNoTXT_Refused(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := adoptRec("rec", "default", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Seed A record only — no TXT companion.
+	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+
+	createBefore := m.Calls("DNS.CreateRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// No TXT must have been created (no silent backfill).
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not create a TXT for a pre-existing untracked record")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	require.Empty(t, got.Status.RecordID, "RecordID must be empty — adoption refused")
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond, "Ready condition must be set")
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, conventions.ReasonAdoptRefusedNoTXT, cond.Reason)
+}
+
+// TestReconcile_AdoptWithForeignTXT_Refused verifies that Adopt:true with a
+// pre-existing A record and a TXT companion encoding a FOREIGN owner is
+// refused. RecordID must stay empty; no TXT is created.
+func TestReconcile_AdoptWithForeignTXT_Refused(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := adoptRec("rec", "default", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Seed A record + a TXT claiming a DIFFERENT owner (NS "other", N "other-r").
+	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+	seedPlaintextTXT(t, m, "z1", "test.example.com", "other", "other-r", "")
+
+	createBefore := m.Calls("DNS.CreateRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// No TXT must have been created.
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not create a TXT when foreign owner detected")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	require.Empty(t, got.Status.RecordID, "RecordID must be empty — adoption refused")
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond, "Ready condition must be set")
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, conventions.ReasonAdoptRefusedForeign, cond.Reason)
+}
+
+// TestReconcile_AdoptWithMatchingTXT_Succeeds verifies that Adopt:true with a
+// pre-existing A record and a TXT companion encoding OUR (K, NS, N) succeeds.
+// Status.RecordID, TxtRecordID, and TxtAffix must all be populated.
+func TestReconcile_AdoptWithMatchingTXT_Succeeds(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := adoptRec("rec", "default", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Seed A record + a TXT encoding OUR identity (NS "default", N "rec").
+	aID := seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+	txtID := seedPlaintextTXT(t, m, "z1", "test.example.com", "default", "rec", "")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	require.Equal(t, aID, got.Status.RecordID, "RecordID must be set to the pre-existing A record")
+	require.Equal(t, txtID, got.Status.TxtRecordID, "TxtRecordID must be set to the companion TXT record")
+	require.Equal(t, "cf-txt", got.Status.TxtAffix, "TxtAffix must be cf-txt")
+
+	// Must not be in a refused condition.
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.NotEqual(t, conventions.ReasonAdoptRefusedNoTXT, cond.Reason)
+	require.NotEqual(t, conventions.ReasonAdoptRefusedForeign, cond.Reason)
+}
+
+// TestReconcile_AdoptWithUnparseableTXT_Refused verifies that Adopt:true with
+// a pre-existing A record and a TXT companion whose content is gibberish is
+// treated conservatively as AdoptRefusedNoTXT (unrecognized ⇒ refuse).
+// RecordID must stay empty; no TXT is created.
+func TestReconcile_AdoptWithUnparseableTXT_Refused(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	rec := adoptRec("rec", "default", "z1")
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+
+	// Seed A record + a TXT with unparseable content.
+	seedARecord(t, m, "z1", "test.example.com", "1.1.1.1")
+	txtName := cloudflare.AffixName("cf-txt", "test.example.com")
+	_, err := m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{
+		Name: txtName, Type: "TXT", Content: "not-a-codec", TTL: 1,
+	})
+	require.NoError(t, err)
+
+	createBefore := m.Calls("DNS.CreateRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// No TXT must have been created.
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not create a TXT when TXT content is unrecognized")
+
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+
+	require.Empty(t, got.Status.RecordID, "RecordID must be empty — adoption refused")
+
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond, "Ready condition must be set")
+	require.Equal(t, metav1.ConditionFalse, cond.Status)
+	require.Equal(t, conventions.ReasonAdoptRefusedNoTXT, cond.Reason, "unrecognized TXT content must be treated conservatively as NoTXT")
 }
