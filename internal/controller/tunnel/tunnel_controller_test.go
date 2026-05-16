@@ -771,6 +771,133 @@ func TestReconcile_OrphanStateClearedOnSourceReattach(t *testing.T) {
 	require.Nil(t, got.Status.LastOrphanedAt, "source reattach must clear LastOrphanedAt")
 }
 
+// TestReconcile_RequeueIsMinOfPendingAndInterval is a characterisation /
+// regression-lock test for the trailing-return requeue logic.  It verifies
+// the min(pendingRequeueAfter, interval) contract across the three meaningful
+// cases without relying on any specific implementation detail beyond what
+// callers can observe (ctrl.Result.RequeueAfter).
+//
+// The test MUST pass both before and after EDIT 1 — it locks behaviour, not
+// an implementation; if it ever goes RED the production semantics changed.
+func TestReconcile_RequeueIsMinOfPendingAndInterval(t *testing.T) {
+	setEnvCreds(t)
+
+	// Case 1: pending == 0 (steady state, no orphan).
+	// A healthy tunnel with Spec.Interval=90s and no orphan state must requeue
+	// at exactly the resolved interval (90s).
+	t.Run("pending_zero_returns_interval", func(t *testing.T) {
+		s := tunnelScheme(t)
+		m := mockcf.New()
+		smallInterval := metav1.Duration{Duration: 90 * time.Second}
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
+		tn := &v1alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "tnl", Namespace: "ns",
+				Finalizers:      []string{conventions.FinalizerName},
+				Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
+				OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "svc", UID: "uid-svc", APIVersion: "v1", Controller: ptr.To(true)}},
+			},
+			Spec: v1alpha1.CloudflareTunnelSpec{
+				Name:     "cf-ns",
+				Interval: &smallInterval,
+				Connector: v1alpha1.ConnectorSpec{
+					Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+				},
+			},
+			Status: v1alpha1.CloudflareTunnelStatus{
+				// AttachedSources has one entry so the tunnel is NOT orphaned.
+				AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Namespace: "ns", Name: "svc"}},
+			},
+		}
+		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svc).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		c := reconcilelib.SSATranslatingClient(t, base)
+		r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+		require.NoError(t, err)
+		require.Equal(t, 90*time.Second, res.RequeueAfter, "steady-state requeue must equal Spec.Interval")
+	})
+
+	// Case 2: pending > 0 && pending < interval (orphan grace SHORTER than interval).
+	// Use Spec.Interval >> pendingDeletionGrace so that the fresh-stamp path
+	// sets pendingRequeueAfter = grace < interval; result must equal grace, not interval.
+	t.Run("pending_less_than_interval_returns_pending", func(t *testing.T) {
+		s := tunnelScheme(t)
+		m := mockcf.New()
+		// Spec.Interval is much larger than pendingDeletionGrace (60s) so that
+		// grace < interval and min(grace, interval) == grace.
+		largeInterval := metav1.Duration{Duration: pendingDeletionGrace * 10}
+		tn := &v1alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "tnl", Namespace: "ns",
+				Finalizers:  []string{conventions.FinalizerName},
+				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+			},
+			Spec: v1alpha1.CloudflareTunnelSpec{
+				Name:     "cf-ns",
+				Interval: &largeInterval,
+				Connector: v1alpha1.ConnectorSpec{
+					Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+				},
+			},
+			Status: v1alpha1.CloudflareTunnelStatus{
+				// No AttachedSources + auto-created → first orphan observation.
+				// Reconciler will stamp LastOrphanedAt and set
+				// pendingRequeueAfter = pendingDeletionGrace (60s) < largeInterval.
+			},
+		}
+		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		c := reconcilelib.SSATranslatingClient(t, base)
+		r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+		require.NoError(t, err)
+		require.Greater(t, res.RequeueAfter, time.Duration(0), "grace-window requeue must be positive")
+		require.LessOrEqual(t, res.RequeueAfter, pendingDeletionGrace, "requeue must not exceed grace (== min(grace,interval))")
+		require.Less(t, res.RequeueAfter, largeInterval.Duration, "requeue must be shorter than the large interval")
+	})
+
+	// Case 3: pending > 0 && pending >= interval (orphan grace LONGER than interval).
+	// Use a LastOrphanedAt that is recent (within grace) but Spec.Interval <<
+	// pendingDeletionGrace so that the remaining-window path yields
+	// pendingRequeueAfter ≈ grace > interval; min(pending, interval) == interval.
+	t.Run("pending_greater_than_interval_returns_interval", func(t *testing.T) {
+		s := tunnelScheme(t)
+		m := mockcf.New()
+		// Spec.Interval is much smaller than pendingDeletionGrace (60s) so that
+		// interval < remaining-grace and min(remaining, interval) == interval.
+		tinyInterval := metav1.Duration{Duration: pendingDeletionGrace / 10}
+		// Stamp LastOrphanedAt just now so the remaining window ≈ full grace (>> tinyInterval).
+		recentStamp := metav1.NewTime(time.Now())
+		tn := &v1alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "tnl", Namespace: "ns",
+				Finalizers:  []string{conventions.FinalizerName},
+				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+			},
+			Spec: v1alpha1.CloudflareTunnelSpec{
+				Name:     "cf-ns",
+				Interval: &tinyInterval,
+				Connector: v1alpha1.ConnectorSpec{
+					Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+				},
+			},
+			Status: v1alpha1.CloudflareTunnelStatus{
+				// LastOrphanedAt is fresh so we land in the "within grace, requeue
+				// remaining window" branch; remaining ≈ 60s >> tinyInterval (6s).
+				LastOrphanedAt: &recentStamp,
+			},
+		}
+		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		c := reconcilelib.SSATranslatingClient(t, base)
+		r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+		require.NoError(t, err)
+		// min(remaining≈60s, tinyInterval=6s) should be tinyInterval.
+		require.LessOrEqual(t, res.RequeueAfter, tinyInterval.Duration+1*time.Second,
+			"requeue must be capped at interval when pending > interval")
+		require.Greater(t, res.RequeueAfter, time.Duration(0), "requeue must be positive")
+	})
+}
+
 // containsAll returns true when s contains every substring.
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {

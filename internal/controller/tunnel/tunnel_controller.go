@@ -200,8 +200,9 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	r.observeAttachedSources(&tn)
 	r.rollupStatus(&tn, depAvailable)
 
-	// pendingRequeueAfter, when >0, overrides the default interval at the
-	// trailing return (used by the cascade-GC grace window).
+	// pendingRequeueAfter, when >0, caps the trailing-return requeue at
+	// min(pendingRequeueAfter, interval) — the cascade-GC grace window
+	// shortens the next requeue but never lengthens it past the interval.
 	var pendingRequeueAfter time.Duration
 
 	// Orphan-state management (design §4.1 step 10). Only auto-created CRs are
@@ -258,13 +259,10 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	interval := defaultTunnelInterval
-	if tn.Spec.Interval != nil && tn.Spec.Interval.Duration > 0 {
-		interval = tn.Spec.Interval.Duration
-	}
+	interval := reconcilelib.ResolveInterval(tn.Spec.Interval, defaultTunnelInterval)
 	logger.V(1).Info("reconciled", "tunnelID", tn.Status.TunnelID, "connectors", tn.Status.ConnectionsHealthy)
-	if pendingRequeueAfter > 0 && pendingRequeueAfter < interval {
-		return ctrl.Result{RequeueAfter: pendingRequeueAfter}, nil
+	if pendingRequeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: min(pendingRequeueAfter, interval)}, nil
 	}
 	return ctrl.Result{RequeueAfter: interval}, nil
 }
