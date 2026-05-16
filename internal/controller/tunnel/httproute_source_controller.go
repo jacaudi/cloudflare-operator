@@ -353,12 +353,18 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 		}
 	}
 	if !hasContribs && acceptedStatus == metav1.ConditionTrue {
-		// Fallback: no contribs and no IncompatibleFilters warn — unusual,
-		// but mark Accepted=False with IncompatibleFilters so operators see
-		// "nothing landed" instead of a misleading TunnelAttached.
 		acceptedStatus = metav1.ConditionFalse
-		acceptedReason = conventions.ReasonIncompatibleFilters
-		acceptedMsg = "all rules dropped during translation"
+		if len(rt.Spec.Hostnames) == 0 {
+			// No hostnames on the route → nothing could route, but no rule
+			// was "dropped". Mirror TLSRoute's accurate NoListenerHostname.
+			acceptedReason = conventions.ReasonNoListenerHostname
+			acceptedMsg = "no hostname resolved for HTTPRoute (Route.Spec.Hostnames empty)"
+		} else {
+			// Hostnames present but every rule produced no contribution
+			// (e.g. all rules filtered) — "nothing landed".
+			acceptedReason = conventions.ReasonIncompatibleFilters
+			acceptedMsg = "all rules dropped during translation"
+		}
 	}
 	conds := reconcilelib.SetCondition(
 		live.Status.Parents[idx].Conditions,

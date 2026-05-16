@@ -180,7 +180,7 @@ const (
 	ReasonTunnelAttached            = "TunnelAttached"
 	ReasonUnsupportedValue          = "UnsupportedValue"          // HTTPRoute matchers or weighted backends that cloudflared cannot express
 	ReasonIncompatibleFilters       = "IncompatibleFilters"       // HTTPRoute filter types cloudflared cannot enforce
-	ReasonNoListenerHostname        = "NoListenerHostname"        // Gateway with no listener hostname set
+	ReasonNoListenerHostname        = "NoListenerHostname"        // no hostname could be resolved — Gateway listener or HTTPRoute/TLSRoute Spec.Hostnames empty
 	ReasonClientSideClientRequired  = "ClientSideClientRequired"  // TLSRoute hostname is browser-unreachable (mTLS / non-HTTPS client required)
 	ReasonNameTooLong               = "NameTooLong"               // hostname exceeds Cloudflare tunnel-config limits
 	ReasonInvalidName               = "InvalidName"               // hostname fails DNS-label / Cloudflare validity rules
