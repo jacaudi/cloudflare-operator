@@ -17,13 +17,13 @@ generate: tools
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=internal/bootstrap/crds
 	# Copy CRD YAML to chart for the CloudflareOperator only
-	-cp internal/bootstrap/crds/cloudflare.io_cloudflareoperators.yaml chart/cloudflare-operator/templates/crd.yaml
+	-cp internal/bootstrap/crds/cloudflare.io_cloudflareoperators.yaml chart/templates/crd.yaml
 	# Inject helm.sh/resource-policy: keep annotation to preserve CRD on helm uninstall
 	@awk '/controller-gen\.kubebuilder\.io\/version:/ {print $$0; print "    helm.sh/resource-policy: keep"; next} {print}' \
-		chart/cloudflare-operator/templates/crd.yaml > chart/cloudflare-operator/templates/crd.yaml.tmp && \
-		mv chart/cloudflare-operator/templates/crd.yaml.tmp chart/cloudflare-operator/templates/crd.yaml
-	@grep -q "helm.sh/resource-policy: keep" chart/cloudflare-operator/templates/crd.yaml \
-		|| (echo "ERROR: failed to inject helm.sh/resource-policy into chart/cloudflare-operator/templates/crd.yaml"; exit 1)
+		chart/templates/crd.yaml > chart/templates/crd.yaml.tmp && \
+		mv chart/templates/crd.yaml.tmp chart/templates/crd.yaml
+	@grep -q "helm.sh/resource-policy: keep" chart/templates/crd.yaml \
+		|| (echo "ERROR: failed to inject helm.sh/resource-policy into chart/templates/crd.yaml"; exit 1)
 
 .PHONY: test
 test: tools
