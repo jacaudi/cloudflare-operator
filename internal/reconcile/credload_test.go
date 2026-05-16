@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 )
 
 func credLoadScheme(t *testing.T) *runtime.Scheme {
@@ -50,7 +51,7 @@ func TestLoadCredentials_HappyPath(t *testing.T) {
 	creds, result, err := LoadCredentials(context.Background(), c, ref, "default")
 	require.NoError(t, err)
 	require.Nil(t, result, "no requeue expected on success")
-	require.Equal(t, "t", creds.Token)
+	require.Equal(t, cloudflare.Secret("t"), creds.Token)
 }
 
 func TestLoadCredentials_MissingSecretReturnsRequeue(t *testing.T) {

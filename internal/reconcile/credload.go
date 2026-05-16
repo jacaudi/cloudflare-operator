@@ -64,7 +64,7 @@ func EnvCredentials() (cloudflare.Credentials, bool) {
 	if token == "" || accountID == "" {
 		return cloudflare.Credentials{}, false
 	}
-	return cloudflare.Credentials{Token: token, AccountID: accountID}, true
+	return cloudflare.Credentials{Token: cloudflare.Secret(token), AccountID: accountID}, true
 }
 
 // LoadCredentialsHierarchical implements hierarchical resolution:
