@@ -188,13 +188,23 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		}, 10*time.Second, 200*time.Millisecond, "SSLApplied=True")
 	})
 
-	t.Run("§10.4 DNSRecord adopt by bare (name, type) match", func(t *testing.T) {
+	t.Run("§10.4 DNSRecord adopt by TXT-verified (name, type) match", func(t *testing.T) {
 		require.NotEmpty(t, zoneID, "§10.2 must populate zoneID before downstream tests")
-		// Seed mock with a pre-existing record at the same (name, type) so
-		// the adopt path takes it over (rather than falling through to
-		// Create). Use the zoneID captured from §10.2.
+		// Seed mock with a pre-existing A record at the same (name, type) so the
+		// TXT-verified adopt path can take it over (rather than falling through to
+		// Create). P5 requires a matching TXT companion to prove ownership before
+		// adoption succeeds; bare (name, type) matching no longer suffices.
 		_, err := m.DNS.CreateRecord(ctx, zoneID, cloudflare.DNSRecordParams{
 			Name: "app.example.com", Type: "A", Content: "192.0.2.10", TTL: 1,
+		})
+		require.NoError(t, err)
+		// Seed matching TXT companion that encodes ownership of rec-adopt/default.
+		txtName := cloudflare.AffixName("cf-txt", "app.example.com")
+		payload := cloudflare.RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "default", N: "rec-adopt"}
+		plainContent, encErr := cloudflare.NewPlaintextCodec().Encode(payload)
+		require.NoError(t, encErr)
+		_, err = m.DNS.CreateRecord(ctx, zoneID, cloudflare.DNSRecordParams{
+			Type: "TXT", Name: txtName, Content: plainContent, TTL: 1,
 		})
 		require.NoError(t, err)
 		content := "192.0.2.20"
@@ -214,10 +224,10 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 			if err := c.Get(ctx, types.NamespacedName{Name: "rec-adopt", Namespace: "default"}, &got); err != nil {
 				return false
 			}
-			// Adoption + drift correction: Status.RecordID populated and
-			// CurrentContent matches the spec content.
-			return got.Status.RecordID != "" && got.Status.CurrentContent == "192.0.2.20"
-		}, 10*time.Second, 200*time.Millisecond, "adopted + drift corrected")
+			// TXT-verified adoption + drift correction: RecordID and TxtRecordID
+			// both populated, and CurrentContent matches the spec content.
+			return got.Status.RecordID != "" && got.Status.TxtRecordID != "" && got.Status.CurrentContent == "192.0.2.20"
+		}, 10*time.Second, 200*time.Millisecond, "adopted via TXT-verified ownership + drift corrected")
 	})
 
 	t.Run("§10.5 Ruleset PUT-entrypoint creates rules", func(t *testing.T) {
