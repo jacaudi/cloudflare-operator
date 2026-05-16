@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	rest "k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -137,10 +138,14 @@ func main() {
 	}
 }
 
-// runMeta starts the controller-runtime manager with the bootstrap reconciler.
-func runMeta(opts Options, scheme *runtime.Scheme) {
+// startManager builds a controller-runtime manager from cfg, runs register
+// to wire the mode-specific reconcilers, adds the health/ready probes, and
+// blocks on Start. Returns the first error (wrapped) instead of os.Exit so
+// callers control fatal reporting. cfg is a parameter (not GetConfigOrDie
+// internally) so the register/wiring path is unit-testable without a cluster.
+func startManager(opts Options, scheme *runtime.Scheme, cfg *rest.Config, register func(ctrl.Manager) error) error {
 	leaderID := "cloudflare-operator-" + string(opts.Mode)
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
 		HealthProbeBindAddress: opts.HealthAddress,
@@ -148,28 +153,35 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 		LeaderElectionID:       leaderID,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "create manager:", err)
-		os.Exit(1)
+		return fmt.Errorf("create manager: %w", err)
 	}
-	if err := (&bootstrap.Reconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		OperatorNamespace: opts.OperatorNamespace,
-		OperatorImage:     opts.OperatorImage,
-	}).SetupWithManager(mgr); err != nil {
-		fmt.Fprintln(os.Stderr, "setup bootstrap reconciler:", err)
-		os.Exit(1)
+	if err := register(mgr); err != nil {
+		return fmt.Errorf("register reconcilers: %w", err)
 	}
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		fmt.Fprintln(os.Stderr, "add healthz check:", err)
-		os.Exit(1)
+		return fmt.Errorf("add healthz check: %w", err)
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		fmt.Fprintln(os.Stderr, "add readyz check:", err)
-		os.Exit(1)
+		return fmt.Errorf("add readyz check: %w", err)
 	}
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		fmt.Fprintln(os.Stderr, "manager exited with error:", err)
+		return fmt.Errorf("manager exited with error: %w", err)
+	}
+	return nil
+}
+
+// runMeta starts the controller-runtime manager with the bootstrap reconciler.
+func runMeta(opts Options, scheme *runtime.Scheme) {
+	err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
+		return (&bootstrap.Reconciler{
+			Client:            mgr.GetClient(),
+			Scheme:            mgr.GetScheme(),
+			OperatorNamespace: opts.OperatorNamespace,
+			OperatorImage:     opts.OperatorImage,
+		}).SetupWithManager(mgr)
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -183,33 +195,10 @@ func runZone(opts Options, scheme *runtime.Scheme) {
 		fmt.Fprintln(os.Stderr, "zone mode requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars")
 		os.Exit(1)
 	}
-
-	leaderID := "cloudflare-operator-" + string(opts.Mode)
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
-		HealthProbeBindAddress: opts.HealthAddress,
-		LeaderElection:         opts.LeaderElection,
-		LeaderElectionID:       leaderID,
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "create manager:", err)
-		os.Exit(1)
-	}
-	if err := zone.AddToManager(mgr, zone.Options{}); err != nil {
-		fmt.Fprintln(os.Stderr, "register zone bundle:", err)
-		os.Exit(1)
-	}
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		fmt.Fprintln(os.Stderr, "add healthz check:", err)
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		fmt.Fprintln(os.Stderr, "add readyz check:", err)
-		os.Exit(1)
-	}
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		fmt.Fprintln(os.Stderr, "manager exited with error:", err)
+	if err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
+		return zone.AddToManager(mgr, zone.Options{})
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -225,33 +214,10 @@ func runTunnel(opts Options, scheme *runtime.Scheme) {
 		fmt.Fprintln(os.Stderr, "tunnel mode requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars")
 		os.Exit(1)
 	}
-
-	leaderID := "cloudflare-operator-" + string(opts.Mode)
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
-		HealthProbeBindAddress: opts.HealthAddress,
-		LeaderElection:         opts.LeaderElection,
-		LeaderElectionID:       leaderID,
-	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "create manager:", err)
-		os.Exit(1)
-	}
-	if err := tunnel.AddToManager(mgr, tunnel.Options{}); err != nil {
-		fmt.Fprintln(os.Stderr, "register tunnel bundle:", err)
-		os.Exit(1)
-	}
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		fmt.Fprintln(os.Stderr, "add healthz check:", err)
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		fmt.Fprintln(os.Stderr, "add readyz check:", err)
-		os.Exit(1)
-	}
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		fmt.Fprintln(os.Stderr, "manager exited with error:", err)
+	if err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
+		return tunnel.AddToManager(mgr, tunnel.Options{})
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

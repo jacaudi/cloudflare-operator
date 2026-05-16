@@ -17,11 +17,15 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	runtime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 func TestParseFlags_Defaults(t *testing.T) {
@@ -67,4 +71,19 @@ func TestZoneMode_RegistersZoneBundle(t *testing.T) {
 	// The real envtest path lives in test/envtest/zone_test.go (T20); this test
 	// only smoke-checks that the wiring compiles + the manager.Add succeeds.
 	t.Skip("covered by test/envtest/zone_test.go T20")
+}
+
+func TestStartManager_RegisterErrorPropagates(t *testing.T) {
+	scheme := runtime.NewScheme()
+	wantErr := errors.New("register boom")
+	// Dummy config: NewManager constructs lazily (no dial until Start),
+	// and register returns before Start, so no cluster is needed.
+	cfg := &rest.Config{Host: "http://127.0.0.1:0"}
+	err := startManager(
+		Options{Mode: ModeZone, LeaderElection: false, MetricsAddress: "0", HealthAddress: "0"},
+		scheme,
+		cfg,
+		func(ctrl.Manager) error { return wantErr },
+	)
+	require.ErrorIs(t, err, wantErr)
 }
