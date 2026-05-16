@@ -199,11 +199,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	interval := defaultRulesetInterval
-	if rs.Spec.Interval != nil && rs.Spec.Interval.Duration > 0 {
-		interval = rs.Spec.Interval.Duration
-	}
-	return ctrl.Result{RequeueAfter: interval}, nil
+	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(rs.Spec.Interval, defaultRulesetInterval)}, nil
 }
 
 // haltDependency persists a DependencyMissing Ready=False and requeues; used

@@ -222,11 +222,7 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		z.Status.ObservedGeneration = originalStatus.ObservedGeneration
 	}
 
-	interval := defaultZoneInterval
-	if z.Spec.Interval != nil && z.Spec.Interval.Duration > 0 {
-		interval = z.Spec.Interval.Duration
-	}
-	return ctrl.Result{RequeueAfter: interval}, nil
+	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(z.Spec.Interval, defaultZoneInterval)}, nil
 }
 
 // reconcileDelete handles the deletion path: optionally remove the zone on
