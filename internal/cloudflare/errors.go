@@ -59,8 +59,8 @@ const (
 // Classify maps an error to a coarse-grained category. Non-APIError values
 // return KindUnknown.
 func Classify(err error) ErrorKind {
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
+	apiErr, ok := errors.AsType[*APIError](err)
+	if !ok {
 		return KindUnknown
 	}
 	switch {

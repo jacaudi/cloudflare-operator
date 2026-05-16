@@ -134,8 +134,7 @@ func classifyZoneConfigAPIErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	var apiErr *cfgo.Error
-	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusForbidden {
+	if apiErr, ok := errors.AsType[*cfgo.Error](err); ok && apiErr.StatusCode == http.StatusForbidden {
 		if isPlanTier403(apiErr) {
 			return fmt.Errorf("%w: %w", ErrPlanTierInsufficient, err)
 		}

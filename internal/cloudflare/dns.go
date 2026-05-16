@@ -36,8 +36,7 @@ func classifyDNSAPIErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	var apiErr *cfgo.Error
-	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+	if apiErr, ok := errors.AsType[*cfgo.Error](err); ok && apiErr.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("%w: %w", ErrRecordNotFound, err)
 	}
 	return err
