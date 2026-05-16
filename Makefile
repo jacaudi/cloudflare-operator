@@ -36,7 +36,7 @@ build:
 
 .PHONY: lint
 lint:
-	go vet ./...
+	go tool golangci-lint run ./...
 	gofmt -l . | tee /dev/stderr | (! read)
 
 .PHONY: clean

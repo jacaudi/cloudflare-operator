@@ -1,0 +1,27 @@
+# golangci-lint configuration. Enforces the go-standards §8.5 minimum set.
+# CI invokes `make lint` (component-lint.yml runs golangci-lint when present);
+# do not duplicate this ruleset in CI scripts.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - gosec
+    - unused
+    - gocritic
+  exclusions:
+    generated: strict
+    rules:
+      # Generated deepcopy / CRD scaffolding.
+      - path: "zz_generated\\..*\\.go"
+        linters: [govet, errcheck, staticcheck, gosec, unused, gocritic]
+
+formatters:
+  enable:
+    - gofmt
