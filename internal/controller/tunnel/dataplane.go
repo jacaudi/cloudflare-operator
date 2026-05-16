@@ -175,7 +175,7 @@ func BuildDeployment(tn *v1alpha1.CloudflareTunnel, defaultImage string) *appsv1
 // Cloudflare TunnelID a cached token Secret was fetched for. ensureTokenSecret
 // uses it to detect tunnel-ID rotation and re-fetch on drift; on steady state
 // it lets the reconciler skip the GetToken API call.
-const annotationTokenTunnelID = "cloudflare.io/tunnel-id"
+const annotationTokenTunnelID = "cloudflare.io/tunnel-id" //nolint:gosec // G101: Kubernetes annotation key name, not a credential
 
 // TokenSecretName is the stable Secret name carrying the connector-join token.
 // Exposed so callers (the reconciler's idempotency check) and tests share a

@@ -92,5 +92,5 @@ func TestResolve_NoTLSVerifyAndOSNThreaded(t *testing.T) {
 // cf.TunnelConfig (lock-in for the wire-format contract).
 func TestResolve_ReturnsTunnelConfigType(t *testing.T) {
 	cfg, _ := Resolve(nil, ResolveOpts{CatchAllService: "http_status:404"})
-	var _ cf.TunnelConfig = cfg
+	var _ cf.TunnelConfig = cfg //nolint:staticcheck // QF1011: the explicit type is the compile-time wire-format contract assertion this test exists to enforce
 }

@@ -428,7 +428,7 @@ func resolveGatewayService(ctx context.Context, c client.Client, gw *gwv1.Gatewa
 		// first port. A Service with no ports is a configuration error
 		// (no tunnel URL can be synthesized without a port).
 		if len(svc.Spec.Ports) == 0 {
-			return nil, 0, fmt.Errorf("Service %s/%s has no ports; annotation must specify a port", ns, name)
+			return nil, 0, fmt.Errorf("service %s/%s has no ports; annotation must specify a port", ns, name)
 		}
 		port = svc.Spec.Ports[0].Port
 	}
@@ -455,7 +455,7 @@ func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port
 		if perr != nil || p <= 0 || p > 65535 {
 			return "", "", 0, fmt.Errorf("invalid port %q in cloudflare.io/gateway-service", portPart)
 		}
-		port = int32(p)
+		port = int32(p) //nolint:gosec // G109: p is bounds-checked (1..65535) immediately above
 	}
 	if ns, nm, ok := strings.Cut(hostPart, "/"); ok {
 		if ns == "" || nm == "" {
