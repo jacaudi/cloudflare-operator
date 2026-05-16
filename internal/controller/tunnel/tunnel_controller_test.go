@@ -29,12 +29,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	cloudflare "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
@@ -741,6 +743,99 @@ drain:
 		}
 	}
 	require.True(t, foundTerminal, "expected TerminalNoSources event before self-delete")
+}
+
+// TestReconcile_OrphanSelfDelete_ConflictDefersDelete asserts the CORRECT
+// behaviour that Phase B will implement: when r.Status().Update returns a
+// Conflict the reconciler must requeue (Requeue:true, nil error) and MUST NOT
+// proceed to self-delete the tunnel.
+//
+// Against the current (buggy) code this test FAILS: the current code discards
+// the Conflict with `_ = r.Status().Update(...)` and then calls r.Delete,
+// producing ctrl.Result{} and a deleted/DeletionTimestamp-set tunnel instead
+// of ctrl.Result{Requeue:true} with the tunnel intact.
+func TestReconcile_OrphanSelfDelete_ConflictDefersDelete(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	// Stale orphan: same stamp as TestReconcile_OrphanStateGraceElapsed_SelfDeletes
+	// so time.Since(LastOrphanedAt) >= grace is true and the self-delete branch fires.
+	staleStamp := metav1.NewTime(time.Now().Add(-(pendingDeletionGrace + 5*time.Second)))
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Spec:   v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v1alpha1.CloudflareTunnelStatus{LastOrphanedAt: &staleStamp},
+	}
+
+	// Build the client stack mirroring TestReconcile_OrphanStateGraceElapsed_SelfDeletes,
+	// then wrap with an interceptor that returns a Conflict on SubResourceUpdate.
+	//
+	// Layering (innermost → outermost):
+	//   base (fake)
+	//   → SSATranslatingClient(t, base)   — intercepts Patch/SSA (same as the SelfDeletes test)
+	//   → interceptor.NewClient(ssa, ...) — intercepts SubResourceUpdate to inject Conflict
+	//
+	// When the reconciler calls r.Status().Update(ctx, &tn):
+	//   outer.Status() → outer.SubResource("status") → subResourceInterceptor{funcs: our Funcs}
+	//   → SubResourceUpdate hook → returns Conflict immediately, no real write.
+	//
+	// This mirrors the pattern in attach_test.go:440 (Patch interceptor wrapping a fake base)
+	// but targets SubResourceUpdate instead of Patch, and wraps SSATranslatingClient as the
+	// inner layer so SSA patch semantics are still available for the rest of reconciliation.
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	ssa := reconcilelib.SSATranslatingClient(t, base)
+	conflictErr := apierrors.NewConflict(
+		schema.GroupResource{Group: "cloudflare.io", Resource: "cloudflaretunnels"},
+		"tnl",
+		errors.New("conflict"),
+	)
+	c := interceptor.NewClient(ssa, interceptor.Funcs{
+		SubResourceUpdate: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+			return conflictErr
+		},
+	})
+
+	rec := record.NewFakeRecorder(10)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+
+	// Phase B target: Conflict must cause a requeue, not a delete.
+	require.NoError(t, err, "Conflict on Status().Update must not propagate as an error")
+	require.True(t, res.Requeue, "Conflict on Status().Update must requeue")
+
+	// The tunnel must still exist and must NOT have been deleted.
+	// (Current code deletes it; Phase B must prevent that.)
+	var got v1alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got),
+		"tunnel must still exist after Conflict — self-delete must not have proceeded")
+	require.Nil(t, got.DeletionTimestamp, "DeletionTimestamp must be nil — tunnel was not self-deleted")
+
+	// Test-fidelity guard: the TerminalNoSources event is emitted in the
+	// self-delete branch immediately BEFORE the guarded Status().Update.
+	// Asserting it was recorded pins this test to the self-delete site —
+	// if a future reconcile pass added an earlier Status().Update, the
+	// unconditioned interceptor would otherwise silently exercise the wrong
+	// site (the event would not have fired yet).
+	sawTerminal := false
+drain:
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, conventions.ReasonTerminalNoSources) {
+				sawTerminal = true
+			}
+		default:
+			break drain
+		}
+	}
+	require.True(t, sawTerminal,
+		"TerminalNoSources event must precede the guarded Status().Update — confirms the Conflict was injected at the self-delete branch")
 }
 
 func TestReconcile_OrphanStateClearedOnSourceReattach(t *testing.T) {

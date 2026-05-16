@@ -226,9 +226,19 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				}
 				tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
 					conventions.ReasonTerminalNoSources, "auto-created tunnel has no remaining sources")
-				// Best-effort terminal status so observers see the final
+				// Terminal status so observers see the final
 				// Ready=False+TerminalNoSources transition before deletion.
-				_ = r.Status().Update(ctx, &tn)
+				// A Conflict here means another writer raced this reconcile —
+				// requeue rather than self-delete on a stale view (the
+				// two-tick window re-confirms on the next reconcile). Other
+				// update errors are returned (retryable) — never self-delete
+				// on an unverified status write.
+				if uerr := r.Status().Update(ctx, &tn); uerr != nil {
+					if apierrors.IsConflict(uerr) {
+						return ctrl.Result{Requeue: true}, nil
+					}
+					return ctrl.Result{}, fmt.Errorf("terminal status update: %w", uerr)
+				}
 				if err := r.Delete(ctx, &tn); err != nil {
 					return ctrl.Result{}, fmt.Errorf("self-delete: %w", err)
 				}
