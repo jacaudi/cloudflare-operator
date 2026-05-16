@@ -127,9 +127,15 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
 		}
-		r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-" + gw.Namespace}, srcKey)
-		if tn := gw.Annotations[conventions.AnnotationTunnelName]; tn != "" {
-			r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-" + gw.Namespace + "-" + tn}, srcKey)
+		// Post-restart the in-memory tracker is empty, so clear the derived
+		// key directly. Use DeriveTunnelName — the single source of truth the
+		// opt-in path uses — so the swept key can never silently diverge from
+		// what opt-in wrote if the naming template changes. One call covers
+		// both the no-annotation (cf-<ns>) and named (cf-<ns>-<tn>) forms; for
+		// a name DeriveTunnelName rejects, the opt-in path also wrote nothing,
+		// so skipping the Clear is correct.
+		if k, derr := DeriveTunnelName(gw.Namespace, gw.Annotations[conventions.AnnotationTunnelName]); derr == nil {
+			r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: k}, srcKey)
 		}
 		return reconcile.Result{}, nil
 	}

@@ -623,5 +623,66 @@ func TestGatewaySource_InvalidName_StatusEventOnly(t *testing.T) {
 	}
 }
 
+// TestGatewaySourceOptOut_ClearsDerivedKey is a regression-lock characterization
+// test that pins the opt-out sweep to the DeriveTunnelName-derived key. A future
+// naming-template change that is not mirrored in the opt-out path would cause this
+// test to fail, making the drift visible before it ships.
+//
+// Strategy: pre-seed the Cache under the DeriveTunnelName-derived key for the
+// Gateway's namespace + tunnel-name annotation, then reconcile with the opt-in
+// annotation absent (opt-out). Assert the cache entry is gone, proving the sweep
+// targeted exactly the derived key and not a hand-built variant.
+func TestGatewaySourceOptOut_ClearsDerivedKey(t *testing.T) {
+	const ns = "ns"
+	const tn = "edge"
+
+	// DeriveTunnelName("ns", "edge") == "cf-ns-edge" — verified by the
+	// function's own contract. The test is deliberately written in terms of
+	// DeriveTunnelName so that if the naming template ever changes legitimately,
+	// this test tracks that change correctly.
+	derivedKey, err := DeriveTunnelName(ns, tn)
+	if err != nil {
+		t.Fatalf("DeriveTunnelName(%q, %q) unexpected error: %v", ns, tn, err)
+	}
+
+	// Gateway WITHOUT the opt-in annotation (opt-out), but with the
+	// tunnel-name annotation still present so the opt-out sweep must derive
+	// the named form (cf-<ns>-<tn>) rather than the pool form (cf-<ns>).
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gw",
+			Namespace: ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnelName: tn,
+				// AnnotationTunnel deliberately absent → opt-out.
+			},
+		},
+		Spec: gwv1.GatewaySpec{},
+	}
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	cache := tunnelsynth.NewCache()
+
+	// Pre-seed a stale contribution under the DeriveTunnelName-derived tunnel-key
+	// for this source, simulating a post-restart state where the in-memory tracker
+	// is empty but the cache holds an entry from a previous opt-in reconcile.
+	srcKey := tunnelsynth.SourceKey{Kind: "Gateway", Namespace: ns, Name: "gw"}
+	tunKey := tunnelsynth.TunnelKey{Namespace: ns, Name: derivedKey}
+	cache.Set(tunKey, srcKey, []tunnelsynth.IngressContribution{
+		{Hostname: "stale.example.com", Service: "http://svc:80"},
+	})
+
+	// Confirm the seed is in place.
+	require.NotEmpty(t, cache.Snapshot(tunKey), "pre-condition: cache must be seeded before opt-out reconcile")
+
+	r := &GatewaySourceReconciler{Client: c, Scheme: gwScheme(t), Cache: cache}
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "gw"}})
+	require.NoError(t, err)
+
+	// The opt-out sweep must have cleared the DeriveTunnelName-derived key.
+	require.Empty(t, cache.Snapshot(tunKey),
+		"opt-out reconcile must clear the DeriveTunnelName-derived key %q for this source", derivedKey)
+}
+
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)
