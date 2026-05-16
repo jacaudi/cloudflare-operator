@@ -747,5 +747,65 @@ func TestGatewaySource_NoDNSForTCPListener(t *testing.T) {
 	}
 }
 
+// TestGatewaySource_TLSListenerEmitsApexCNAME is a regression lock for the
+// IMP-2 fix. The TCP/UDP black-hole fix must NOT also drop the apex CNAME for
+// a TLS-mode listener: gateway.emitDNSRecord is the ONLY emitter of
+// "<apex> CNAME -> tunnelCNAME" for a Gateway. TLSRoute.emitChainDNSRecord
+// emits "route-host -> gwApex" (Content=gwApex), never "gwApex -> tunnelCNAME".
+// So a TLS-apex Gateway still legitimately needs its apex->tunnel record, or
+// the entire TLSRoute chain resolves to nothing.
+//
+// This test FAILS against the regressed code (desired built from contribs,
+// which is HTTP/HTTPS-only — the TLS arm appends nothing, so zero records are
+// emitted for a TLS-only Gateway).
+func TestGatewaySource_TLSListenerEmitsApexCNAME(t *testing.T) {
+	// Single TLS listener — the canonical tunnel-apex-for-TLSRoute pattern.
+	hpTLS := gwv1.Hostname("tls-apex.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "ns/gw-svc",
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "tls", Hostname: &hpTLS, Port: 443, Protocol: gwv1.TLSProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
+	}
+	// gwPreCreatedTunnel pre-populates Status.TunnelCNAME ("tun-abc.cfargotunnel.com")
+	// so the reconciler emits DNSRecord CRs on the first pass.
+	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(16)
+	cache := tunnelsynth.NewCache()
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
+	require.NoError(t, err)
+
+	// Exactly ONE CloudflareDNSRecord: the apex CNAME tls-apex.example.com ->
+	// tunnel CNAME. This is the record the TLSRoute chain depends on.
+	var dnsList v1alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "TLS-apex Gateway must still emit its apex->tunnel CNAME")
+	dr := dnsList.Items[0]
+	require.Equal(t, "tls-apex.example.com", dr.Spec.Name,
+		"the emitted record must be for the TLS listener's apex hostname")
+	require.NotNil(t, dr.Spec.Content)
+	require.Equal(t, "tun-abc.cfargotunnel.com", *dr.Spec.Content,
+		"apex record Content must be the tunnel CNAME (proving it's the apex->tunnel record, not a route->apex one)")
+}
+
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)

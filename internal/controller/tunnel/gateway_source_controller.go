@@ -47,9 +47,10 @@ import (
 //
 // Listener-protocol filter:
 //   - HTTP / HTTPS — synthesized here.
-//   - TLS — owned by the TLSRoute reconciler; skipped silently here so the
-//     TLSRoute controller can build its own contribution under the same
-//     tunnel-key without conflict.
+//   - TLS — ingress contribution is owned by the TLSRoute reconciler
+//     (skipped here so it can build its own under the same tunnel-key
+//     without conflict); the Gateway still emits the apex CNAME → tunnel
+//     CNAME so TLSRoute chains have a resolvable anchor.
 //   - TCP / UDP — rejected with an UnsupportedProtocol Warning event.
 //
 // No label-based fallback for Service discovery. Every Gateway controller
@@ -200,6 +201,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// Build per-listener contributions. HTTP/HTTPS only; TLS is owned by the
 	// TLSRoute reconciler; TCP/UDP are rejected with an Event.
 	contribs := make([]tunnelsynth.IngressContribution, 0, len(gw.Spec.Listeners))
+	tlsApexHostnames := make([]string, 0, len(gw.Spec.Listeners))
 	for _, l := range gw.Spec.Listeners {
 		if l.Hostname == nil || *l.Hostname == "" {
 			continue
@@ -217,8 +219,12 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 				Service:  fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, gwSvc.Name, gwSvc.Namespace, port),
 			})
 		case gwv1.TLSProtocolType:
-			// Owned by the TLSRoute reconciler; skip here so it can build a
-			// separate contribution under the same tunnel-key without clash.
+			// Ingress contribution is owned by the TLSRoute reconciler (it
+			// builds the route entry under the same tunnel-key). But the TLS
+			// listener hostname is the tunnel apex: TLSRoutes CNAME their
+			// route hostnames to it, and nothing else emits apex->tunnel, so
+			// the Gateway must still publish its CNAME -> tunnel record.
+			tlsApexHostnames = append(tlsApexHostnames, string(*l.Hostname))
 		default:
 			if r.Recorder != nil {
 				r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, conventions.ReasonUnsupportedProtocol,
@@ -248,19 +254,30 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		return reconcile.Result{}, nil
 	}
 
-	// Emit one CloudflareDNSRecord (CNAME → tunnel CNAME) only for hostnames
-	// that produced an HTTP/HTTPS ingress contribution. A hostname'd TCP/UDP
-	// (or otherwise unsupported) listener routes nowhere through the tunnel,
-	// so a CNAME for it would resolve to a black hole. Build the desired set
-	// from contribs, not from the unfiltered listener hostnames.
-	desired := make(map[string]struct{}, len(contribs))
-	for _, cont := range contribs {
-		if _, seen := desired[cont.Hostname]; seen {
-			continue
+	// Emit one CloudflareDNSRecord (CNAME → tunnel CNAME) for every hostname
+	// that routes through the tunnel: HTTP/HTTPS ingress contributions plus
+	// TLS-listener apex hostnames. TCP/UDP (and otherwise unsupported)
+	// listener hostnames are deliberately excluded — nothing routes them, so
+	// a CNAME would resolve to a black hole (IMP-2).
+	desired := make(map[string]struct{}, len(contribs)+len(tlsApexHostnames))
+	emitOne := func(h string) error {
+		if _, seen := desired[h]; seen {
+			return nil
 		}
-		desired[cont.Hostname] = struct{}{}
-		if err := r.emitDNSRecord(ctx, &gw, cont.Hostname, tn); err != nil {
-			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", cont.Hostname, err)
+		desired[h] = struct{}{}
+		if err := r.emitDNSRecord(ctx, &gw, h, tn); err != nil {
+			return fmt.Errorf("emit dns record for %q: %w", h, err)
+		}
+		return nil
+	}
+	for _, cont := range contribs {
+		if err := emitOne(cont.Hostname); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	for _, h := range tlsApexHostnames {
+		if err := emitOne(h); err != nil {
+			return reconcile.Result{}, err
 		}
 	}
 
@@ -287,9 +304,10 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 }
 
 // listenerHostnames returns the non-empty hostnames of all Gateway listeners.
-// Used both for the "no-hostname" gate and to drive DNSRecord emission. A
-// listener whose protocol is HTTP/HTTPS but lacks a hostname still does not
-// contribute — the contribution loop has its own per-listener nil check.
+// Used by the no-hostname gate: a Gateway with no listener hostname has
+// nothing to publish. It does NOT drive DNSRecord emission — emission is
+// derived from the protocol-filtered contribs + TLS apex hostnames, so a
+// hostname'd TCP/UDP listener never receives a black-hole CNAME.
 func listenerHostnames(gw *gwv1.Gateway) []string {
 	out := make([]string, 0, len(gw.Spec.Listeners))
 	for _, l := range gw.Spec.Listeners {
