@@ -1,0 +1,21 @@
+# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
+# Ignore everything by default, then re-include only what the Dockerfile
+# COPYs to build ./cmd/manager. This keeps the build context tiny and
+# excludes .git, .worktrees, bin/, chart/, config/, docs/, test/, hack/,
+# tooling, and editor/agent dirs.
+**
+
+# Re-include Go module files
+!go.mod
+!go.sum
+
+# Re-include the Go source directories the manager build needs
+!cmd/
+!cmd/**
+!api/
+!api/**
+!internal/
+!internal/**
+
+# Tests never belong in the image
+**/*_test.go
