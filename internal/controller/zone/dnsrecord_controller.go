@@ -466,6 +466,15 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec
 			return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
 		}
 
+		// Best-effort: delete the TXT companion before the main record. An orphan
+		// TXT is harmless, so failures only log and never block finalizer removal.
+		if rec.Status.TxtRecordID != "" {
+			if derr := deleteTXTCompanion(ctx, dc, zres.ZoneID, rec.Status.TxtRecordID); derr != nil {
+				logger.Error(derr, "TXT companion delete failed; leaving orphan (harmless) and continuing",
+					"txtRecordID", rec.Status.TxtRecordID)
+			}
+		}
+
 		if derr := reconcile.WrapDeleteErr(dc.DeleteRecord(ctx, zres.ZoneID, rec.Status.RecordID)); derr != nil {
 			return ctrl.Result{}, derr
 		}

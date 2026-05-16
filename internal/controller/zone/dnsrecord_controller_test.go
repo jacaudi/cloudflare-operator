@@ -1106,6 +1106,136 @@ func TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift(t *testing.T) {
 	require.Equal(t, sha256HexFor(content), payload.H, "TXT H must be sha256 of the record's content")
 }
 
+// --- TXT-companion cascade delete tests (Task 14) ---
+
+// TestReconcile_DeleteCascadesTxtCompanion verifies that when a Managed-mode
+// record with a DeletionTimestamp is reconciled, the reconciler deletes BOTH
+// the main A record AND the TXT companion from Cloudflare. The TXT-gone
+// assertion is the load-bearing one: it must fail if the cascade is not wired.
+func TestReconcile_DeleteCascadesTxtCompanion(t *testing.T) {
+	now := metav1.Now()
+	s := zoneTestScheme(t)
+	content := "192.0.2.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "rec",
+			Namespace:         "default",
+			Finalizers:        []string{conventions.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "app.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  "z1",
+			// Mode unset → Managed.
+		},
+	}
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	m := mock.New()
+
+	// Pre-seed the main A record and a TXT companion in the mock.
+	aID := seedARecord(t, m, "z1", "app.example.com", "192.0.2.1")
+	txtID := seedPlaintextTXT(t, m, "z1", "app.example.com", "default", "rec", sha256HexFor("192.0.2.1"))
+
+	// Persist Status.RecordID + Status.TxtRecordID so reconcileDelete can act.
+	rec.Status.RecordID = aID
+	rec.Status.TxtRecordID = txtID
+	require.NoError(t, c.Status().Update(context.Background(), rec))
+
+	// Verify setup round-tripped correctly.
+	var check v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &check))
+	require.Equal(t, aID, check.Status.RecordID, "test setup: Status.RecordID must be persisted")
+	require.Equal(t, txtID, check.Status.TxtRecordID, "test setup: Status.TxtRecordID must be persisted")
+
+	// Snapshot the delete counter before reconcile.
+	deleteBefore := m.Calls("DNS.DeleteRecord")
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+
+	// Both DeleteRecord calls must have happened (main + TXT).
+	require.Equal(t, deleteBefore+2, m.Calls("DNS.DeleteRecord"), "must call DeleteRecord twice: main record + TXT companion")
+
+	// Main record must be gone.
+	_, gerr := m.DNS.GetRecord(context.Background(), "z1", aID)
+	require.Error(t, gerr, "main A record must be deleted from Cloudflare")
+
+	// Load-bearing: TXT companion must also be gone.
+	txtName := cloudflare.AffixName("cf-txt", "app.example.com")
+	txtRecs, lerr := m.DNS.ListRecordsByNameAndType(context.Background(), "z1", txtName, "TXT")
+	require.NoError(t, lerr)
+	require.Empty(t, txtRecs, "TXT companion must be deleted from Cloudflare (cascade delete)")
+
+	// Finalizer must be removed.
+	var got v1alpha1.CloudflareDNSRecord
+	err = c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got)
+	if err != nil {
+		require.True(t, apierrors.IsNotFound(err), "unexpected get error: %v", err)
+	} else {
+		require.Empty(t, got.Finalizers, "finalizer must be cleared after delete")
+	}
+}
+
+// TestReconcile_DeleteTxtCompanion_NotFoundTolerated verifies that when a
+// Managed-mode delete is reconciled and Status.TxtRecordID points to a record
+// that no longer exists (already removed externally), the reconcile succeeds
+// without error. This pins the best-effort tolerance of deleteTXTCompanion.
+func TestReconcile_DeleteTxtCompanion_NotFoundTolerated(t *testing.T) {
+	now := metav1.Now()
+	s := zoneTestScheme(t)
+	content := "192.0.2.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "rec",
+			Namespace:         "default",
+			Finalizers:        []string{conventions.FinalizerName},
+			DeletionTimestamp: &now,
+		},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "app.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  "z1",
+		},
+	}
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	m := mock.New()
+
+	// Seed only the main A record. The TxtRecordID will reference a non-existent
+	// record — simulating external removal of the TXT companion.
+	aID := seedARecord(t, m, "z1", "app.example.com", "192.0.2.1")
+	const missingTxtID = "txt-already-gone"
+
+	rec.Status.RecordID = aID
+	rec.Status.TxtRecordID = missingTxtID
+	require.NoError(t, c.Status().Update(context.Background(), rec))
+
+	r := newDNSReconciler(t, c, s, m)
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	// Best-effort tolerance: ErrRecordNotFound on TXT delete must not propagate.
+	require.NoError(t, err, "NotFound on TXT companion delete must be tolerated")
+
+	// Main record must still be deleted.
+	_, gerr := m.DNS.GetRecord(context.Background(), "z1", aID)
+	require.Error(t, gerr, "main A record must be deleted even when TXT companion was already gone")
+
+	// Finalizer must be removed.
+	var got v1alpha1.CloudflareDNSRecord
+	err = c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got)
+	if err != nil {
+		require.True(t, apierrors.IsNotFound(err), "unexpected get error: %v", err)
+	} else {
+		require.Empty(t, got.Finalizers, "finalizer must be cleared after delete")
+	}
+}
+
 // TestReconcile_AdoptWithUnparseableTXT_Refused verifies that Adopt:true with
 // a pre-existing A record and a TXT companion whose content is gibberish is
 // treated conservatively as AdoptRefusedNoTXT (unrecognized ⇒ refuse).
