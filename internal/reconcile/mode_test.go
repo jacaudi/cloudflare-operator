@@ -19,6 +19,7 @@ package reconcile_test
 import (
 	"testing"
 
+	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/stretchr/testify/require"
 )
@@ -39,4 +40,10 @@ func TestShouldMutate_UnknownModeMutates(t *testing.T) {
 	// Conservative default: any value other than "Observe" is mutating.
 	// Future CRD enums adding more values are mutating-by-default.
 	require.True(t, reconcilelib.ShouldMutate("FutureMode"))
+}
+
+func TestShouldMutate_BoundToObserveConstant(t *testing.T) {
+	require.False(t, reconcilelib.ShouldMutate(string(v1alpha1.RecordModeObserve)))
+	require.True(t, reconcilelib.ShouldMutate(string(v1alpha1.RecordModeManaged)))
+	require.True(t, reconcilelib.ShouldMutate(""))
 }
