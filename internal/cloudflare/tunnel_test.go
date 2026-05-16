@@ -28,8 +28,9 @@ import (
 )
 
 func TestTunnelClient_ConstructorSmoke(t *testing.T) {
-	defer func() { _ = recover() }()
-	_ = NewTunnelClientFromCF(nil)
+	// NewTunnelClientFromCF stores cf without dereferencing it, so nil is
+	// legal at construction time and must produce a non-nil client.
+	require.NotNil(t, NewTunnelClientFromCF(nil))
 }
 
 func TestTunnel_FieldShape(t *testing.T) {

@@ -16,18 +16,13 @@ limitations under the License.
 
 package cloudflare
 
-import (
-	"context"
-	"testing"
+// Compile-time interface-satisfaction assertions. These assignments fail to
+// compile the moment a concrete type stops implementing its interface — which
+// is the real contract we need to protect, not a runtime check.
+var (
+	_ DNSClient        = (*dnsClient)(nil)
+	_ ZoneClient       = (*zoneClient)(nil)
+	_ ZoneConfigClient = (*zoneConfigClient)(nil)
+	_ RulesetClient    = (*rulesetClient)(nil)
+	_ TunnelClient     = (*tunnelClient)(nil)
 )
-
-func TestInterfaces_NotNil(t *testing.T) {
-	// Type-level smoke: each interface has the expected method set.
-	// Verified by reflective use in later tasks; this test is a placeholder
-	// guarding against accidental file deletion.
-	_ = (DNSClient)(nil)
-	_ = (ZoneClient)(nil)
-	_ = (ZoneConfigClient)(nil)
-	_ = (RulesetClient)(nil)
-	_ = context.Background()
-}
