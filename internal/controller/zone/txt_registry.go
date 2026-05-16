@@ -51,8 +51,6 @@ const (
 	// TxtOwnershipUnrecognized means the TXT record content could not be
 	// decoded by the configured codec.
 	TxtOwnershipUnrecognized
-	// TxtOwnershipAbsent means no TXT companion record exists for the name.
-	TxtOwnershipAbsent
 )
 
 // loadCodec resolves the codec to use for TXT companion records. When keyRef

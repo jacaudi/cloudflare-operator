@@ -534,7 +534,7 @@ func TestEnvtest_TxtRegistry_ObserveToManagedTransition(t *testing.T) {
 	require.NotEmpty(t, gotRec.Status.TxtRecordID)
 
 	// Verify the mock never called DeleteRecord (safe transition).
-	_ = m.Calls("DNS.DeleteRecord") // accessed for completeness; no assertion needed here
+	require.Equal(t, 0, m.Calls("DNS.DeleteRecord"), "Observe→Managed transition must not call DeleteRecord")
 }
 
 // --- Scenario 5: Encrypted roundtrip ---

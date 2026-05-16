@@ -169,7 +169,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			rec.Status.CurrentContent = ""
 		}
 
-		txtName := cloudflare.AffixName("cf-txt", rec.Spec.Name)
+		txtName := cloudflare.AffixName(txtAffix, rec.Spec.Name)
 		txtRecs, terr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
 		if terr != nil {
 			return ctrl.Result{}, fmt.Errorf("observe: list TXT: %w", terr)
@@ -233,7 +233,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			return ctrl.Result{}, fmt.Errorf("list records for adopt: %w", lerr)
 		}
 		if len(list) > 0 {
-			txtName := cloudflare.AffixName("cf-txt", rec.Spec.Name)
+			txtName := cloudflare.AffixName(txtAffix, rec.Spec.Name)
 			txtRecs, terr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
 			if terr != nil {
 				return ctrl.Result{}, fmt.Errorf("list TXT companion for adopt: %w", terr)
@@ -255,7 +255,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				// TXT companion confirms this CR owns the record — adopt it.
 				rec.Status.RecordID = list[0].ID
 				rec.Status.TxtRecordID = txtRecs[0].ID
-				rec.Status.TxtAffix = "cf-txt"
+				rec.Status.TxtAffix = txtAffix
 				logger.Info("adopted existing DNS record with TXT verification",
 					"recordID", list[0].ID, "txtRecordID", txtRecs[0].ID,
 					"name", rec.Spec.Name, "type", rec.Spec.Type)

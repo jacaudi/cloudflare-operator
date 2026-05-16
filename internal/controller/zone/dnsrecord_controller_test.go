@@ -1237,6 +1237,73 @@ func TestReconcile_DeleteTxtCompanion_NotFoundTolerated(t *testing.T) {
 }
 
 // TestReconcile_AdoptWithUnparseableTXT_Refused verifies that Adopt:true with
+// TestReconcile_ManagedToObserveTransition_StopsWriting verifies that switching a
+// previously-Managed record to Spec.Mode=Observe stops all mutating Cloudflare
+// calls. The test is non-vacuous: after the mode flip the main record and TXT
+// companion are still present in the mock (the test checks they are untouched),
+// and if the observe-mode early-exit were removed the next reconcile WOULD call
+// UpdateRecord (or at minimum re-enter the write path) — so the zero-delta
+// assertions would fail.
+func TestReconcile_ManagedToObserveTransition_StopsWriting(t *testing.T) {
+	s := zoneTestScheme(t)
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+
+	content := "10.0.0.1"
+	rec := &v1alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
+		Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Name:    "transition.example.com",
+			Type:    "A",
+			Content: &content,
+			ZoneID:  "z1",
+			// Mode unset → defaults to Managed.
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(rec).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		Build()
+	m := mock.New()
+	r := newDNSReconciler(t, c, s, m)
+
+	// First reconcile: sets the finalizer and requeues.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+	// Second reconcile: main A record created + TXT companion created.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+
+	// Confirm Managed path populated both IDs.
+	var got v1alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+	require.NotEmpty(t, got.Status.RecordID, "setup: RecordID must be set after Managed reconcile")
+	require.NotEmpty(t, got.Status.TxtRecordID, "setup: TxtRecordID must be set after Managed reconcile")
+
+	// Flip to Observe mode.
+	got.Spec.Mode = v1alpha1.RecordModeObserve
+	require.NoError(t, c.Update(context.Background(), &got))
+
+	// Snapshot mutating-call counters BEFORE the post-flip reconcile.
+	createBefore := m.Calls("DNS.CreateRecord")
+	updateBefore := m.Calls("DNS.UpdateRecord")
+	deleteBefore := m.Calls("DNS.DeleteRecord")
+
+	// Reconcile in Observe mode: must make zero mutating CF calls.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
+	require.NoError(t, err)
+
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "observe must not call CreateRecord after mode flip")
+	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not call UpdateRecord after mode flip")
+	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not call DeleteRecord after mode flip")
+
+	// Prior records must still exist in the mock (observe does not delete them).
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
+	require.NotEmpty(t, got.Status.RecordID, "RecordID must survive transition to Observe")
+	require.NotEmpty(t, got.Status.TxtRecordID, "TxtRecordID must survive transition to Observe")
+}
+
 // a pre-existing A record and a TXT companion whose content is gibberish is
 // treated conservatively as AdoptRefusedNoTXT (unrecognized ⇒ refuse).
 // RecordID must stay empty; no TXT is created.
