@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	stderrors "errors"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -185,11 +184,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				obs.Namespace = payload.NS
 				obs.Name = payload.N
 				obs.ContentHash = payload.H
-				if strings.HasPrefix(txtRecs[0].Content, "v1:") {
-					obs.Codec = "aes-gcm"
-				} else {
-					obs.Codec = "plaintext"
-				}
+				obs.Codec = cloudflare.CodecKindFor(txtRecs[0].Content)
 			}
 			rec.Status.ObservedTXT = obs
 		} else {

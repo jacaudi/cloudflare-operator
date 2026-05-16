@@ -183,3 +183,9 @@ func TestAutoDetectingCodec_EncodePanics(t *testing.T) {
 func TestAutoDetectingCodec_KindIsAutoDetect(t *testing.T) {
 	require.Equal(t, "auto-detect", autoDetectingCodec{}.Kind())
 }
+
+func TestCodecKindFor(t *testing.T) {
+	require.Equal(t, "aes-gcm", CodecKindFor("v1:abc"))
+	require.Equal(t, "plaintext", CodecKindFor(`{"version":1}`))
+	require.Equal(t, "plaintext", CodecKindFor(""))
+}

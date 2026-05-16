@@ -199,8 +199,20 @@ type autoDetectingCodec struct {
 
 var _ Codec = autoDetectingCodec{}
 
-func (c autoDetectingCodec) Decode(s string) (RegistryPayload, error) {
+// CodecKindFor reports which codec Decode would select for stored TXT
+// content, WITHOUT decoding: "aes-gcm" for the "v1:" prefix, "plaintext"
+// otherwise. Single source of truth for the read-side sniff shared by
+// autoDetectingCodec.Decode and status reporting. The two string values
+// match ObservedTXTPayload.Codec ("aes-gcm" / "plaintext").
+func CodecKindFor(s string) string {
 	if strings.HasPrefix(s, "v1:") {
+		return "aes-gcm"
+	}
+	return "plaintext"
+}
+
+func (c autoDetectingCodec) Decode(s string) (RegistryPayload, error) {
+	if CodecKindFor(s) == "aes-gcm" {
 		if c.aes == nil {
 			return RegistryPayload{}, fmt.Errorf("auto-detect: %w: v1: input but no key configured", ErrUnrecognizedCodec)
 		}
