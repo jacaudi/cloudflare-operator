@@ -18,6 +18,7 @@ package ipresolver
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -45,9 +46,31 @@ func WithCacheTTL(ttl time.Duration) Option {
 	return func(r *Resolver) { r.cacheTTL = ttl }
 }
 
+// secureHTTPClient builds the outbound client for third-party IP-echo
+// providers: a TLS 1.2 floor plus bounded dial / handshake /
+// response-header timeouts so a slow or hostile provider cannot stall a
+// reconcile. Proxy support (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) is preserved
+// via ProxyFromEnvironment, matching http.DefaultTransport — the implicit
+// transport the prior bare &http.Client used. Note http.Client.Timeout is
+// the binding overall cap; the per-phase ceilings below are defense-in-
+// depth that only bind when a caller passes a longer timeout (WithHTTPTimeout).
+func secureHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     true,
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+			DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+		},
+	}
+}
+
 func WithHTTPTimeout(timeout time.Duration) Option {
 	return func(r *Resolver) {
-		r.httpClient = &http.Client{Timeout: timeout}
+		r.httpClient = secureHTTPClient(timeout)
 	}
 }
 
@@ -63,7 +86,7 @@ type Resolver struct {
 
 func NewResolver(opts ...Option) *Resolver {
 	r := &Resolver{
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		httpClient: secureHTTPClient(5 * time.Second),
 		providers:  DefaultProviders,
 		cacheTTL:   60 * time.Second,
 	}

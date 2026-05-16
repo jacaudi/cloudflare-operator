@@ -18,6 +18,7 @@ package ipresolver
 
 import (
 	"context"
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -131,4 +132,15 @@ func TestResolver_OneProviderErrorsOneSucceeds_ReturnsSurvivingVote(t *testing.T
 	ip, err := r.GetExternalIP(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "192.0.2.55", ip)
+}
+
+func TestSecureHTTPClient_HasTLSFloorAndTimeouts(t *testing.T) {
+	c := secureHTTPClient(5 * time.Second)
+	require.Equal(t, 5*time.Second, c.Timeout)
+	tr, ok := c.Transport.(*http.Transport)
+	require.True(t, ok, "Transport must be *http.Transport")
+	require.NotNil(t, tr.TLSClientConfig)
+	require.Equal(t, uint16(tls.VersionTLS12), tr.TLSClientConfig.MinVersion)
+	require.Positive(t, tr.TLSHandshakeTimeout)
+	require.Positive(t, tr.ResponseHeaderTimeout)
 }
