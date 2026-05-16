@@ -428,7 +428,7 @@ func resolveGatewayService(ctx context.Context, c client.Client, gw *gwv1.Gatewa
 		// first port. A Service with no ports is a configuration error
 		// (no tunnel URL can be synthesized without a port).
 		if len(svc.Spec.Ports) == 0 {
-			return nil, 0, fmt.Errorf("Service %s/%s has no ports; annotation must specify a port", ns, name)
+			return nil, 0, fmt.Errorf("service %s/%s has no ports; annotation must specify a port", ns, name)
 		}
 		port = svc.Spec.Ports[0].Port
 	}
@@ -455,7 +455,7 @@ func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port
 		if perr != nil || p <= 0 || p > 65535 {
 			return "", "", 0, fmt.Errorf("invalid port %q in cloudflare.io/gateway-service", portPart)
 		}
-		port = int32(p)
+		port = int32(p) //nolint:gosec // G109: p is bounds-checked (1..65535) immediately above
 	}
 	if ns, nm, ok := strings.Cut(hostPart, "/"); ok {
 		if ns == "" || nm == "" {
@@ -467,4 +467,47 @@ func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port
 		return "", "", 0, fmt.Errorf("malformed cloudflare.io/gateway-service %q (empty)", raw)
 	}
 	return defaultNS, hostPart, port, nil
+}
+
+// findTunnelTargetedParentRef scans parentRefs for the first parent Gateway
+// that opts into tunnel attachment (cloudflare.io/tunnel truthy), has a
+// derivable tunnel name, an existing CloudflareTunnel, and a resolvable
+// Gateway Service. Returns all-nil when none qualifies. Get failures on a
+// candidate are treated as "not this parent" (skip, don't fail). Shared by
+// the HTTPRoute and TLSRoute source reconcilers.
+func findTunnelTargetedParentRef(
+	ctx context.Context,
+	c client.Client,
+	defaultNamespace string,
+	parentRefs []gwv1.ParentReference,
+) (*gwv1.ParentReference, *gwv1.Gateway, *v1alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
+	for i := range parentRefs {
+		pr := parentRefs[i]
+		gwNS := defaultNamespace
+		if pr.Namespace != nil {
+			gwNS = string(*pr.Namespace)
+		}
+		var gw gwv1.Gateway
+		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: string(pr.Name)}, &gw); err != nil {
+			continue
+		}
+		enabled, _ := conventions.ParseTruthy(gw.Annotations[conventions.AnnotationTunnel])
+		if !enabled {
+			continue
+		}
+		derived, err := DeriveTunnelName(gwNS, gw.Annotations[conventions.AnnotationTunnelName])
+		if err != nil {
+			continue
+		}
+		var tn v1alpha1.CloudflareTunnel
+		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: derived}, &tn); err != nil {
+			continue
+		}
+		gwSvc, port, err := resolveGatewayService(ctx, c, &gw)
+		if err != nil {
+			continue
+		}
+		return &pr, &gw, &tn, gwSvc, port, nil
+	}
+	return nil, nil, nil, nil, 0, nil
 }

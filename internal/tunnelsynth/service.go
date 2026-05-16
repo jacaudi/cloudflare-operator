@@ -161,9 +161,10 @@ func resolveServicePort(svc *corev1.Service, override string) (int32, error) {
 		if p < 1 || p > 65535 {
 			return 0, fmt.Errorf("port %d out of range", p)
 		}
+		p32 := int32(p) //nolint:gosec // G109: p is bounds-checked (1..65535) above
 		for _, sp := range svc.Spec.Ports {
-			if sp.Port == int32(p) {
-				return int32(p), nil
+			if sp.Port == p32 {
+				return p32, nil
 			}
 		}
 		return 0, fmt.Errorf("port %d not present on Service", p)

@@ -107,8 +107,7 @@ func classifyTunnelAPIErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	var apiErr *cfgo.Error
-	if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+	if apiErr, ok := errors.AsType[*cfgo.Error](err); ok && apiErr.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("%w: %w", ErrTunnelNotFound, err)
 	}
 	return err
@@ -294,7 +293,7 @@ func mapConfigurationGetResponse(resp *zero_trust.TunnelCloudflaredConfiguration
 			hasAny = true
 		}
 		if ct := in.OriginRequest.ConnectTimeout; ct != 0 {
-			v := int32(ct)
+			v := int32(ct) //nolint:gosec // G115: ConnectTimeout is a small positive seconds value from the operator spec; int32 overflow is not a practical concern
 			or.ConnectTimeoutSeconds = &v
 			hasAny = true
 		}
@@ -333,7 +332,7 @@ func mapConfigurationUpdateResponse(resp *zero_trust.TunnelCloudflaredConfigurat
 			hasAny = true
 		}
 		if ct := in.OriginRequest.ConnectTimeout; ct != 0 {
-			v := int32(ct)
+			v := int32(ct) //nolint:gosec // G115: ConnectTimeout is a small positive seconds value from the operator spec; int32 overflow is not a practical concern
 			or.ConnectTimeoutSeconds = &v
 			hasAny = true
 		}

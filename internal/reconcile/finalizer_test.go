@@ -50,3 +50,27 @@ func TestRemoveFinalizer(t *testing.T) {
 	require.NotContains(t, obj.GetFinalizers(), conventions.FinalizerName)
 	require.Contains(t, obj.GetFinalizers(), "other")
 }
+
+func TestRemoveFinalizer_DoesNotAliasInput(t *testing.T) {
+	obj := &corev1.ConfigMap{}
+	obj.SetFinalizers([]string{"a", "target", "b"})
+	pre := obj.GetFinalizers()
+	preCopy := append([]string(nil), pre...)
+
+	changed := RemoveFinalizer(obj, "target")
+	require.True(t, changed)
+	require.Equal(t, []string{"a", "b"}, obj.GetFinalizers())
+	// The slice the caller held before the call must be untouched.
+	require.Equal(t, preCopy, pre)
+}
+
+func TestRemoveFinalizer_AbsentReturnsFalseNoWrite(t *testing.T) {
+	obj := &corev1.ConfigMap{}
+	obj.SetFinalizers([]string{"a", "b"})
+	before := append([]string(nil), obj.GetFinalizers()...)
+
+	changed := RemoveFinalizer(obj, "nonexistent")
+	require.False(t, changed)
+	// No spurious write: finalizers unchanged when the target is absent.
+	require.Equal(t, before, obj.GetFinalizers())
+}

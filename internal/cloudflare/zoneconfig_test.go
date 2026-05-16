@@ -27,8 +27,9 @@ import (
 )
 
 func TestZoneConfigClient_ConstructorSmoke(t *testing.T) {
-	defer func() { _ = recover() }()
-	_ = NewZoneConfigClientFromCF(nil)
+	// NewZoneConfigClientFromCF stores cf without dereferencing it, so nil
+	// is legal at construction time and must produce a non-nil client.
+	require.NotNil(t, NewZoneConfigClientFromCF(nil))
 }
 
 // TestClassifyZoneConfigAPIErr covers the zone-config error classifier. The

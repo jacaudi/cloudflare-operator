@@ -623,5 +623,189 @@ func TestGatewaySource_InvalidName_StatusEventOnly(t *testing.T) {
 	}
 }
 
+// TestGatewaySourceOptOut_ClearsDerivedKey is a regression-lock characterization
+// test that pins the opt-out sweep to the DeriveTunnelName-derived key. A future
+// naming-template change that is not mirrored in the opt-out path would cause this
+// test to fail, making the drift visible before it ships.
+//
+// Strategy: pre-seed the Cache under the DeriveTunnelName-derived key for the
+// Gateway's namespace + tunnel-name annotation, then reconcile with the opt-in
+// annotation absent (opt-out). Assert the cache entry is gone, proving the sweep
+// targeted exactly the derived key and not a hand-built variant.
+func TestGatewaySourceOptOut_ClearsDerivedKey(t *testing.T) {
+	const ns = "ns"
+	const tn = "edge"
+
+	// DeriveTunnelName("ns", "edge") == "cf-ns-edge" — verified by the
+	// function's own contract. The test is deliberately written in terms of
+	// DeriveTunnelName so that if the naming template ever changes legitimately,
+	// this test tracks that change correctly.
+	derivedKey, err := DeriveTunnelName(ns, tn)
+	if err != nil {
+		t.Fatalf("DeriveTunnelName(%q, %q) unexpected error: %v", ns, tn, err)
+	}
+
+	// Gateway WITHOUT the opt-in annotation (opt-out), but with the
+	// tunnel-name annotation still present so the opt-out sweep must derive
+	// the named form (cf-<ns>-<tn>) rather than the pool form (cf-<ns>).
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gw",
+			Namespace: ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnelName: tn,
+				// AnnotationTunnel deliberately absent → opt-out.
+			},
+		},
+		Spec: gwv1.GatewaySpec{},
+	}
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	cache := tunnelsynth.NewCache()
+
+	// Pre-seed a stale contribution under the DeriveTunnelName-derived tunnel-key
+	// for this source, simulating a post-restart state where the in-memory tracker
+	// is empty but the cache holds an entry from a previous opt-in reconcile.
+	srcKey := tunnelsynth.SourceKey{Kind: "Gateway", Namespace: ns, Name: "gw"}
+	tunKey := tunnelsynth.TunnelKey{Namespace: ns, Name: derivedKey}
+	cache.Set(tunKey, srcKey, []tunnelsynth.IngressContribution{
+		{Hostname: "stale.example.com", Service: "http://svc:80"},
+	})
+
+	// Confirm the seed is in place.
+	require.NotEmpty(t, cache.Snapshot(tunKey), "pre-condition: cache must be seeded before opt-out reconcile")
+
+	r := &GatewaySourceReconciler{Client: c, Scheme: gwScheme(t), Cache: cache}
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "gw"}})
+	require.NoError(t, err)
+
+	// The opt-out sweep must have cleared the DeriveTunnelName-derived key.
+	require.Empty(t, cache.Snapshot(tunKey),
+		"opt-out reconcile must clear the DeriveTunnelName-derived key %q for this source", derivedKey)
+}
+
+// TestGatewaySource_NoDNSForTCPListener asserts that a TCP listener's hostname
+// does NOT receive a CloudflareDNSRecord even when it is returned by
+// listenerHostnames. Only the HTTPS listener (HTTP/HTTPS contribution path)
+// must get a record; the TCP listener produces no ingress contribution and
+// therefore must not appear in the desired set that drives DNS emission.
+//
+// This test is RED against current code: the emit loop iterates the unfiltered
+// listenerHostnames result, so db.example.com currently gets a record too.
+func TestGatewaySource_NoDNSForTCPListener(t *testing.T) {
+	// Build a Gateway with TWO listeners, both carrying hostnames:
+	//   - HTTPS: web.example.com  → SHOULD get a CloudflareDNSRecord
+	//   - TCP:   db.example.com   → must NOT get a CloudflareDNSRecord
+	hpHTTPS := gwv1.Hostname("web.example.com")
+	hpTCP := gwv1.Hostname("db.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "ns/gw-svc",
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "https", Hostname: &hpHTTPS, Port: 443, Protocol: gwv1.HTTPSProtocolType},
+			{Name: "tcp", Hostname: &hpTCP, Port: 5432, Protocol: gwv1.TCPProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
+	}
+	// gwPreCreatedTunnel pre-populates Status.TunnelCNAME so the reconciler
+	// emits DNSRecord CRs on the very first pass (no second reconcile needed).
+	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(16)
+	cache := tunnelsynth.NewCache()
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
+	require.NoError(t, err)
+
+	// Exactly ONE CloudflareDNSRecord must exist: the one for web.example.com.
+	// db.example.com must not receive a record (TCP → no ingress contribution).
+	var dnsList v1alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "expected exactly one DNSRecord (HTTPS listener only); TCP listener must not emit")
+	require.Equal(t, "web.example.com", dnsList.Items[0].Spec.Name,
+		"the single emitted record must be for the HTTPS listener hostname")
+
+	// Explicitly verify the TCP hostname was NOT emitted.
+	for _, dr := range dnsList.Items {
+		require.NotEqual(t, "db.example.com", dr.Spec.Name,
+			"TCP listener hostname must never receive a CloudflareDNSRecord")
+	}
+}
+
+// TestGatewaySource_TLSListenerEmitsApexCNAME is a regression lock for the
+// IMP-2 fix. The TCP/UDP black-hole fix must NOT also drop the apex CNAME for
+// a TLS-mode listener: gateway.emitDNSRecord is the ONLY emitter of
+// "<apex> CNAME -> tunnelCNAME" for a Gateway. TLSRoute.emitChainDNSRecord
+// emits "route-host -> gwApex" (Content=gwApex), never "gwApex -> tunnelCNAME".
+// So a TLS-apex Gateway still legitimately needs its apex->tunnel record, or
+// the entire TLSRoute chain resolves to nothing.
+//
+// This test FAILS against the regressed code (desired built from contribs,
+// which is HTTP/HTTPS-only — the TLS arm appends nothing, so zero records are
+// emitted for a TLS-only Gateway).
+func TestGatewaySource_TLSListenerEmitsApexCNAME(t *testing.T) {
+	// Single TLS listener — the canonical tunnel-apex-for-TLSRoute pattern.
+	hpTLS := gwv1.Hostname("tls-apex.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "ns/gw-svc",
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "tls", Hostname: &hpTLS, Port: 443, Protocol: gwv1.TLSProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
+	}
+	// gwPreCreatedTunnel pre-populates Status.TunnelCNAME ("tun-abc.cfargotunnel.com")
+	// so the reconciler emits DNSRecord CRs on the first pass.
+	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(16)
+	cache := tunnelsynth.NewCache()
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
+	require.NoError(t, err)
+
+	// Exactly ONE CloudflareDNSRecord: the apex CNAME tls-apex.example.com ->
+	// tunnel CNAME. This is the record the TLSRoute chain depends on.
+	var dnsList v1alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "TLS-apex Gateway must still emit its apex->tunnel CNAME")
+	dr := dnsList.Items[0]
+	require.Equal(t, "tls-apex.example.com", dr.Spec.Name,
+		"the emitted record must be for the TLS listener's apex hostname")
+	require.NotNil(t, dr.Spec.Content)
+	require.Equal(t, "tun-abc.cfargotunnel.com", *dr.Spec.Content,
+		"apex record Content must be the tunnel CNAME (proving it's the apex->tunnel record, not a route->apex one)")
+}
+
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)

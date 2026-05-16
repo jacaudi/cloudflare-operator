@@ -45,9 +45,7 @@ func AddToManager(mgr ctrl.Manager, _ Options) error {
 	c := mgr.GetClient()
 	rec := mgr.GetEventRecorderFor("cloudflare-operator-zone")
 
-	cfClientFn := func(creds cloudflare.Credentials) (*cloudflare.Client, error) {
-		return cloudflare.NewClient(creds)
-	}
+	cfClientFn := cloudflare.NewClient
 	zoneFn := func(creds cloudflare.Credentials) (cloudflare.ZoneClient, error) {
 		cf, err := cfClientFn(creds)
 		if err != nil {

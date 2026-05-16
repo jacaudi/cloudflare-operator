@@ -26,8 +26,9 @@ import (
 )
 
 func TestDNSClient_ConstructorSmoke(t *testing.T) {
-	defer func() { _ = recover() }()
-	_ = NewDNSClientFromCF(nil)
+	// NewDNSClientFromCF stores cf without dereferencing it, so nil is legal
+	// at construction time and must produce a non-nil client.
+	require.NotNil(t, NewDNSClientFromCF(nil))
 }
 
 // TestClassifyDNSAPIErr covers the DNS-record error classifier. The contract

@@ -29,7 +29,7 @@ import (
 
 // Credentials are the resolved token + account pair used to talk to Cloudflare.
 type Credentials struct {
-	Token     string
+	Token     Secret
 	AccountID string
 }
 
@@ -77,5 +77,5 @@ func ResolveCredentials(
 		return Credentials{}, fmt.Errorf("%w: %s/%s missing key %q", ErrSecretKeyMissing, ns, ref.TokenSecretRef.Name, key)
 	}
 
-	return Credentials{Token: string(tokenBytes), AccountID: ref.AccountID}, nil
+	return Credentials{Token: Secret(tokenBytes), AccountID: ref.AccountID}, nil
 }

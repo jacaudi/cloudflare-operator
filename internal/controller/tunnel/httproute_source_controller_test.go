@@ -695,6 +695,71 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 	require.False(t, got.Spec.Adopt, "Spec.Adopt must be false (HTTPRoute annotation overrides Gateway)")
 }
 
+// TestHTTPRouteSource_NoHostnameReason verifies MIN-16: when an HTTPRoute has
+// Spec.Hostnames == nil (empty) but carries a valid rule (no bad filters), the
+// reconciler must report Accepted=False with Reason=NoListenerHostname — NOT
+// IncompatibleFilters / "all rules dropped during translation", which is
+// factually incorrect (nothing was dropped; the route simply has no hostnames
+// to bind). This test is RED against current code: the existing fallback block
+// (~line 355-362 of httproute_source_controller.go) fires with
+// Reason=IncompatibleFilters and message "all rules dropped during translation".
+func TestHTTPRouteSource_NoHostnameReason(t *testing.T) {
+	gw := mkParentGw("gw", "gw-ns")
+	tn := &v1alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+	}
+	gwSvc := mkGwSvc("gw-svc", "gw-ns")
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			// Spec.Hostnames is intentionally empty (nil) — the triggering condition
+			// for MIN-16. The rule itself is clean (no filters, one simple match)
+			// so zero contribs come from missing hostnames, not bad filters.
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{
+					Name:      gwv1.ObjectName("gw"),
+					Namespace: ptrNs("gw-ns"),
+				}},
+			},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+	require.NoError(t, err)
+
+	// Mirror the happy-path pattern (lines 124-135) for locating the Accepted
+	// condition on the tunnel-targeted parent.
+	var got gwv1.HTTPRoute
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: "r"}, &got))
+	require.Len(t, got.Status.Parents, 1)
+	require.Equal(t, gwv1.ObjectName("gw"), got.Status.Parents[0].ParentRef.Name)
+
+	var foundAccepted bool
+	var acceptedCond metav1.Condition
+	for _, cond := range got.Status.Parents[0].Conditions {
+		if cond.Type == conventions.ConditionTypeAccepted {
+			foundAccepted = true
+			acceptedCond = cond
+		}
+	}
+	require.True(t, foundAccepted, "Accepted condition must be present on the tunnel-targeted parent")
+	require.Equal(t, metav1.ConditionFalse, acceptedCond.Status,
+		"Accepted must be False when HTTPRoute has no hostnames")
+	// Phase B will set this to ReasonNoListenerHostname; current code sets
+	// ReasonIncompatibleFilters — this assertion is the RED line.
+	require.Equal(t, conventions.ReasonNoListenerHostname, acceptedCond.Reason,
+		"Reason must be NoListenerHostname, not IncompatibleFilters, for empty Spec.Hostnames")
+	// The message must not mislead operators into thinking rules were dropped.
+	require.NotContains(t, acceptedCond.Message, "all rules dropped",
+		"message must not claim rules were dropped when the issue is missing hostnames")
+}
+
 func TestFirstListenerHostname_IsLexicographicallyStable(t *testing.T) {
 	h := func(s string) *gwv1.Hostname {
 		v := gwv1.Hostname(s)

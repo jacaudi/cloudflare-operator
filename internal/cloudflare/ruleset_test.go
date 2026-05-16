@@ -24,8 +24,9 @@ import (
 )
 
 func TestRulesetClient_ConstructorSmoke(t *testing.T) {
-	defer func() { _ = recover() }()
-	_ = NewRulesetClientFromCF(nil)
+	// NewRulesetClientFromCF stores cf without dereferencing it, so nil is
+	// legal at construction time and must produce a non-nil client.
+	require.NotNil(t, NewRulesetClientFromCF(nil))
 }
 
 func TestErrPhaseEntrypointNotFound_Defined(t *testing.T) {

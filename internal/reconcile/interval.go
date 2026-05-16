@@ -14,17 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package cloudflare
+package reconcile
 
 import (
-	"testing"
+	"time"
 
-	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestZoneClient_ConstructorRequiresCF(t *testing.T) {
-	// NewZoneClientFromCF stores cf without dereferencing it, so nil is
-	// legal at construction time and must produce a non-nil client.
-	// Functional tests against the SDK live in envtest under test/envtest/.
-	require.NotNil(t, NewZoneClientFromCF(nil))
+// ResolveInterval returns d.Duration when d is set to a strictly positive
+// value, otherwise fallback. Centralizes the spec.interval-or-default idiom
+// shared by every periodic reconciler. Not cmp.Or: the guard is ">0" on a
+// *metav1.Duration, not first-non-zero.
+func ResolveInterval(d *metav1.Duration, fallback time.Duration) time.Duration {
+	if d != nil && d.Duration > 0 {
+		return d.Duration
+	}
+	return fallback
 }

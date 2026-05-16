@@ -29,7 +29,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
@@ -148,6 +150,72 @@ func TestBundleMembership_MatchesBundleKinds(t *testing.T) {
 				b, expected, gvk.Kind, files[i])
 		}
 	}
+}
+
+// TestReconcile_NoStatusUpdateWhenUnchanged asserts that a second consecutive
+// reconcile of an already-Ready CloudflareOperator (spec/CRDs/Deployments
+// unchanged) performs ZERO Status().Update calls.
+//
+// Against the current code this test FAILS: Reconcile calls
+// r.Client.Status().Update unconditionally on every pass, so the second
+// reconcile produces statusUpdates==1 and the require.Equal(0, ...) assertion
+// fires.  Phase B will add a change-detection gate (mirror of the zone/tunnel
+// pattern) so the unchanged second pass is a true no-op write.
+//
+// Fixture mirrors TestReconcile_BothBundlesEnabled_CreatesAll (line 68) so that
+// both reconcileCRDs and reconcileDeployments succeed and Reconcile reaches the
+// happy terminal Status().Update site, not markFailure/markIgnored.
+//
+// Interceptor pattern mirrors
+// TestReconcile_OrphanSelfDelete_ConflictDefersDelete (tunnel_controller_test.go
+// line 796): base→SSATranslatingClient→interceptor.NewClient with a
+// SubResourceUpdate hook that counts the call then delegates to the real update
+// so reconcile continues to completion.
+func TestReconcile_NoStatusUpdateWhenUnchanged(t *testing.T) {
+	op := &v1alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
+		Spec: v1alpha1.CloudflareOperatorSpec{
+			Cloudflare: v1alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v1alpha1.SecretReference{Name: "t"},
+				AccountID:      "acct",
+			},
+			Controllers: v1alpha1.ControllersSpec{
+				Zone:   v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+				Tunnel: v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+			},
+		},
+	}
+	s := newBootstrapScheme(t)
+	base := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(op).
+		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
+		Build()
+	ssa := reconcilelib.SSATranslatingClient(t, base)
+
+	statusUpdates := 0
+	c := interceptor.NewClient(ssa, interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			statusUpdates++
+			return cl.Status().Update(ctx, obj, opts...)
+		},
+	})
+
+	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}}
+
+	// Pass 1: status goes from empty → populated; the Status().Update is expected.
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, statusUpdates, 1, "first reconcile must write status at least once")
+
+	// Reset and reconcile again with no changes to spec, CRDs, or Deployments.
+	statusUpdates = 0
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	// The second (unchanged) reconcile must be a no-op write.
+	require.Equal(t, 0, statusUpdates, "second unchanged reconcile must not write status")
 }
 
 func TestReconcile_StaleCRSweep_OnDisable(t *testing.T) {

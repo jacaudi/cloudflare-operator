@@ -22,7 +22,6 @@ import (
 	"encoding/hex"
 	stderrors "errors"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -185,11 +184,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				obs.Namespace = payload.NS
 				obs.Name = payload.N
 				obs.ContentHash = payload.H
-				if strings.HasPrefix(txtRecs[0].Content, "v1:") {
-					obs.Codec = "aes-gcm"
-				} else {
-					obs.Codec = "plaintext"
-				}
+				obs.Codec = cloudflare.CodecKindFor(txtRecs[0].Content)
 			}
 			rec.Status.ObservedTXT = obs
 		} else {
@@ -202,11 +197,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
 			return ctrl.Result{}, uerr
 		}
-		interval := defaultDNSRecordInterval
-		if rec.Spec.Interval != nil && rec.Spec.Interval.Duration > 0 {
-			interval = rec.Spec.Interval.Duration
-		}
-		return ctrl.Result{RequeueAfter: interval}, nil
+		return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(rec.Spec.Interval, defaultDNSRecordInterval)}, nil
 	}
 
 	content, err := r.resolveContent(ctx, &rec)
@@ -404,11 +395,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		}
 	}
 
-	interval := defaultDNSRecordInterval
-	if rec.Spec.Interval != nil && rec.Spec.Interval.Duration > 0 {
-		interval = rec.Spec.Interval.Duration
-	}
-	return ctrl.Result{RequeueAfter: interval}, nil
+	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(rec.Spec.Interval, defaultDNSRecordInterval)}, nil
 }
 
 // haltDependency persists a DependencyMissing Ready=False with the given

@@ -45,7 +45,7 @@ func NewClient(creds Credentials) (*Client, error) {
 	// rather than blocking a reconciler worker for minutes. Retry-After
 	// honoring + 429/5xx classification remain handled by the SDK.
 	cf := cfgo.NewClient(
-		option.WithAPIToken(creds.Token),
+		option.WithAPIToken(creds.Token.Expose()),
 		option.WithMaxRetries(3),
 	)
 	return &Client{cf: cf, accountID: creds.AccountID}, nil

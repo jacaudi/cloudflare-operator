@@ -127,10 +127,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	zoneID := zres.ZoneID
 	cfg.Status.ZoneID = zoneID
 
-	interval := defaultZoneConfigInterval
-	if cfg.Spec.Interval != nil && cfg.Spec.Interval.Duration > 0 {
-		interval = cfg.Spec.Interval.Duration
-	}
+	interval := reconcile.ResolveInterval(cfg.Spec.Interval, defaultZoneConfigInterval)
 
 	// Fast-skip: if the settings-relevant spec hash matches the last
 	// applied hash AND we're already Ready, skip all per-setting API calls.

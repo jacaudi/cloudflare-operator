@@ -149,16 +149,6 @@ func condMap(cs []metav1.Condition) map[string]metav1.ConditionStatus {
 	return out
 }
 
-// condReason returns the Reason string for the named condition type, or "" if absent.
-func condReason(cs []metav1.Condition, condType string) string {
-	for _, c := range cs {
-		if c.Type == condType {
-			return c.Reason
-		}
-	}
-	return ""
-}
-
 type countingErr struct{ calls *int }
 
 func (e *countingErr) Error() string { *e.calls++; return "boom" }

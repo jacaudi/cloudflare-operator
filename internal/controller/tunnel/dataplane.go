@@ -21,6 +21,7 @@ package tunnel
 
 import (
 	"strconv"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -175,7 +176,7 @@ func BuildDeployment(tn *v1alpha1.CloudflareTunnel, defaultImage string) *appsv1
 // Cloudflare TunnelID a cached token Secret was fetched for. ensureTokenSecret
 // uses it to detect tunnel-ID rotation and re-fetch on drift; on steady state
 // it lets the reconciler skip the GetToken API call.
-const annotationTokenTunnelID = "cloudflare.io/tunnel-id"
+const annotationTokenTunnelID = "cloudflare.io/tunnel-id" //nolint:gosec // G101: Kubernetes annotation key name, not a credential
 
 // TokenSecretName is the stable Secret name carrying the connector-join token.
 // Exposed so callers (the reconciler's idempotency check) and tests share a
@@ -250,15 +251,13 @@ func resolveImage(override *v1alpha1.ConnectorImage, defaultImage string) string
 	return repo + ":" + tag
 }
 
-// splitImage splits a "<repo>:<tag>" reference. If no colon is present, the
-// returned tag is "latest". Only the final colon is used as the separator so
-// registries with explicit ports (e.g. registry.example.com:5000/image:tag)
-// parse correctly.
+// splitImage splits a "<repo>:<tag>" reference into repo and tag, defaulting
+// the tag to "latest" when absent. A colon is the tag separator only when no
+// "/" follows it — otherwise it is a registry port (e.g.
+// registry.example.com:5000/cloudflared has no tag and must keep the port).
 func splitImage(s string) (string, string) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == ':' {
-			return s[:i], s[i+1:]
-		}
+	if i := strings.LastIndexByte(s, ':'); i >= 0 && !strings.Contains(s[i+1:], "/") {
+		return s[:i], s[i+1:]
 	}
 	return s, "latest"
 }

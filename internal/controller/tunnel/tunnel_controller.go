@@ -200,8 +200,9 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	r.observeAttachedSources(&tn)
 	r.rollupStatus(&tn, depAvailable)
 
-	// pendingRequeueAfter, when >0, overrides the default interval at the
-	// trailing return (used by the cascade-GC grace window).
+	// pendingRequeueAfter, when >0, caps the trailing-return requeue at
+	// min(pendingRequeueAfter, interval) — the cascade-GC grace window
+	// shortens the next requeue but never lengthens it past the interval.
 	var pendingRequeueAfter time.Duration
 
 	// Orphan-state management (design §4.1 step 10). Only auto-created CRs are
@@ -225,9 +226,19 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				}
 				tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
 					conventions.ReasonTerminalNoSources, "auto-created tunnel has no remaining sources")
-				// Best-effort terminal status so observers see the final
+				// Terminal status so observers see the final
 				// Ready=False+TerminalNoSources transition before deletion.
-				_ = r.Status().Update(ctx, &tn)
+				// A Conflict here means another writer raced this reconcile —
+				// requeue rather than self-delete on a stale view (the
+				// two-tick window re-confirms on the next reconcile). Other
+				// update errors are returned (retryable) — never self-delete
+				// on an unverified status write.
+				if uerr := r.Status().Update(ctx, &tn); uerr != nil {
+					if apierrors.IsConflict(uerr) {
+						return ctrl.Result{Requeue: true}, nil
+					}
+					return ctrl.Result{}, fmt.Errorf("terminal status update: %w", uerr)
+				}
 				if err := r.Delete(ctx, &tn); err != nil {
 					return ctrl.Result{}, fmt.Errorf("self-delete: %w", err)
 				}
@@ -258,13 +269,10 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	interval := defaultTunnelInterval
-	if tn.Spec.Interval != nil && tn.Spec.Interval.Duration > 0 {
-		interval = tn.Spec.Interval.Duration
-	}
+	interval := reconcilelib.ResolveInterval(tn.Spec.Interval, defaultTunnelInterval)
 	logger.V(1).Info("reconciled", "tunnelID", tn.Status.TunnelID, "connectors", tn.Status.ConnectionsHealthy)
-	if pendingRequeueAfter > 0 && pendingRequeueAfter < interval {
-		return ctrl.Result{RequeueAfter: pendingRequeueAfter}, nil
+	if pendingRequeueAfter > 0 {
+		return ctrl.Result{RequeueAfter: min(pendingRequeueAfter, interval)}, nil
 	}
 	return ctrl.Result{RequeueAfter: interval}, nil
 }

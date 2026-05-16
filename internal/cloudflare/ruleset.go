@@ -47,8 +47,7 @@ func (c *rulesetClient) GetPhaseEntrypoint(ctx context.Context, zoneID, phase st
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		var apiErr *cfgo.Error
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		if apiErr, ok := errors.AsType[*cfgo.Error](err); ok && apiErr.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("%w: phase %s in zone %s", ErrPhaseEntrypointNotFound, phase, zoneID)
 		}
 		return nil, fmt.Errorf("get phase entrypoint %s: %w", phase, err)

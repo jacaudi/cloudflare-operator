@@ -191,3 +191,17 @@ func TestBuildMetricsService_Naming(t *testing.T) {
 	require.Equal(t, "ns", svc.Namespace)
 	require.Equal(t, int32(2000), svc.Spec.Ports[0].Port)
 }
+
+func TestSplitImage(t *testing.T) {
+	cases := []struct{ in, wantRepo, wantTag string }{
+		{"cloudflared", "cloudflared", "latest"},
+		{"cloudflare/cloudflared:2024.1.0", "cloudflare/cloudflared", "2024.1.0"},
+		{"registry.example.com:5000/cloudflared", "registry.example.com:5000/cloudflared", "latest"},
+		{"registry.example.com:5000/cloudflared:2024.1.0", "registry.example.com:5000/cloudflared", "2024.1.0"},
+	}
+	for _, c := range cases {
+		repo, tag := splitImage(c.in)
+		require.Equal(t, c.wantRepo, repo, c.in)
+		require.Equal(t, c.wantTag, tag, c.in)
+	}
+}

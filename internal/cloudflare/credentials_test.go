@@ -50,7 +50,7 @@ func TestResolveCredentials_HappyPath(t *testing.T) {
 	}
 	creds, err := ResolveCredentials(context.Background(), c, ref, "default")
 	require.NoError(t, err)
-	require.Equal(t, "test-token-abc", creds.Token)
+	require.Equal(t, Secret("test-token-abc"), creds.Token)
 	require.Equal(t, "acct-123", creds.AccountID)
 }
 
@@ -92,7 +92,7 @@ func TestResolveCredentials_DefaultsNamespace(t *testing.T) {
 	}
 	creds, err := ResolveCredentials(context.Background(), c, ref, "media")
 	require.NoError(t, err)
-	require.Equal(t, "token-xyz", creds.Token)
+	require.Equal(t, Secret("token-xyz"), creds.Token)
 }
 
 func TestResolveCredentials_MissingAccountID(t *testing.T) {

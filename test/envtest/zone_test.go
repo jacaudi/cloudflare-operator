@@ -111,8 +111,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		For(&v1alpha1.CloudflareRuleset{}).
 		Complete(rsR))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = mgr.Start(ctx) }()
 
 	// Block until the manager's informer cache is populated; mgr.GetClient()

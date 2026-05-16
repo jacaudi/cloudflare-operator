@@ -23,6 +23,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,6 +69,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.markIgnored(ctx, &op)
 	}
 
+	originalStatus := *op.Status.DeepCopy()
+
 	installedCRDs, err := r.reconcileCRDs(ctx, &op, logger)
 	if err != nil {
 		return r.markFailure(ctx, &op, conventions.ReasonBundlesInstalled, err.Error())
@@ -82,8 +85,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	op.Status.InstalledBundles = installedBundles
 	op.Status.ObservedGeneration = op.Generation
 	op.Status.Conditions = reconcile.SetReady(op.Status.Conditions, metav1.ConditionTrue, conventions.ReasonReady, "bundles installed and deployments running")
-	if err := r.Client.Status().Update(ctx, &op); err != nil {
-		return ctrl.Result{}, err
+	// Singleton reconciles infrequently, but mirror the zone/tunnel
+	// change-detection gate so an unchanged pass is a no-op write
+	// (avoids needless status churn / write amplification).
+	if op.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, op.Status) {
+		if err := r.Client.Status().Update(ctx, &op); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	return ctrl.Result{}, nil
 }
