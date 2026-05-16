@@ -248,12 +248,19 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		return reconcile.Result{}, nil
 	}
 
-	// Emit one CloudflareDNSRecord (CNAME → tunnel CNAME) per listener hostname.
-	desired := make(map[string]struct{}, len(hostnames))
-	for _, h := range hostnames {
-		desired[h] = struct{}{}
-		if err := r.emitDNSRecord(ctx, &gw, h, tn); err != nil {
-			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", h, err)
+	// Emit one CloudflareDNSRecord (CNAME → tunnel CNAME) only for hostnames
+	// that produced an HTTP/HTTPS ingress contribution. A hostname'd TCP/UDP
+	// (or otherwise unsupported) listener routes nowhere through the tunnel,
+	// so a CNAME for it would resolve to a black hole. Build the desired set
+	// from contribs, not from the unfiltered listener hostnames.
+	desired := make(map[string]struct{}, len(contribs))
+	for _, cont := range contribs {
+		if _, seen := desired[cont.Hostname]; seen {
+			continue
+		}
+		desired[cont.Hostname] = struct{}{}
+		if err := r.emitDNSRecord(ctx, &gw, cont.Hostname, tn); err != nil {
+			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", cont.Hostname, err)
 		}
 	}
 

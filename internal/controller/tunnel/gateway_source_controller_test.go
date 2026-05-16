@@ -684,5 +684,68 @@ func TestGatewaySourceOptOut_ClearsDerivedKey(t *testing.T) {
 		"opt-out reconcile must clear the DeriveTunnelName-derived key %q for this source", derivedKey)
 }
 
+// TestGatewaySource_NoDNSForTCPListener asserts that a TCP listener's hostname
+// does NOT receive a CloudflareDNSRecord even when it is returned by
+// listenerHostnames. Only the HTTPS listener (HTTP/HTTPS contribution path)
+// must get a record; the TCP listener produces no ingress contribution and
+// therefore must not appear in the desired set that drives DNS emission.
+//
+// This test is RED against current code: the emit loop iterates the unfiltered
+// listenerHostnames result, so db.example.com currently gets a record too.
+func TestGatewaySource_NoDNSForTCPListener(t *testing.T) {
+	// Build a Gateway with TWO listeners, both carrying hostnames:
+	//   - HTTPS: web.example.com  → SHOULD get a CloudflareDNSRecord
+	//   - TCP:   db.example.com   → must NOT get a CloudflareDNSRecord
+	hpHTTPS := gwv1.Hostname("web.example.com")
+	hpTCP := gwv1.Hostname("db.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "ns/gw-svc",
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "https", Hostname: &hpHTTPS, Port: 443, Protocol: gwv1.HTTPSProtocolType},
+			{Name: "tcp", Hostname: &hpTCP, Port: 5432, Protocol: gwv1.TCPProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
+	}
+	// gwPreCreatedTunnel pre-populates Status.TunnelCNAME so the reconciler
+	// emits DNSRecord CRs on the very first pass (no second reconcile needed).
+	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(16)
+	cache := tunnelsynth.NewCache()
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
+		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
+	require.NoError(t, err)
+
+	// Exactly ONE CloudflareDNSRecord must exist: the one for web.example.com.
+	// db.example.com must not receive a record (TCP → no ingress contribution).
+	var dnsList v1alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "expected exactly one DNSRecord (HTTPS listener only); TCP listener must not emit")
+	require.Equal(t, "web.example.com", dnsList.Items[0].Spec.Name,
+		"the single emitted record must be for the HTTPS listener hostname")
+
+	// Explicitly verify the TCP hostname was NOT emitted.
+	for _, dr := range dnsList.Items {
+		require.NotEqual(t, "db.example.com", dr.Spec.Name,
+			"TCP listener hostname must never receive a CloudflareDNSRecord")
+	}
+}
+
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)
