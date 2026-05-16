@@ -86,6 +86,41 @@ const (
 	ReasonBotManagementApplied  = "BotManagementApplied"
 )
 
+// --- Spec 5 (TXT registry + observe mode) appends ---
+
+// Reasons appended by spec 5 for the TXT registry and observe mode.
+// Per Foundation §6.1.1 append-only contract — no existing reason renamed.
+const (
+	// ReasonAdoptRefusedNoTXT marks a CR with Adopt:true where the matching
+	// Cloudflare record has no TXT companion (or one that fails both
+	// plaintext and AES decode). Adoption is refused; the user must migrate
+	// via docs/plans/2026-05-14-txt-registry-design.md §5.4.
+	ReasonAdoptRefusedNoTXT = "AdoptRefusedNoTXT"
+
+	// ReasonAdoptRefusedForeign marks a CR with Adopt:true where the
+	// matching record's TXT companion decodes successfully but to a
+	// different (k, ns, n) tuple. Another CR (or external system using the
+	// same registry format) already claims this record.
+	ReasonAdoptRefusedForeign = "AdoptRefusedForeign"
+
+	// ReasonTxtRegistryKeyUnavailable marks a halt when
+	// CloudflareOperator.spec.cloudflare.txtRegistryKeySecretRef is set but
+	// the Secret is missing or the key is the wrong length. Encryption is
+	// required (key configured) but cannot operate.
+	ReasonTxtRegistryKeyUnavailable = "TxtRegistryKeyUnavailable"
+
+	// ReasonObserving marks a CR running with Spec.Mode=Observe. The
+	// operator reads but does not mutate; Status reflects current
+	// Cloudflare state.
+	ReasonObserving = "Observing"
+
+	// ReasonTxtRegistryWriteFailed marks a partial failure: the Cloudflare
+	// DNS record was written but its TXT companion write failed. The
+	// reconcile does NOT fail (DNS is correct); the TXT write retries on
+	// the next reconcile. Surfaced as a Warning Event.
+	ReasonTxtRegistryWriteFailed = "TxtRegistryWriteFailed"
+)
+
 // ZoneReasons returns the reason vocabulary appended by spec 2.
 // Mirrors BaseReasons() for uniqueness testing.
 func ZoneReasons() []string {
@@ -100,6 +135,11 @@ func ZoneReasons() []string {
 		ReasonNetworkApplied,
 		ReasonDNSApplied,
 		ReasonBotManagementApplied,
+		ReasonAdoptRefusedNoTXT,
+		ReasonAdoptRefusedForeign,
+		ReasonTxtRegistryKeyUnavailable,
+		ReasonObserving,
+		ReasonTxtRegistryWriteFailed,
 	}
 }
 

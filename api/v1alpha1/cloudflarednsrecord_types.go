@@ -18,6 +18,23 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+// RecordMode controls operator write behavior on a CloudflareDNSRecord.
+// +kubebuilder:validation:Enum=Managed;Observe
+type RecordMode string
+
+const (
+	// RecordModeManaged is the default. The operator creates / updates /
+	// deletes the underlying Cloudflare record and TXT companion as needed.
+	RecordModeManaged RecordMode = "Managed"
+
+	// RecordModeObserve means the operator reads Cloudflare state and
+	// populates Status, but never writes. Spec.Adopt has no effect. Useful
+	// for verifying state before promoting to Managed (which would
+	// otherwise refuse adoption without a matching TXT companion under
+	// design §2 Q2's no-silent-backfill rule).
+	RecordModeObserve RecordMode = "Observe"
+)
+
 // CloudflareDNSRecordSpec defines the desired state of a Cloudflare DNS record.
 type CloudflareDNSRecordSpec struct {
 	// ZoneID is the Cloudflare Zone ID. Mutually exclusive with ZoneRef.
@@ -67,12 +84,26 @@ type CloudflareDNSRecordSpec struct {
 	// +optional
 	Priority *int `json:"priority,omitempty"`
 
-	// Adopt takes over an existing record matching (name, type) if found.
-	// No ownership verification is performed in this phase (the TXT companion
-	// registry is deferred) — only enable for records you are sure are not
-	// managed by another source.
+	// Adopt, when true, lets the operator take over a pre-existing Cloudflare
+	// record instead of creating a new one. Adoption is TXT-ownership-verified:
+	// the operator only adopts a record whose companion TXT registry entry
+	// identifies THIS CloudflareDNSRecord. A record with no companion, a
+	// foreign companion, or an unparseable one is refused
+	// (AdoptRefusedNoTXT / AdoptRefusedForeign) — there is no silent backfill.
+	// Pre-feature adopted records must be migrated via the documented
+	// TXT-registry migration procedure (design §5.4) before Adopt succeeds.
 	// +optional
 	Adopt bool `json:"adopt,omitempty"`
+
+	// Mode controls operator write behavior on this record.
+	// Default Managed: operator creates / updates / deletes the underlying
+	// Cloudflare record and TXT companion as needed.
+	// Observe: operator reads but never writes. Useful for verifying state
+	// before claiming a record under Adopt:true (which would otherwise
+	// refuse without a matching TXT companion).
+	// +kubebuilder:default=Managed
+	// +optional
+	Mode RecordMode `json:"mode,omitempty"`
 
 	// Cloudflare overrides the top-level credential + account from the
 	// CloudflareOperator CR. Per Foundation §5 the token and accountID are
@@ -118,6 +149,37 @@ type SRVData struct {
 	Target string `json:"target"`
 }
 
+// ObservedTXTPayload mirrors the decoded RegistryPayload fields in the CR's
+// Status for user-visible diagnostics. The internal payload type lives in
+// internal/cloudflare/; this is the API-stable surface.
+type ObservedTXTPayload struct {
+	// Version is the payload schema version (currently always 1).
+	// +optional
+	Version int `json:"version,omitempty"`
+	// Kind is the encoded owner kind ("CloudflareDNSRecord" in v1alpha1).
+	// +optional
+	Kind string `json:"kind,omitempty"`
+	// Namespace is the encoded owner namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+	// Name is the encoded owner name.
+	// +optional
+	Name string `json:"name,omitempty"`
+	// ContentHash is the SHA256 of the canonicalized spec.content at TXT
+	// write time. Used by drift detection.
+	// +optional
+	ContentHash string `json:"contentHash,omitempty"`
+	// RawContent is the raw TXT content as received from Cloudflare when
+	// decoding failed. Set instead of Version/Kind/Namespace/Name so users
+	// can see what's there even when the operator can't parse it.
+	// +optional
+	RawContent string `json:"rawContent,omitempty"`
+	// Codec reports which decoder ("plaintext", "aes-gcm", or
+	// "unrecognized") produced this payload.
+	// +optional
+	Codec string `json:"codec,omitempty"`
+}
+
 // CloudflareDNSRecordStatus defines the observed state.
 type CloudflareDNSRecordStatus struct {
 	// +listType=map
@@ -138,6 +200,23 @@ type CloudflareDNSRecordStatus struct {
 	// LastSyncedAt is the timestamp of the most recent successful reconcile.
 	// +optional
 	LastSyncedAt *metav1.Time `json:"lastSyncedAt,omitempty"`
+	// TxtRecordID is the Cloudflare-side ID of the companion TXT record.
+	// Empty when no TXT companion has been written yet. Set on successful
+	// TXT write; cleared on delete.
+	// +optional
+	TxtRecordID string `json:"txtRecordID,omitempty"`
+	// TxtAffix is the prefix used for the companion TXT record name (today
+	// always "cf-txt"). Recorded for forensic clarity if the convention
+	// changes (e.g., v2 affixing scheme). Operator-managed; users should
+	// not edit.
+	// +optional
+	TxtAffix string `json:"txtAffix,omitempty"`
+	// ObservedTXT carries the decoded TXT companion payload as last
+	// observed from Cloudflare. Populated by both Managed and Observe modes
+	// when a TXT companion exists. RawContent is set instead when decoding
+	// fails.
+	// +optional
+	ObservedTXT *ObservedTXTPayload `json:"observedTXT,omitempty"`
 	// ObservedGeneration is the .metadata.generation observed by the controller
 	// during its last reconcile. When this lags .metadata.generation the
 	// controller has not yet processed the latest spec.

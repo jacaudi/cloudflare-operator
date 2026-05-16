@@ -18,14 +18,19 @@ package zone
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	stderrors "errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,9 +52,11 @@ const defaultDNSRecordInterval = 5 * time.Minute
 // CR: credentials → resolve zone → resolve content (with optional DynamicIP)
 // → create / adopt / update / delete on Cloudflare → reflect status.
 //
-// TXT companion registry is deferred this phase: there is no Codec on the
-// struct, no companion-TXT writes, and Spec.Adopt is bare-takeover (any
-// matching (name, type) record is adopted without ownership verification).
+// TXT companion registry is active: the reconciler builds a codec per
+// reconcile from CloudflareOperator.spec.cloudflare.txtRegistryKeySecretRef
+// (plaintext default; AES-256-GCM when a key Secret is configured),
+// Spec.Adopt is TXT-ownership-verified (no silent backfill — see design
+// §5.4), and Spec.Mode=Observe makes the reconciler read-only.
 type CloudflareDNSRecordReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -97,6 +104,29 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &rec, &rec.Status.Conditions, &rec.Status.Phase, halt)
 	}
 
+	// Fetch the CloudflareOperator singleton to resolve the TXT-registry key.
+	// NotFound is treated as no key configured (bootstrap creates it eventually).
+	// Any other Get error is hard-returned so the reconciler retries.
+	var op v1alpha1.CloudflareOperator
+	if err := r.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &op); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("get CloudflareOperator/cluster: %w", err)
+		}
+		// Singleton absent: treat as no TXT key configured (plaintext mode).
+	}
+
+	encoder, cerr := loadCodec(ctx, r.Client, op.Spec.Cloudflare.TxtRegistryKeySecretRef, rec.Namespace)
+	if cerr != nil {
+		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+			conventions.ReasonTxtRegistryKeyUnavailable, cerr.Error())
+		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonTxtRegistryKeyUnavailable)
+		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+			return ctrl.Result{}, uerr
+		}
+		return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+	}
+	readCodec := autoDetectingFor(encoder)
+
 	// Snapshot status so the trailing Status().Update can be skipped when
 	// nothing material changed; LastSyncedAt/ObservedGeneration are masked.
 	originalStatus := rec.Status.DeepCopy()
@@ -120,6 +150,65 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 	zoneID := zres.ZoneID
 
+	// Observe-mode early-exit: read CF state, populate Status, return without
+	// any mutating calls. Spec.Adopt is a no-op in this mode. Direct
+	// Status().Update + return — does NOT route through the terminal DeepEqual
+	// gate because that gate uses originalStatus captured before we had the
+	// zone ID (and it manages LastSyncedAt / ObservedGeneration which observe
+	// mode deliberately leaves untouched).
+	if !reconcile.ShouldMutate(string(rec.Spec.Mode)) {
+		observed, oerr := dc.ListRecordsByNameAndType(ctx, zoneID, rec.Spec.Name, rec.Spec.Type)
+		if oerr != nil {
+			return ctrl.Result{}, fmt.Errorf("observe: list record: %w", oerr)
+		}
+		if len(observed) > 0 {
+			rec.Status.RecordID = observed[0].ID
+			rec.Status.CurrentContent = observed[0].Content
+		} else {
+			rec.Status.RecordID = ""
+			rec.Status.CurrentContent = ""
+		}
+
+		txtName := cloudflare.AffixName(txtAffix, rec.Spec.Name)
+		txtRecs, terr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
+		if terr != nil {
+			return ctrl.Result{}, fmt.Errorf("observe: list TXT: %w", terr)
+		}
+		if len(txtRecs) > 0 {
+			obs := &v1alpha1.ObservedTXTPayload{}
+			if payload, derr := readCodec.Decode(txtRecs[0].Content); derr != nil {
+				obs.RawContent = txtRecs[0].Content
+				obs.Codec = "unrecognized"
+			} else {
+				obs.Version = payload.V
+				obs.Kind = payload.K
+				obs.Namespace = payload.NS
+				obs.Name = payload.N
+				obs.ContentHash = payload.H
+				if strings.HasPrefix(txtRecs[0].Content, "v1:") {
+					obs.Codec = "aes-gcm"
+				} else {
+					obs.Codec = "plaintext"
+				}
+			}
+			rec.Status.ObservedTXT = obs
+		} else {
+			rec.Status.ObservedTXT = nil
+		}
+
+		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionTrue,
+			conventions.ReasonObserving, "Spec.Mode=Observe; operator is reading but not mutating")
+		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonObserving)
+		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+			return ctrl.Result{}, uerr
+		}
+		interval := defaultDNSRecordInterval
+		if rec.Spec.Interval != nil && rec.Spec.Interval.Duration > 0 {
+			interval = rec.Spec.Interval.Duration
+		}
+		return ctrl.Result{RequeueAfter: interval}, nil
+	}
+
 	content, err := r.resolveContent(ctx, &rec)
 	if err != nil {
 		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
@@ -131,20 +220,70 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
 	}
 
-	// Adopt branch: bare takeover by (name, type) match. No ownership
-	// verification (TXT registry deferred). Adopted ID flows into the update
-	// branch below to converge content/TTL/proxied drift in the same pass.
+	// Adopt branch: TXT-verified takeover by (name, type) match. Ownership is
+	// confirmed via a companion TXT record before adoption proceeds. If no
+	// companion exists, or the companion claims a foreign owner, adoption is
+	// refused and the reconciler halts (Ready=False). NEVER auto-writes a TXT
+	// for a pre-existing record (design §2 Q2 — the load-bearing safety
+	// property). Pre-feature records follow the §5.4 migration procedure.
+	// Adopted IDs flow into the update branch below to converge any drift.
 	if rec.Spec.Adopt && rec.Status.RecordID == "" {
 		list, lerr := dc.ListRecordsByNameAndType(ctx, zoneID, rec.Spec.Name, rec.Spec.Type)
 		if lerr != nil {
 			return ctrl.Result{}, fmt.Errorf("list records for adopt: %w", lerr)
 		}
 		if len(list) > 0 {
-			rec.Status.RecordID = list[0].ID
-			logger.Info("adopted existing DNS record", "recordID", list[0].ID, "name", rec.Spec.Name, "type", rec.Spec.Type)
-			if r.Recorder != nil {
-				r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonAdoptedExistingRecord,
-					"adopted existing %s record for %s (id=%s)", rec.Spec.Type, rec.Spec.Name, list[0].ID)
+			txtName := cloudflare.AffixName(txtAffix, rec.Spec.Name)
+			txtRecs, terr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
+			if terr != nil {
+				return ctrl.Result{}, fmt.Errorf("list TXT companion for adopt: %w", terr)
+			}
+			if len(txtRecs) == 0 {
+				// No TXT companion — refuse adoption. DO NOT create a TXT.
+				msg := "record exists but has no TXT companion; adoption refused (no silent backfill). " +
+					"See docs/plans/2026-05-14-txt-registry-design.md §5.4 migration procedure."
+				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+					conventions.ReasonAdoptRefusedNoTXT, msg)
+				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedNoTXT)
+				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+					return ctrl.Result{}, uerr
+				}
+				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+			}
+			switch verifyTXTOwnership(txtRecs[0].Content, readCodec, "CloudflareDNSRecord", rec.Namespace, rec.Name) {
+			case TxtOwnershipMatch:
+				// TXT companion confirms this CR owns the record — adopt it.
+				rec.Status.RecordID = list[0].ID
+				rec.Status.TxtRecordID = txtRecs[0].ID
+				rec.Status.TxtAffix = txtAffix
+				logger.Info("adopted existing DNS record with TXT verification",
+					"recordID", list[0].ID, "txtRecordID", txtRecs[0].ID,
+					"name", rec.Spec.Name, "type", rec.Spec.Type)
+				if r.Recorder != nil {
+					r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonAdoptedExistingRecord,
+						"adopted existing %s record for %s (id=%s)", rec.Spec.Type, rec.Spec.Name, list[0].ID)
+				}
+				// Fall through to the normal update/sync path below.
+			case TxtOwnershipForeign:
+				// TXT companion claims a different owner — refuse adoption.
+				msg := "TXT companion claims a different owner; refusing adoption"
+				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+					conventions.ReasonAdoptRefusedForeign, msg)
+				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedForeign)
+				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+					return ctrl.Result{}, uerr
+				}
+				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+			default: // TxtOwnershipUnrecognized
+				// TXT content is not decodable — refuse conservatively.
+				msg := "TXT companion content not decodable; refusing adoption (see design §5.4)"
+				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+					conventions.ReasonAdoptRefusedNoTXT, msg)
+				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedNoTXT)
+				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+					return ctrl.Result{}, uerr
+				}
+				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
 			}
 		}
 	}
@@ -160,6 +299,27 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		rec.Status.RecordID = created.ID
 		rec.Status.CurrentContent = created.Content
 		logger.Info("created DNS record", "recordID", created.ID)
+
+		// Pair: write TXT companion for the newly created record.
+		contentHash := sha256Hex(content)
+		txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
+		if terr != nil {
+			// Partial failure: DNS record created successfully, but TXT companion
+			// write failed. Emit a Warning Event and continue so the terminal
+			// status path still runs. The next reconcile re-enters the update
+			// path (RecordID is now set) and the TxtRecordID-empty guard there
+			// retries the companion write even without content drift.
+			logger.Error(terr, "TXT companion write failed after DNS create; will retry next reconcile")
+			if r.Recorder != nil {
+				r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
+					"DNS record created but TXT companion write failed: %s", terr.Error())
+			}
+			// Do NOT set rec.Status.TxtRecordID — the update-path retry guard
+			// (TxtRecordID == "") will call writeTXTCompanion on the next reconcile.
+		} else {
+			rec.Status.TxtRecordID = txtID
+			rec.Status.TxtAffix = txtAffix
+		}
 	} else {
 		// Update path: confirm existence, then converge drift.
 		existing, gerr := dc.GetRecord(ctx, zoneID, rec.Status.RecordID)
@@ -185,8 +345,46 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
 					"corrected drift on %s record %s", rec.Spec.Type, rec.Spec.Name)
 			}
+
+			// Pair: refresh TXT companion hash to match the newly written content.
+			contentHash := sha256Hex(content)
+			txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
+			if terr != nil {
+				// Partial failure: DNS record updated successfully, but TXT
+				// companion refresh failed. Emit a Warning Event and continue.
+				logger.Error(terr, "TXT companion refresh failed after DNS update; will retry next reconcile")
+				if r.Recorder != nil {
+					r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
+						"DNS record updated but TXT companion refresh failed: %s", terr.Error())
+				}
+			} else {
+				rec.Status.TxtRecordID = txtID
+				rec.Status.TxtAffix = txtAffix
+			}
 		} else {
 			rec.Status.CurrentContent = existing.Content
+			// Retry guard: the main record is in sync (no content drift) but
+			// TxtRecordID is empty — this means a prior create or update wrote
+			// the main record successfully but the TXT companion write failed.
+			// This arm is only reachable for a record THIS operator created or
+			// adopt-matched (adopt-refused outcomes return before reaching here;
+			// observe mode early-exits before the create/update block). Write
+			// the missing companion now. Same partial-failure handling: emit a
+			// Warning Event and continue; the next reconcile will retry again.
+			if rec.Status.TxtRecordID == "" {
+				contentHash := sha256Hex(content)
+				txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
+				if terr != nil {
+					logger.Error(terr, "TXT companion retry failed (no-drift path); will retry next reconcile")
+					if r.Recorder != nil {
+						r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
+							"TXT companion retry failed (no content drift): %s", terr.Error())
+					}
+				} else {
+					rec.Status.TxtRecordID = txtID
+					rec.Status.TxtAffix = txtAffix
+				}
+			}
 		}
 	}
 
@@ -226,6 +424,17 @@ func (r *CloudflareDNSRecordReconciler) haltDependency(ctx context.Context, rec 
 func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec *v1alpha1.CloudflareDNSRecord) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	// Observe mode never wrote anything to Cloudflare; drop the finalizer
+	// immediately without any CF calls.
+	if !reconcile.ShouldMutate(string(rec.Spec.Mode)) {
+		if reconcile.RemoveFinalizer(rec, conventions.FinalizerName) {
+			if err := r.Update(ctx, rec); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
 	if rec.Status.RecordID != "" {
 		creds, halt, err := reconcile.LoadCredentialsHierarchical(ctx, r.Client, rec.Spec.Cloudflare, rec.Namespace)
 		if err != nil {
@@ -255,6 +464,15 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec
 		}
 		if zres.ZoneID == "" {
 			return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+		}
+
+		// Best-effort: delete the TXT companion before the main record. An orphan
+		// TXT is harmless, so failures only log and never block finalizer removal.
+		if rec.Status.TxtRecordID != "" {
+			if derr := deleteTXTCompanion(ctx, dc, zres.ZoneID, rec.Status.TxtRecordID); derr != nil {
+				logger.Error(derr, "TXT companion delete failed; leaving orphan (harmless) and continuing",
+					"txtRecordID", rec.Status.TxtRecordID)
+			}
 		}
 
 		if derr := reconcile.WrapDeleteErr(dc.DeleteRecord(ctx, zres.ZoneID, rec.Status.RecordID)); derr != nil {
@@ -379,6 +597,13 @@ func srvDriftDetected(observed map[string]any, spec *v1alpha1.SRVData) bool {
 		return true
 	}
 	return false
+}
+
+// sha256Hex returns the sha256 hex digest of s, prefixed with "sha256:".
+// It is used to compute the content hash stored in TXT companion records.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // intField normalizes any-typed numeric values (float64 from JSON, int from
