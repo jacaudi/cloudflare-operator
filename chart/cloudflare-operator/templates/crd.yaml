@@ -82,15 +82,13 @@ spec:
                     type: object
                   txtRegistryKeySecretRef:
                     description: |-
-                      Reserved for v1alpha1 Foundation: the TXT companion-registry feature
-                      is designed in docs/plans/2026-05-12-zone-controller-design.md §6 but
-                      not implemented. Setting this field is accepted by the schema and
-                      ignored at runtime until Phase P5 (TXT registry implementation) ships.
-
-                      TxtRegistryKeySecretRef references a Secret containing an AES-256 key
-                      used to encrypt the TXT-registry ownership records. Only meaningful on
-                      the top-level CloudflareOperator; ignored on per-CR overrides. When
-                      unset, the TXT registry runs in plaintext mode (encryption is opt-in).
+                      TxtRegistryKeySecretRef references a Secret holding an AES-256 key
+                      (exactly 32 bytes, under the SecretReference.Key entry, default "key").
+                      When set, the DNSRecord reconciler encrypts TXT companion-registry
+                      payloads with AES-256-GCM (wire format v1:<base64-nonce>:<base64-ct>);
+                      when unset, companions are written as plaintext JSON. The read side
+                      auto-detects either form. See the TXT-registry design for the full
+                      contract (companion naming, ownership verification, observe mode).
                     properties:
                       key:
                         default: token

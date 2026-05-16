@@ -84,10 +84,14 @@ type CloudflareDNSRecordSpec struct {
 	// +optional
 	Priority *int `json:"priority,omitempty"`
 
-	// Adopt takes over an existing record matching (name, type) if found.
-	// No ownership verification is performed in this phase (the TXT companion
-	// registry is deferred) — only enable for records you are sure are not
-	// managed by another source.
+	// Adopt, when true, lets the operator take over a pre-existing Cloudflare
+	// record instead of creating a new one. Adoption is TXT-ownership-verified:
+	// the operator only adopts a record whose companion TXT registry entry
+	// identifies THIS CloudflareDNSRecord. A record with no companion, a
+	// foreign companion, or an unparseable one is refused
+	// (AdoptRefusedNoTXT / AdoptRefusedForeign) — there is no silent backfill.
+	// Pre-feature adopted records must be migrated via the documented
+	// TXT-registry migration procedure (design §5.4) before Adopt succeeds.
 	// +optional
 	Adopt bool `json:"adopt,omitempty"`
 
