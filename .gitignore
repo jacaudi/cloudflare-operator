@@ -2,6 +2,7 @@ docs/design/
 docs/plans/
 docs/prompt/
 .claude/worktrees/
+.worktrees/
 
 bin/
 cover.out
