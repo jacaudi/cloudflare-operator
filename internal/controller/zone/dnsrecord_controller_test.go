@@ -143,6 +143,7 @@ func TestDNS_AdoptBareTakeover(t *testing.T) {
 	m := mock.New()
 	// Pre-existing A record with no TXT companion — adoption must be refused.
 	_, _ = m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{Name: "app.example.com", Type: "A", Content: "1.1.1.1", TTL: 1})
+	createBefore := m.Calls("DNS.CreateRecord")
 	r := newDNSReconciler(t, c, s, m)
 	// Finalizer pass.
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
@@ -150,6 +151,7 @@ func TestDNS_AdoptBareTakeover(t *testing.T) {
 	// Adopt attempt — must refuse.
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
+	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not backfill a TXT for a pre-existing record")
 	var got v1alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.Empty(t, got.Status.RecordID, "adoption must be refused — no TXT companion")
@@ -807,11 +809,11 @@ func TestReconcile_AdoptWithMatchingTXT_Succeeds(t *testing.T) {
 	require.Equal(t, txtID, got.Status.TxtRecordID, "TxtRecordID must be set to the companion TXT record")
 	require.Equal(t, "cf-txt", got.Status.TxtAffix, "TxtAffix must be cf-txt")
 
-	// Must not be in a refused condition.
+	// Must reach terminal success state.
 	cond := findReadyCondition(got.Status.Conditions)
 	require.NotNil(t, cond)
-	require.NotEqual(t, conventions.ReasonAdoptRefusedNoTXT, cond.Reason)
-	require.NotEqual(t, conventions.ReasonAdoptRefusedForeign, cond.Reason)
+	require.Equal(t, metav1.ConditionTrue, cond.Status, "Ready condition must be True after successful adoption")
+	require.Equal(t, conventions.ReasonReady, cond.Reason, "Ready reason must be ReasonReady after successful adoption")
 }
 
 // TestReconcile_AdoptWithUnparseableTXT_Refused verifies that Adopt:true with

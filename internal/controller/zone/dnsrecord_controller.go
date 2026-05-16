@@ -50,9 +50,11 @@ const defaultDNSRecordInterval = 5 * time.Minute
 // CR: credentials → resolve zone → resolve content (with optional DynamicIP)
 // → create / adopt / update / delete on Cloudflare → reflect status.
 //
-// TXT companion registry is deferred this phase: there is no Codec on the
-// struct, no companion-TXT writes, and Spec.Adopt is bare-takeover (any
-// matching (name, type) record is adopted without ownership verification).
+// TXT companion registry is active: the reconciler builds a codec per
+// reconcile from CloudflareOperator.spec.cloudflare.txtRegistryKeySecretRef
+// (plaintext default; AES-256-GCM when a key Secret is configured),
+// Spec.Adopt is TXT-ownership-verified (no silent backfill — see design
+// §5.4), and Spec.Mode=Observe makes the reconciler read-only.
 type CloudflareDNSRecordReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
