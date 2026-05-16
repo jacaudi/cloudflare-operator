@@ -59,6 +59,20 @@ const (
 
 var errMissingCloudflareEnv = errors.New("zone/tunnel mode requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID env vars")
 
+// version, commit, date are injected via -ldflags at build time
+// (-X main.version=... etc.); the defaults apply for `go run` / `go build`
+// without ldflags.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
+// versionString is the single formatter for --version and the startup log.
+func versionString() string {
+	return fmt.Sprintf("cloudflare-operator %s (commit %s, built %s)", version, commit, date)
+}
+
 // Options is the parsed flag set.
 type Options struct {
 	Mode              Mode
@@ -68,6 +82,7 @@ type Options struct {
 	LeaderElection    bool
 	OperatorNamespace string
 	OperatorImage     string
+	Version           bool
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -79,8 +94,15 @@ func parseFlags(args []string) (Options, error) {
 	leaderElection := fs.Bool("leader-election", true, "enable leader election")
 	opNamespace := fs.String("operator-namespace", envOr("OPERATOR_NAMESPACE", "cloudflare-system"), "namespace the operator runs in")
 	opImage := fs.String("operator-image", envOr("OPERATOR_IMAGE", ""), "image used for spawned controller Deployments")
+	versionFlag := fs.Bool("version", false, "print build version and exit")
 	if err := fs.Parse(args); err != nil {
 		return Options{}, err
+	}
+	// --version short-circuits before mode validation so it is
+	// unconditional (conventional CLI behaviour): `--version` works
+	// regardless of --mode. main() prints versionString() and exits 0.
+	if *versionFlag {
+		return Options{Version: true}, nil
 	}
 	m := Mode(*mode)
 	switch m {
@@ -96,6 +118,7 @@ func parseFlags(args []string) (Options, error) {
 		LeaderElection:    *leaderElection,
 		OperatorNamespace: *opNamespace,
 		OperatorImage:     *opImage,
+		Version:           *versionFlag,
 	}, nil
 }
 
@@ -126,6 +149,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	if opts.Version {
+		fmt.Println(versionString())
+		os.Exit(0)
+	}
+
 	// Reconfigure to the user-requested level. On failure keep the
 	// already-installed info-level logger (degraded but functional) and
 	// surface it structurally rather than aborting.
@@ -136,6 +164,8 @@ func main() {
 		ctrl.SetLogger(logger)
 		log.SetLogger(logger)
 	}
+
+	logger.Info("starting", "version", version, "commit", commit, "date", date, "mode", opts.Mode)
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

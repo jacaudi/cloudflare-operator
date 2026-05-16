@@ -95,3 +95,18 @@ func TestNewProductionLogger_ReturnsLoggerForAllLevels(t *testing.T) {
 		require.NotNil(t, l)
 	}
 }
+
+func TestVersionString_DefaultsWhenNotInjected(t *testing.T) {
+	// With no -ldflags injection the package defaults apply.
+	s := versionString()
+	require.Contains(t, s, "cloudflare-operator")
+	require.Contains(t, s, version)
+	require.Contains(t, s, commit)
+	require.Contains(t, s, date)
+}
+
+func TestParseFlags_VersionFlag(t *testing.T) {
+	opts, err := parseFlags([]string{"--version"})
+	require.NoError(t, err)
+	require.True(t, opts.Version)
+}
