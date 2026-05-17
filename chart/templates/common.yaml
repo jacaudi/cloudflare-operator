@@ -1,0 +1,47 @@
+{{- $img := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- $args := list "--mode=meta"
+    (printf "--operator-namespace=%s" .Values.namespace)
+    (printf "--operator-image=%s" $img)
+    (printf "--controllers-zone-enabled=%t" .Values.controllers.zone.enabled)
+    (printf "--zone-replicas=%d" (int .Values.controllers.zone.replicas))
+    (printf "--zone-log-level=%s" .Values.controllers.zone.logLevel)
+    (printf "--controllers-tunnel-enabled=%t" .Values.controllers.tunnel.enabled)
+    (printf "--tunnel-replicas=%d" (int .Values.controllers.tunnel.replicas))
+    (printf "--tunnel-log-level=%s" .Values.controllers.tunnel.logLevel)
+    (printf "--leader-election=%t" .Values.observability.leaderElection.enabled)
+    (printf "--credentials-secret=%s" .Values.credentials.existingSecret)
+    (printf "--credentials-token-key=%s" .Values.credentials.tokenKey)
+    (printf "--credentials-account-id-key=%s" .Values.credentials.accountIDKey) -}}
+{{- $env := dict
+    "CLOUDFLARE_API_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.credentials.existingSecret "key" .Values.credentials.tokenKey)))
+    "CLOUDFLARE_ACCOUNT_ID" (dict "valueFrom" (dict "secretKeyRef" (dict "name" .Values.credentials.existingSecret "key" .Values.credentials.accountIDKey))) -}}
+{{- $values := dict
+  "global" (dict "nameOverride" "cloudflare-operator")
+  "serviceAccount" (dict "cloudflare-operator" (dict "enabled" true "forceRename" "cloudflare-operator"))
+  "defaultPodOptions" (dict
+    "securityContext" (dict "runAsNonRoot" true "runAsUser" 65532 "runAsGroup" 65532 "fsGroup" 65532 "seccompProfile" (dict "type" "RuntimeDefault")))
+  "controllers" (dict "main" (dict
+    "forceRename" "cloudflare-operator"
+    "replicas" 1
+    "containers" (dict "main" (dict
+      "image" (dict "repository" .Values.image.repository "tag" (.Values.image.tag | default .Chart.AppVersion) "pullPolicy" .Values.image.pullPolicy)
+      "args" $args
+      "env" $env
+      "ports" (list (dict "name" "metrics" "containerPort" 8080) (dict "name" "health" "containerPort" 8081))
+      "probes" (dict
+        "liveness" (dict "enabled" true "custom" true "spec" (dict "httpGet" (dict "path" "/healthz" "port" "health") "initialDelaySeconds" 15))
+        "readiness" (dict "enabled" true "custom" true "spec" (dict "httpGet" (dict "path" "/readyz" "port" "health") "initialDelaySeconds" 5)))
+      "securityContext" (dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")))
+      "resources" .Values.resources))))
+  "service" (dict "main" (dict "controller" "main" "ports" (dict "metrics" (dict "port" 8080) "health" (dict "port" 8081))))
+  "serviceMonitor" (dict "main" (dict
+    "enabled" .Values.observability.metrics.serviceMonitor.enabled
+    "serviceName" "cloudflare-operator"
+    "endpoints" (list (dict "port" "metrics" "path" "/metrics")))) -}}
+{{- /* Carry the vendored common-chart defaults through so the loader's
+       values.init step merges its scaffolding (rbac, persistence, etc.)
+       under our facade-mapped keys. */ -}}
+{{- $_ := set $values "common" (.Values.common | default dict) -}}
+{{- $ctx := deepCopy . -}}
+{{- $_ := set $ctx "Values" $values -}}
+{{ include "bjw-s.common.loader.all" $ctx }}

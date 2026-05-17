@@ -1,7 +1,3 @@
-{{- define "cloudflare-operator.fullname" -}}
-{{- printf "cloudflare-operator" -}}
-{{- end -}}
-
 {{- define "cloudflare-operator.labels" -}}
 app.kubernetes.io/name: cloudflare-operator
 app.kubernetes.io/instance: {{ .Release.Name }}

@@ -1,7 +1,49 @@
+# Facade values for the cloudflare-operator chart. The HelmRelease author
+# sets these; templates/_helpers.tpl maps them onto the bjw-s common schema.
 image:
   repository: ghcr.io/jacaudi/cloudflare-operator
-  tag: ""           # empty → .Chart.AppVersion
+  tag: ""          # empty → .Chart.AppVersion
   pullPolicy: IfNotPresent
 
 namespace: cloudflare-system
 
+# CRD lifecycle. install: render the 5 bundle CRDs as chart templates at all.
+# keep: stamp helm.sh/resource-policy: keep so they survive `helm uninstall`
+# (data-safety default — matches design §4's original hard-coded behavior).
+crds:
+  install: true
+  keep: true
+
+# Which bundle controllers the meta-operator spawns.
+controllers:
+  zone:
+    enabled: true
+    replicas: 1
+    logLevel: info
+  tunnel:
+    enabled: false
+    replicas: 1
+    logLevel: info
+
+# Operator-level default credentials — meta-operator env (CLOUDFLARE_API_TOKEN
+# / CLOUDFLARE_ACCOUNT_ID) and the coordinates it propagates to spawned
+# controllers, all via valueFrom.secretKeyRef from this existing Secret.
+credentials:
+  existingSecret: ""
+  tokenKey: token
+  accountIDKey: accountID
+
+observability:
+  leaderElection:
+    enabled: true
+  metrics:
+    serviceMonitor:
+      enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
