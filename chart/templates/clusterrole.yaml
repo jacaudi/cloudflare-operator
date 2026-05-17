@@ -17,21 +17,39 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Read Secrets cluster-wide (per-CR credentialRef resolution).
+  # Read/write Secrets cluster-wide (per-CR credentialRef resolution + tunnel
+  # ensureTokenSecret creates/updates the cloudflared credentials Secret).
   # This grant is intentionally cluster-wide so per-CR Secret references can
   # resolve to any namespace. Security-minded deployments can swap this for a
   # Role-per-namespace pattern.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Leader election lease in operator namespace
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # Domain CRs — read for stale-CR sweep on bundle disable
+  # Domain CRs — controllers create/update/patch/delete their own resources;
+  # meta-operator sweeps stale CRs on bundle disable
   - apiGroups: ["cloudflare.io"]
     resources: ["cloudflarezones", "cloudflarezoneconfigs", "cloudflarednsrecords", "cloudflarerulesets", "cloudflaretunnels"]
-    verbs: ["get", "list", "watch", "patch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Status subresource (separate rule from the main resource above)
   - apiGroups: ["cloudflare.io"]
     resources: ["cloudflarezones/status", "cloudflarezoneconfigs/status", "cloudflarednsrecords/status", "cloudflarerulesets/status", "cloudflaretunnels/status"]
+    verbs: ["get", "update", "patch"]
+  # Events (controllers emit Warning/Normal events)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Services — source reconcilers read; the tunnel controller creates/manages the cloudflared Service
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Gateway API — tunnel source reconcilers (HTTPRoute/TLSRoute/Gateway)
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "tlsroutes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes/status", "tlsroutes/status"]
     verbs: ["update", "patch"]
