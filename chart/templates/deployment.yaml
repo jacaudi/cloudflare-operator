@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: cloudflare-operator-meta
+  name: cloudflare-operator
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "cloudflare-operator.labels" . | nindent 4 }}
