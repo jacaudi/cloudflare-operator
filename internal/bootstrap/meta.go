@@ -89,7 +89,7 @@ func (r *MetaReconciler) ensure(ctx context.Context) error {
 			continue
 		}
 		reps := p.replicas
-		if reps == 0 {
+		if reps < 1 {
 			reps = 1
 		}
 		level := p.logLevel

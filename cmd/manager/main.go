@@ -258,10 +258,10 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 		HealthAddress:           opts.HealthAddress,
 		LeaderElection:          opts.LeaderElection,
 		ZoneEnabled:             opts.ZoneEnabled,
-		ZoneReplicas:            int32(opts.ZoneReplicas), //nolint:gosec // G115: replica count is a small positive value from a CLI flag; int32 overflow is not a practical concern
+		ZoneReplicas:            int32(opts.ZoneReplicas), //nolint:gosec // G115: replica count is a small non-negative-after-clamp value; int32 overflow is not a practical concern
 		ZoneLogLevel:            opts.ZoneLogLevel,
 		TunnelEnabled:           opts.TunnelEnabled,
-		TunnelReplicas:          int32(opts.TunnelReplicas), //nolint:gosec // G115: replica count is a small positive value from a CLI flag; int32 overflow is not a practical concern
+		TunnelReplicas:          int32(opts.TunnelReplicas), //nolint:gosec // G115: replica count is a small non-negative-after-clamp value; int32 overflow is not a practical concern
 		TunnelLogLevel:          opts.TunnelLogLevel,
 		CredentialsSecretName:   opts.CredentialsSecret,
 		CredentialsTokenKey:     opts.CredentialsTokenKey,

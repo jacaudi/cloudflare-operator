@@ -57,3 +57,50 @@ func TestMetaReconciler_EnsureCreatesEnabledDeletesDisabled(t *testing.T) {
 		types.NamespacedName{Name: "cloudflare-tunnel-controller", Namespace: "cf-sys"}, &tun)
 	require.True(t, apierrors.IsNotFound(err), "disabled bundle Deployment must be absent")
 }
+
+func TestMetaReconciler_NegativeReplicasClamped(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	base := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	r := &MetaReconciler{Client: c, Scheme: scheme, Config: Config{
+		OperatorNamespace: "cf-sys",
+		OperatorImage:     "img:1",
+		ZoneEnabled:       true,
+		ZoneReplicas:      -1,
+		TunnelEnabled:     false,
+	}}
+	require.NoError(t, r.ensure(context.Background()))
+
+	var zone appsv1.Deployment
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cloudflare-zone-controller", Namespace: "cf-sys"}, &zone))
+	require.Equal(t, int32(1), *zone.Spec.Replicas, "negative replica count must be clamped to 1")
+}
+
+func TestMetaReconciler_EnabledToDisabledDeletesDeployment(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	base := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	r := &MetaReconciler{Client: c, Scheme: scheme, Config: Config{
+		OperatorNamespace: "cf-sys",
+		OperatorImage:     "img:1",
+		ZoneEnabled:       true,
+		ZoneReplicas:      1,
+	}}
+
+	// Step 1: enabled -> Deployment exists.
+	require.NoError(t, r.ensure(context.Background()))
+	var zone appsv1.Deployment
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cloudflare-zone-controller", Namespace: "cf-sys"}, &zone))
+
+	// Step 2: same reconciler, now disabled -> Deployment deleted (drift-correction).
+	r.Config.ZoneEnabled = false
+	require.NoError(t, r.ensure(context.Background()))
+	err := c.Get(context.Background(),
+		types.NamespacedName{Name: "cloudflare-zone-controller", Namespace: "cf-sys"}, &zone)
+	require.True(t, apierrors.IsNotFound(err),
+		"previously-enabled bundle Deployment must be deleted once disabled")
+}
