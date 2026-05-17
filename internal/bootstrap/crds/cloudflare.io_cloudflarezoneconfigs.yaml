@@ -499,7 +499,7 @@ spec:
                 default: Pending
                 description: |-
                   Phase is a coarse summary of the reconciliation state.
-                  See cloudflarev1alpha1.Phase for the enum values.
+                  See Phase for the enum values.
                 enum:
                 - Ready
                 - Reconciling

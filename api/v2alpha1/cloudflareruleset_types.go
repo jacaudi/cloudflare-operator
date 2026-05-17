@@ -141,7 +141,7 @@ type CloudflareRulesetStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Phase is a coarse summary of the reconciliation state. See
-	// cloudflarev1alpha1.Phase for the enum values.
+	// Phase for the enum values.
 	// +optional
 	// +kubebuilder:default=Pending
 	Phase Phase `json:"phase,omitempty"`
