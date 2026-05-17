@@ -76,7 +76,7 @@ func ResolveCredentials(
 	}
 
 	accountID := ref.AccountID
-	if ref.AccountIDSecretRef != nil && ref.AccountIDSecretRef.Name != "" {
+	if ref.AccountIDSecretRef != nil && !ref.AccountIDSecretRef.IsEmpty() {
 		ans := ref.AccountIDSecretRef.Namespace
 		if ans == "" {
 			ans = defaultNamespace
