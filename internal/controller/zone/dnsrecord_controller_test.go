@@ -248,80 +248,6 @@ func TestDNS_NoDrift_NoUpdate(t *testing.T) {
 	require.Zero(t, calls, "UpdateRecord must not be called when observed matches spec")
 }
 
-// TestReconcile_TxtRegistryKeyUnavailable_Halts verifies that when the
-// CloudflareOperator singleton references a TXT-registry key Secret that does
-// not exist, the reconciler halts with a TxtRegistryKeyUnavailable Ready=False
-// condition and does NOT return an error (graceful halt + requeue).
-func TestReconcile_TxtRegistryKeyUnavailable_Halts(t *testing.T) {
-	s := zoneTestScheme(t)
-
-	// CloudflareOperator/cluster with TxtRegistryKeySecretRef → a Secret that
-	// does NOT exist.
-	op := &v2alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
-		Spec: v2alpha1.CloudflareOperatorSpec{
-			Cloudflare: v2alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v2alpha1.SecretReference{Name: "cred", Key: "token"},
-				AccountID:      "acct-1",
-				TxtRegistryKeySecretRef: &v2alpha1.SecretReference{
-					Name: "missing-key",
-					Key:  "key",
-				},
-			},
-			Controllers: v2alpha1.ControllersSpec{},
-		},
-	}
-
-	content := "192.0.2.1"
-	rec := &v2alpha1.CloudflareDNSRecord{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "rec",
-			Namespace:  "default",
-			Finalizers: []string{conventions.FinalizerName},
-		},
-		Spec: v2alpha1.CloudflareDNSRecordSpec{
-			Name:    "app.example.com",
-			Type:    "A",
-			Content: &content,
-			ZoneID:  "z1",
-		},
-	}
-
-	// Use env-based credentials so flow passes LoadCredentialsHierarchical and
-	// reaches the codec build.
-	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
-	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(op, rec).
-		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
-		Build()
-	m := mock.New()
-	r := newDNSReconciler(t, c, s, m)
-
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"},
-	})
-	// Graceful halt: no error, requeue after delay.
-	require.NoError(t, err)
-	require.Greater(t, result.RequeueAfter.Nanoseconds(), int64(0), "expect non-zero RequeueAfter")
-
-	// Ready condition reason must be TxtRegistryKeyUnavailable.
-	var got v2alpha1.CloudflareDNSRecord
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
-	var found *metav1.Condition
-	for i := range got.Status.Conditions {
-		if got.Status.Conditions[i].Type == conventions.ConditionTypeReady {
-			found = &got.Status.Conditions[i]
-			break
-		}
-	}
-	require.NotNil(t, found, "Ready condition must be set")
-	require.Equal(t, metav1.ConditionFalse, found.Status)
-	require.Equal(t, conventions.ReasonTxtRegistryKeyUnavailable, found.Reason)
-}
-
 func TestDNS_Delete_RemovesUpstream(t *testing.T) {
 	now := metav1.Now()
 	s := zoneTestScheme(t)
@@ -634,15 +560,14 @@ func TestReconcile_ObserveMode_RecordAbsent_NoOp(t *testing.T) {
 	require.Equal(t, conventions.ReasonObserving, cond.Reason)
 }
 
-// TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK verifies that
-// when the CloudflareOperator singleton is absent (no TXT key configured),
-// Observe mode still populates Status.ObservedTXT via plaintext decoding.
-func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
+// TestReconcile_ObserveMode_Plaintext_OK verifies that the codec is
+// unconditionally plaintext (operator-level AES key deferred) and Observe mode
+// still populates Status.ObservedTXT via plaintext decoding.
+func TestReconcile_ObserveMode_Plaintext_OK(t *testing.T) {
 	s := zoneTestScheme(t)
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
-	// No CloudflareOperator object in client — singleton absent.
 	rec := observeModeRec("r", "ns", "z1")
 	c := fake.NewClientBuilder().
 		WithScheme(s).

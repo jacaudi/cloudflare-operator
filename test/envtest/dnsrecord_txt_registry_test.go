@@ -26,8 +26,12 @@ package envtest_test
 //   - A CloudflareZone CR (+ mock-backed zone reconciler) to obtain a real
 //     zoneID via Status.ZoneID — the DNSRecord CRD requires zoneID or zoneRef
 //     (CEL), so we supply the literal ID captured from the zone status.
-//   - A CloudflareOperator singleton ("cluster") consumed by the DNSRecord
-//     reconciler to resolve the optional TXT-registry key Secret ref.
+//
+// The DNSRecord reconciler uses the plaintext codec unconditionally
+// (operator-level AES key configuration is deferred — see the
+// chart-configured-operator follow-up); the read side still auto-detects
+// either form, so these plaintext lifecycle/adopt/observe cases are
+// authoritative.
 //
 // Call-count assertions use m.Calls("DNS.CreateRecord") etc. from mock.Mock.
 
@@ -38,7 +42,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -193,38 +196,6 @@ func scaffoldZoneMgr(t *testing.T, ctx context.Context, c client.Client, crName,
 	return zoneID
 }
 
-// scaffoldOperatorSingleton creates the CloudflareOperator "cluster" CR. Calls
-// setupSingleton (from helpers_test.go) first to evict any leftover CR from a
-// prior test. keyRef may be nil (plaintext mode).
-func scaffoldOperatorSingleton(t *testing.T, ctx context.Context, c client.Client, keyRef *v2alpha1.SecretReference) {
-	t.Helper()
-	setupSingleton(t)
-
-	op := &v2alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
-		Spec: v2alpha1.CloudflareOperatorSpec{
-			Cloudflare: v2alpha1.CloudflareCredentialRef{
-				TokenSecretRef:          v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
-				AccountID:               "acct-txt",
-				TxtRegistryKeySecretRef: keyRef,
-			},
-			Controllers: v2alpha1.ControllersSpec{
-				Zone: v2alpha1.ControllerSpec{Enabled: false},
-			},
-		},
-	}
-	require.NoError(t, c.Create(ctx, op))
-	t.Cleanup(func() {
-		_ = c.Delete(context.Background(), op)
-		waitFor(t, 10*time.Second, func() bool {
-			var got v2alpha1.CloudflareOperator
-			err := sharedClient.Get(context.Background(),
-				types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &got)
-			return err != nil
-		})
-	})
-}
-
 // dnsRecordReadyReason reads the Ready condition Reason from the apiserver.
 // Returns "" when the CR cannot be fetched or has no Ready condition yet.
 func dnsRecordReadyReason(ctx context.Context, c client.Client, name, namespace string) string {
@@ -254,7 +225,6 @@ func TestEnvtest_TxtRegistry_FullAdoptCycle(t *testing.T) {
 	ctx, m, c := newTxtRegistryHarness(t)
 
 	zoneID := scaffoldZoneMgr(t, ctx, c, "txtr-full-adopt", "default")
-	scaffoldOperatorSingleton(t, ctx, c, nil)
 
 	// Pre-seed the main record with no TXT companion.
 	mainContent := "192.0.2.50"
@@ -347,7 +317,6 @@ func TestEnvtest_TxtRegistry_ForeignAdoptionRefused(t *testing.T) {
 	ctx, m, c := newTxtRegistryHarness(t)
 
 	zoneID := scaffoldZoneMgr(t, ctx, c, "txtr-foreign", "default")
-	scaffoldOperatorSingleton(t, ctx, c, nil)
 
 	// Pre-seed a main record.
 	content := "192.0.2.60"
@@ -406,7 +375,6 @@ func TestEnvtest_TxtRegistry_ObserveMode_HappyPath(t *testing.T) {
 	ctx, m, c := newTxtRegistryHarness(t)
 
 	zoneID := scaffoldZoneMgr(t, ctx, c, "txtr-observe-happy", "default")
-	scaffoldOperatorSingleton(t, ctx, c, nil)
 
 	// Pre-seed a main record + matching TXT companion.
 	mainContent := "192.0.2.70"
@@ -476,7 +444,6 @@ func TestEnvtest_TxtRegistry_ObserveToManagedTransition(t *testing.T) {
 	ctx, m, c := newTxtRegistryHarness(t)
 
 	zoneID := scaffoldZoneMgr(t, ctx, c, "txtr-obs-to-mgd", "default")
-	scaffoldOperatorSingleton(t, ctx, c, nil)
 
 	// Pre-seed main record + matching TXT.
 	mainContent := "192.0.2.80"
@@ -535,183 +502,4 @@ func TestEnvtest_TxtRegistry_ObserveToManagedTransition(t *testing.T) {
 
 	// Verify the mock never called DeleteRecord (safe transition).
 	require.Equal(t, 0, m.Calls("DNS.DeleteRecord"), "Observe→Managed transition must not call DeleteRecord")
-}
-
-// --- Scenario 5: Encrypted roundtrip ---
-
-// TestEnvtest_TxtRegistry_EncryptedRoundtrip verifies the AES-256-GCM
-// encryption path end-to-end:
-//
-//  1. Create an AES key Secret + configure TxtRegistryKeySecretRef on the
-//     CloudflareOperator singleton.
-//  2. Create a Managed CloudflareDNSRecord (no pre-existing CF record) →
-//     the reconciler creates the main record + an AES-encrypted TXT companion.
-//  3. Assert the TXT content starts with "v1:" (AES envelope marker).
-//  4. Assert that decoding with the same key succeeds and yields the correct
-//     owner payload (NS, N, K fields).
-func TestEnvtest_TxtRegistry_EncryptedRoundtrip(t *testing.T) {
-	ctx, m, c := newTxtRegistryHarness(t)
-
-	zoneID := scaffoldZoneMgr(t, ctx, c, "txtr-enc-roundtrip", "default")
-
-	// Create the AES key Secret (32 bytes = AES-256).
-	var key [32]byte
-	for i := range key {
-		key[i] = byte(i + 1) // deterministic, non-zero
-	}
-	keySecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "txt-key-enc", Namespace: "default"},
-		Data:       map[string][]byte{"key": key[:]},
-	}
-	require.NoError(t, c.Create(ctx, keySecret))
-	t.Cleanup(func() { _ = c.Delete(context.Background(), keySecret) })
-
-	scaffoldOperatorSingleton(t, ctx, c, &v2alpha1.SecretReference{
-		Name:      "txt-key-enc",
-		Namespace: "default",
-		Key:       "key",
-	})
-
-	// Create a Managed DNSRecord (no pre-existing CF record) — reconciler
-	// creates both the main A record and the AES-encrypted TXT companion.
-	content := "192.0.2.90"
-	rec := &v2alpha1.CloudflareDNSRecord{
-		ObjectMeta: metav1.ObjectMeta{Name: "txtr-enc-roundtrip-rec", Namespace: "default"},
-		Spec: v2alpha1.CloudflareDNSRecordSpec{
-			Name:    "enc.txtr.example.com",
-			Type:    "A",
-			Content: &content,
-			ZoneID:  zoneID,
-			Mode:    v2alpha1.RecordModeManaged,
-		},
-	}
-	require.NoError(t, c.Create(ctx, rec))
-	t.Cleanup(func() { _ = c.Delete(context.Background(), rec) })
-
-	// Wait for Ready — both records written.
-	require.Eventually(t, func() bool {
-		var r v2alpha1.CloudflareDNSRecord
-		if err2 := c.Get(ctx, types.NamespacedName{Name: "txtr-enc-roundtrip-rec", Namespace: "default"}, &r); err2 != nil {
-			return false
-		}
-		return r.Status.RecordID != "" && r.Status.TxtRecordID != "" &&
-			dnsRecordReadyReason(ctx, c, "txtr-enc-roundtrip-rec", "default") == conventions.ReasonReady
-	}, 20*time.Second, 200*time.Millisecond, "Ready: main record + encrypted TXT companion created")
-
-	// Retrieve the TXT companion from the mock and verify AES encryption.
-	txtName := cloudflare.AffixName("cf-txt", "enc.txtr.example.com")
-	txtRecs, err := m.DNS.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
-	require.NoError(t, err)
-	require.Len(t, txtRecs, 1, "exactly one TXT companion expected")
-
-	txtContent := txtRecs[0].Content
-	require.True(t, len(txtContent) >= 3 && txtContent[:3] == "v1:",
-		"TXT content must start with 'v1:' (AES envelope); got: %q", txtContent)
-
-	// Decode with the same key and verify the owner payload.
-	aesCodec := cloudflare.NewAESCodec(key)
-	decoded, err := aesCodec.Decode(txtContent)
-	require.NoError(t, err, "AES decode must succeed with the configured key")
-	require.Equal(t, 1, decoded.V)
-	require.Equal(t, "CloudflareDNSRecord", decoded.K)
-	require.Equal(t, "default", decoded.NS)
-	require.Equal(t, "txtr-enc-roundtrip-rec", decoded.N)
-}
-
-// --- Scenario 6: Key rotation refuses old records ---
-
-// TestEnvtest_TxtRegistry_KeyRotation_RefusesOldRecords verifies the
-// conservative key-rotation refusal (design §5): a TXT companion written with
-// key A cannot be adopted by a reconciler using key B.
-//
-// Setup:
-//  1. Pre-seed main record + AES-encrypted TXT companion (key A) directly in
-//     the mock, simulating a record owned by a prior operator run with key A.
-//  2. Configure the CloudflareOperator singleton with key B.
-//  3. Create a CR with Adopt:true → the auto-detecting codec sees "v1:" but AES
-//     decrypt with key B fails → TxtOwnershipUnrecognized → AdoptRefusedNoTXT.
-func TestEnvtest_TxtRegistry_KeyRotation_RefusesOldRecords(t *testing.T) {
-	ctx, m, c := newTxtRegistryHarness(t)
-
-	zoneID := scaffoldZoneMgr(t, ctx, c, "txtr-key-rotation", "default")
-
-	// Key A: used to write the existing TXT companion.
-	var keyA [32]byte
-	for i := range keyA {
-		keyA[i] = byte(i + 10)
-	}
-
-	// Key B: the new operator key — different from A.
-	var keyB [32]byte
-	for i := range keyB {
-		keyB[i] = byte(i + 20)
-	}
-
-	// Pre-seed main record.
-	mainContent := "192.0.2.100"
-	_, err := m.DNS.CreateRecord(ctx, zoneID, cloudflare.DNSRecordParams{
-		Name: "rotated.txtr.example.com", Type: "A", Content: mainContent, TTL: 1,
-	})
-	require.NoError(t, err)
-
-	// Pre-seed TXT companion encrypted with key A.
-	aesCodecA := cloudflare.NewAESCodec(keyA)
-	ownerPayload := cloudflare.RegistryPayload{
-		V: 1, K: "CloudflareDNSRecord", NS: "default", N: "txtr-key-rotation-rec",
-	}
-	oldTxtContent, err := aesCodecA.Encode(ownerPayload)
-	require.NoError(t, err)
-	require.True(t, len(oldTxtContent) >= 3 && oldTxtContent[:3] == "v1:",
-		"pre-seeded TXT must be encrypted; got: %q", oldTxtContent)
-
-	txtName := cloudflare.AffixName("cf-txt", "rotated.txtr.example.com")
-	_, err = m.DNS.CreateRecord(ctx, zoneID, cloudflare.DNSRecordParams{
-		Type: "TXT", Name: txtName, Content: oldTxtContent, TTL: 1,
-	})
-	require.NoError(t, err)
-
-	// Create key B Secret and configure the operator singleton with key B.
-	keySecretB := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "txt-key-b", Namespace: "default"},
-		Data:       map[string][]byte{"key": keyB[:]},
-	}
-	require.NoError(t, c.Create(ctx, keySecretB))
-	t.Cleanup(func() { _ = c.Delete(context.Background(), keySecretB) })
-
-	scaffoldOperatorSingleton(t, ctx, c, &v2alpha1.SecretReference{
-		Name:      "txt-key-b",
-		Namespace: "default",
-		Key:       "key",
-	})
-
-	// Create a CR with Adopt:true — the reconciler uses key B. The auto-
-	// detecting codec sniffs "v1:", attempts AES decrypt with key B → fails →
-	// TxtOwnershipUnrecognized → AdoptRefusedNoTXT (conservative refusal).
-	recContent := "192.0.2.100"
-	rec := &v2alpha1.CloudflareDNSRecord{
-		ObjectMeta: metav1.ObjectMeta{Name: "txtr-key-rotation-rec", Namespace: "default"},
-		Spec: v2alpha1.CloudflareDNSRecordSpec{
-			Name:    "rotated.txtr.example.com",
-			Type:    "A",
-			Content: &recContent,
-			ZoneID:  zoneID,
-			Adopt:   true,
-			Mode:    v2alpha1.RecordModeManaged,
-		},
-	}
-	require.NoError(t, c.Create(ctx, rec))
-	t.Cleanup(func() { _ = c.Delete(context.Background(), rec) })
-
-	require.Eventually(t, func() bool {
-		return dnsRecordReadyReason(ctx, c, "txtr-key-rotation-rec", "default") == conventions.ReasonAdoptRefusedNoTXT
-	}, 15*time.Second, 200*time.Millisecond, "AdoptRefusedNoTXT: old key-A TXT not decodable with key B")
-
-	var gotRec v2alpha1.CloudflareDNSRecord
-	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-key-rotation-rec", Namespace: "default"}, &gotRec))
-	require.Empty(t, gotRec.Status.RecordID, "RecordID must remain empty after key-rotation refusal")
-
-	// Confirm key B genuinely cannot decrypt key A's ciphertext (sanity).
-	aesCodecB := cloudflare.NewAESCodec(keyB)
-	_, decodeErr := aesCodecB.Decode(oldTxtContent)
-	require.Error(t, decodeErr, "key B must not decode key A's ciphertext")
 }
