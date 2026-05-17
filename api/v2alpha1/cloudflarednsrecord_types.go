@@ -105,9 +105,11 @@ type CloudflareDNSRecordSpec struct {
 	// +optional
 	Mode RecordMode `json:"mode,omitempty"`
 
-	// Cloudflare overrides the top-level credential + account from the
-	// CloudflareOperator CR. Per Foundation §5 the token and accountID are
-	// inherited or overridden as a unit; CEL rejects mixing.
+	// Cloudflare overrides the operator-level default credential (sourced
+	// from the operator's CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID env,
+	// chart-set from a Secret). Per Foundation §5 the token and accountID
+	// are inherited or overridden as a unit; CEL rejects mixing.
+	// Omitted entirely → the operator-level env default applies.
 	// +optional
 	Cloudflare *CloudflareCredentialRef `json:"cloudflare,omitempty"`
 

@@ -1,25 +1,38 @@
+{{- if .Values.crds.install }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: cloudflareoperators.cloudflare.io
+{{- if .Values.crds.keep }}
+    helm.sh/resource-policy: keep
+{{- end }}
+  name: cloudflarezones.cloudflare.io
 spec:
   group: cloudflare.io
   names:
-    kind: CloudflareOperator
-    listKind: CloudflareOperatorList
-    plural: cloudflareoperators
-    singular: cloudflareoperator
-  scope: Cluster
+    kind: CloudflareZone
+    listKind: CloudflareZoneList
+    plural: cloudflarezones
+    singular: cloudflarezone
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Domain
+      type: string
+    - jsonPath: .status.zoneID
+      name: Zone ID
+      type: string
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
-      type: string
-    - jsonPath: .status.installedBundles
-      name: Bundles
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -27,7 +40,7 @@ spec:
     name: v2alpha1
     schema:
       openAPIV3Schema:
-        description: CloudflareOperator is the top-level CR that drives bundle installation.
+        description: CloudflareZone is the Schema for the cloudflarezones API.
         properties:
           apiVersion:
             description: |-
@@ -47,12 +60,17 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudflareOperatorSpec defines the desired state of the meta-operator.
+            description: CloudflareZoneSpec defines the desired state of a Cloudflare
+              Zone.
             properties:
               cloudflare:
                 description: |-
-                  Cloudflare is the default credential + account used by all reconciled
-                  CRs that do not override at the CR level.
+                  Cloudflare overrides the operator-level default credential (sourced
+                  from the operator's CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID env,
+                  chart-set from a Secret). Per Foundation §5 the token and accountID
+                  are inherited or overridden as a unit; CEL on this CRD must reject
+                  setting only one. Omitted entirely → the operator-level env default
+                  applies.
                 properties:
                   accountID:
                     description: |-
@@ -138,100 +156,50 @@ spec:
                     set
                   rule: '(has(self.accountID) && self.accountID.size() > 0) ? !has(self.accountIDSecretRef)
                     : has(self.accountIDSecretRef)'
-              controllers:
-                description: Controllers toggles the zone and tunnel controller bundles.
-                properties:
-                  tunnel:
-                    description: ControllerSpec is the per-bundle knob set.
-                    properties:
-                      enabled:
-                        default: false
-                        description: Enabled toggles the bundle.
-                        type: boolean
-                      image:
-                        description: Image override; empty = use the meta-operator's
-                          own image.
-                        type: string
-                      logLevel:
-                        default: info
-                        description: LogLevel is the structured-log level (debug|info|warn|error).
-                        enum:
-                        - debug
-                        - info
-                        - warn
-                        - error
-                        type: string
-                      replicas:
-                        default: 1
-                        description: Replicas is the desired Deployment replica count.
-                        format: int32
-                        minimum: 0
-                        type: integer
-                    type: object
-                  zone:
-                    description: ControllerSpec is the per-bundle knob set.
-                    properties:
-                      enabled:
-                        default: false
-                        description: Enabled toggles the bundle.
-                        type: boolean
-                      image:
-                        description: Image override; empty = use the meta-operator's
-                          own image.
-                        type: string
-                      logLevel:
-                        default: info
-                        description: LogLevel is the structured-log level (debug|info|warn|error).
-                        enum:
-                        - debug
-                        - info
-                        - warn
-                        - error
-                        type: string
-                      replicas:
-                        default: 1
-                        description: Replicas is the desired Deployment replica count.
-                        format: int32
-                        minimum: 0
-                        type: integer
-                    type: object
-                type: object
-              observability:
-                description: Observability holds metrics / health / leader-election
-                  knobs.
-                properties:
-                  healthAddress:
-                    default: :8081
-                    description: HealthAddress is the bind address for /healthz and
-                      /readyz.
-                    minLength: 1
-                    type: string
-                  leaderElection:
-                    description: LeaderElection configures controller-runtime leader
-                      election.
-                    properties:
-                      enabled:
-                        default: true
-                        description: Enabled toggles leader election. Ignored when
-                          replicas == 1.
-                        type: boolean
-                    type: object
-                  metricsAddress:
-                    default: :8080
-                    description: MetricsAddress is the bind address for /metrics.
-                    minLength: 1
-                    type: string
-                type: object
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy controls what happens when the CR is deleted.
+                  "Retain" (default) leaves the zone in Cloudflare; "Delete" removes it.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              interval:
+                default: 30m
+                description: Interval is the reconciliation interval.
+                type: string
+              name:
+                description: Name is the domain name to onboard (e.g., "example.com").
+                minLength: 1
+                type: string
+              paused:
+                description: Paused indicates whether the zone is paused (not serving
+                  traffic through Cloudflare).
+                type: boolean
+              type:
+                default: full
+                description: |-
+                  Type is the zone type. "full" means Cloudflare is authoritative DNS;
+                  "partial" is CNAME setup; "secondary" mirrors an upstream master.
+                  Immutable after creation.
+                enum:
+                - full
+                - partial
+                - secondary
+                type: string
             required:
-            - cloudflare
-            - controllers
+            - deletionPolicy
+            - name
+            - type
             type: object
           status:
-            description: CloudflareOperatorStatus is the observed state.
+            description: CloudflareZoneStatus defines the observed state of a CloudflareZone.
             properties:
+              activatedOn:
+                format: date-time
+                type: string
               conditions:
-                description: Conditions reflects the current reconciliation state
-                  of the meta-operator.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -290,30 +258,42 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              installedBundles:
-                description: InstalledBundles lists the bundles currently installed.
-                items:
-                  type: string
-                type: array
-              installedCRDs:
-                description: InstalledCRDs lists the CRDs the bootstrap reconciler
-                  has SSA'd.
+              lastSyncedAt:
+                format: date-time
+                type: string
+              nameServers:
                 items:
                   type: string
                 type: array
               observedGeneration:
-                description: ObservedGeneration is the .metadata.generation last reconciled.
                 format: int64
                 type: integer
+              originalNameServers:
+                items:
+                  type: string
+                type: array
+              originalRegistrar:
+                type: string
+              phase:
+                default: Pending
+                description: Phase is a coarse summary derived from the Ready condition
+                  (Foundation §8).
+                enum:
+                - Ready
+                - Reconciling
+                - Error
+                - Pending
+                type: string
+              status:
+                description: Status is the zone status in Cloudflare (initializing,
+                  pending, active, moved).
+                type: string
+              zoneID:
+                type: string
             type: object
         type: object
-        x-kubernetes-validations:
-        - message: controllers.tunnel.enabled requires controllers.zone.enabled
-          rule: '!has(self.spec) || !has(self.spec.controllers) || !has(self.spec.controllers.tunnel)
-            || !has(self.spec.controllers.tunnel.enabled) || self.spec.controllers.tunnel.enabled
-            != true || (has(self.spec.controllers.zone) && has(self.spec.controllers.zone.enabled)
-            && self.spec.controllers.zone.enabled == true)'
     served: true
     storage: true
     subresources:
       status: {}
+{{- end }}

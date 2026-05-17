@@ -1,0 +1,459 @@
+{{- if .Values.crds.install }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+{{- if .Values.crds.keep }}
+    helm.sh/resource-policy: keep
+{{- end }}
+  name: cloudflarednsrecords.cloudflare.io
+spec:
+  group: cloudflare.io
+  names:
+    kind: CloudflareDNSRecord
+    listKind: CloudflareDNSRecordList
+    plural: cloudflarednsrecords
+    singular: cloudflarednsrecord
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Record Name
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.currentContent
+      name: Content
+      type: string
+    - jsonPath: .spec.proxied
+      name: Proxied
+      type: boolean
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v2alpha1
+    schema:
+      openAPIV3Schema:
+        description: CloudflareDNSRecord is the Schema for the cloudflarednsrecords
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CloudflareDNSRecordSpec defines the desired state of a Cloudflare
+              DNS record.
+            properties:
+              adopt:
+                description: |-
+                  Adopt, when true, lets the operator take over a pre-existing Cloudflare
+                  record instead of creating a new one. Adoption is TXT-ownership-verified:
+                  the operator only adopts a record whose companion TXT registry entry
+                  identifies THIS CloudflareDNSRecord. A record with no companion, a
+                  foreign companion, or an unparseable one is refused
+                  (AdoptRefusedNoTXT / AdoptRefusedForeign) — there is no silent backfill.
+                  Pre-feature adopted records must be migrated via the documented
+                  TXT-registry migration procedure (design §5.4) before Adopt succeeds.
+                type: boolean
+              cloudflare:
+                description: |-
+                  Cloudflare overrides the operator-level default credential (sourced
+                  from the operator's CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID env,
+                  chart-set from a Secret). Per Foundation §5 the token and accountID
+                  are inherited or overridden as a unit; CEL rejects mixing.
+                  Omitted entirely → the operator-level env default applies.
+                properties:
+                  accountID:
+                    description: |-
+                      AccountID is the Cloudflare account ID this credential scopes to.
+                      Exactly one of accountID or accountIDSecretRef must be set.
+                    minLength: 1
+                    type: string
+                  accountIDSecretRef:
+                    description: |-
+                      AccountIDSecretRef resolves the Cloudflare account ID from a Secret
+                      instead of the inline accountID (exactly one of the two must be set).
+                      NOTE: SecretReference.Key defaults to "token"; set key: accountID
+                      explicitly (the account ID is typically a distinct key in the same
+                      Secret as the API token).
+                    properties:
+                      key:
+                        default: token
+                        description: Key inside the Secret holding the Cloudflare
+                          API token. Defaults to "token".
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Secret. Defaults to the referencing
+                          CR's namespace.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  tokenSecretRef:
+                    description: TokenSecretRef points at the Secret carrying the
+                      Cloudflare API token.
+                    properties:
+                      key:
+                        default: token
+                        description: Key inside the Secret holding the Cloudflare
+                          API token. Defaults to "token".
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Secret. Defaults to the referencing
+                          CR's namespace.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  txtRegistryKeySecretRef:
+                    description: |-
+                      TxtRegistryKeySecretRef references a Secret holding an AES-256 key
+                      (exactly 32 bytes, under the SecretReference.Key entry, default "key").
+                      When set, the DNSRecord reconciler encrypts TXT companion-registry
+                      payloads with AES-256-GCM (wire format v1:<base64-nonce>:<base64-ct>);
+                      when unset, companions are written as plaintext JSON. The read side
+                      auto-detects either form. See the TXT-registry design for the full
+                      contract (companion naming, ownership verification, observe mode).
+                    properties:
+                      key:
+                        default: token
+                        description: Key inside the Secret holding the Cloudflare
+                          API token. Defaults to "token".
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Secret. Defaults to the referencing
+                          CR's namespace.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - tokenSecretRef
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of accountID or accountIDSecretRef must be
+                    set
+                  rule: '(has(self.accountID) && self.accountID.size() > 0) ? !has(self.accountIDSecretRef)
+                    : has(self.accountIDSecretRef)'
+              content:
+                description: Content is the record content (IP, hostname, etc.). XOR
+                  with DynamicIP.
+                type: string
+              dynamicIP:
+                description: |-
+                  DynamicIP enables automatic external IP resolution. Only valid for A/AAAA.
+                  XOR with Content.
+                type: boolean
+              interval:
+                default: 5m
+                description: Interval is the reconciliation interval for drift detection.
+                type: string
+              mode:
+                default: Managed
+                description: |-
+                  Mode controls operator write behavior on this record.
+                  Default Managed: operator creates / updates / deletes the underlying
+                  Cloudflare record and TXT companion as needed.
+                  Observe: operator reads but never writes. Useful for verifying state
+                  before claiming a record under Adopt:true (which would otherwise
+                  refuse without a matching TXT companion).
+                enum:
+                - Managed
+                - Observe
+                type: string
+              name:
+                description: Name is the DNS record name (e.g., "example.com", "sub.example.com").
+                minLength: 1
+                type: string
+              priority:
+                description: |-
+                  Priority is the MX record priority (lower = preferred). SRV records use
+                  srvData.priority instead.
+                type: integer
+              proxied:
+                description: Proxied indicates whether the record is proxied through
+                  Cloudflare.
+                type: boolean
+              srvData:
+                description: SRVData contains SRV-specific record fields. Required
+                  when Type=SRV.
+                properties:
+                  port:
+                    description: Port is the TCP/UDP port the service listens on.
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                  priority:
+                    description: Priority is the SRV priority (lower = preferred).
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                  proto:
+                    description: Proto is the transport protocol.
+                    enum:
+                    - _tcp
+                    - _udp
+                    - _tls
+                    type: string
+                  service:
+                    description: Service is the symbolic service name (e.g., "_satisfactory",
+                      "_minecraft").
+                    type: string
+                  target:
+                    description: Target is the canonical hostname of the machine providing
+                      the service.
+                    type: string
+                  weight:
+                    description: |-
+                      Weight is the SRV weight for records with the same priority
+                      (higher = more traffic).
+                    maximum: 65535
+                    minimum: 0
+                    type: integer
+                required:
+                - port
+                - priority
+                - proto
+                - service
+                - target
+                - weight
+                type: object
+              ttl:
+                default: 1
+                description: TTL in seconds. Use 1 for automatic.
+                minimum: 1
+                type: integer
+              type:
+                description: Type is the DNS record type.
+                enum:
+                - A
+                - AAAA
+                - CNAME
+                - SRV
+                - MX
+                - TXT
+                - NS
+                type: string
+              zoneID:
+                description: ZoneID is the Cloudflare Zone ID. Mutually exclusive
+                  with ZoneRef.
+                minLength: 1
+                type: string
+              zoneRef:
+                description: ZoneRef references a CloudflareZone CR. Mutually exclusive
+                  with ZoneID.
+                properties:
+                  name:
+                    description: Name of the CloudflareZone CR.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the CloudflareZone CR. Defaults to the
+                      referencing CR's namespace.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - name
+            - type
+            type: object
+          status:
+            description: CloudflareDNSRecordStatus defines the observed state.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              currentContent:
+                description: |-
+                  CurrentContent is the most-recently-observed record content (post-resolve
+                  for DynamicIP).
+                type: string
+              lastSyncedAt:
+                description: LastSyncedAt is the timestamp of the most recent successful
+                  reconcile.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the .metadata.generation observed by the controller
+                  during its last reconcile. When this lags .metadata.generation the
+                  controller has not yet processed the latest spec.
+                format: int64
+                type: integer
+              observedTXT:
+                description: |-
+                  ObservedTXT carries the decoded TXT companion payload as last
+                  observed from Cloudflare. Populated by both Managed and Observe modes
+                  when a TXT companion exists. RawContent is set instead when decoding
+                  fails.
+                properties:
+                  codec:
+                    description: |-
+                      Codec reports which decoder ("plaintext", "aes-gcm", or
+                      "unrecognized") produced this payload.
+                    type: string
+                  contentHash:
+                    description: |-
+                      ContentHash is the SHA256 of the canonicalized spec.content at TXT
+                      write time. Used by drift detection.
+                    type: string
+                  kind:
+                    description: Kind is the encoded owner kind ("CloudflareDNSRecord"
+                      in v2alpha1).
+                    type: string
+                  name:
+                    description: Name is the encoded owner name.
+                    type: string
+                  namespace:
+                    description: Namespace is the encoded owner namespace.
+                    type: string
+                  rawContent:
+                    description: |-
+                      RawContent is the raw TXT content as received from Cloudflare when
+                      decoding failed. Set instead of Version/Kind/Namespace/Name so users
+                      can see what's there even when the operator can't parse it.
+                    type: string
+                  version:
+                    description: Version is the payload schema version (currently
+                      always 1).
+                    type: integer
+                type: object
+              phase:
+                default: Pending
+                description: Phase is a coarse summary derived from the Ready condition
+                  (Foundation §8).
+                enum:
+                - Ready
+                - Reconciling
+                - Error
+                - Pending
+                type: string
+              recordID:
+                description: RecordID is the Cloudflare ID of the managed DNS record.
+                type: string
+              txtAffix:
+                description: |-
+                  TxtAffix is the prefix used for the companion TXT record name (today
+                  always "cf-txt"). Recorded for forensic clarity if the convention
+                  changes (e.g., v2 affixing scheme). Operator-managed; users should
+                  not edit.
+                type: string
+              txtRecordID:
+                description: |-
+                  TxtRecordID is the Cloudflare-side ID of the companion TXT record.
+                  Empty when no TXT companion has been written yet. Set on successful
+                  TXT write; cleared on delete.
+                type: string
+            type: object
+        type: object
+        x-kubernetes-validations:
+        - message: one of zoneID or zoneRef is required
+          rule: has(self.spec.zoneID) || has(self.spec.zoneRef)
+        - message: zoneID and zoneRef are mutually exclusive
+          rule: '!(has(self.spec.zoneID) && has(self.spec.zoneRef))'
+        - message: content and dynamicIP are mutually exclusive
+          rule: '!(has(self.spec.content) && has(self.spec.dynamicIP) && self.spec.dynamicIP)'
+        - message: for SRV records use srvData.priority, not spec.priority
+          rule: '!(self.spec.type == ''SRV'' && has(self.spec.priority))'
+        - message: MX records require spec.priority
+          rule: 'self.spec.type == ''MX'' ? has(self.spec.priority) : true'
+        - message: dynamicIP is only valid for A or AAAA records
+          rule: '!has(self.spec.dynamicIP) || !self.spec.dynamicIP || (self.spec.type
+            == ''A'' || self.spec.type == ''AAAA'')'
+    served: true
+    storage: true
+    subresources:
+      status: {}
+{{- end }}

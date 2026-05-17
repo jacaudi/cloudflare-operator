@@ -103,10 +103,10 @@ const (
 	// same registry format) already claims this record.
 	ReasonAdoptRefusedForeign = "AdoptRefusedForeign"
 
-	// ReasonTxtRegistryKeyUnavailable marks a halt when
-	// CloudflareOperator.spec.cloudflare.txtRegistryKeySecretRef is set but
-	// the Secret is missing or the key is the wrong length. Encryption is
-	// required (key configured) but cannot operate.
+	// ReasonTxtRegistryKeyUnavailable marks a halt when the operator's
+	// configured TXT-registry encryption key Secret is missing or the key
+	// is the wrong length. Encryption is required (key configured) but
+	// cannot operate.
 	ReasonTxtRegistryKeyUnavailable = "TxtRegistryKeyUnavailable"
 
 	// ReasonObserving marks a CR running with Spec.Mode=Observe. The

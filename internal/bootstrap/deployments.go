@@ -14,9 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package bootstrap is the meta-operator reconciler. It SSAs the domain CRDs
-// and the zone / tunnel controller Deployments based on the CloudflareOperator
-// CR.
+// Package bootstrap is the meta-operator's deployment layer. Its MetaReconciler
+// renders the zone / tunnel controller Deployments from a flags/env Config.
+// It does not install CRDs (Helm owns the CRDs) and there is no CloudflareOperator
+// CR — the controller set is configured entirely from the operator's flags/env.
 package bootstrap
 
 import (
@@ -28,8 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-
-	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // BuildArgs is the resolved input set for a single controller Deployment.
@@ -50,33 +49,6 @@ type BuildArgs struct {
 	CredentialsSecretName   string
 	CredentialsTokenKey     string
 	CredentialsAccountIDKey string
-}
-
-// ApplyControllerSpec resolves user-supplied overrides against operator defaults.
-// Image falls back to defaultImage (the meta-operator's own image).
-//
-// Note on Replicas: a zero value is treated as "unset, use default 1". Users
-// who want to scale a bundle to zero set Enabled: false (which fully
-// deprovisions the controller Deployment); Replicas: 0 with Enabled: true
-// is not a supported configuration.
-func ApplyControllerSpec(spec v2alpha1.ControllerSpec, defaultImage string) BuildArgs {
-	img := spec.Image
-	if img == "" {
-		img = defaultImage
-	}
-	reps := spec.Replicas
-	if reps == 0 {
-		reps = 1
-	}
-	level := spec.LogLevel
-	if level == "" {
-		level = "info"
-	}
-	return BuildArgs{
-		Image:    img,
-		Replicas: reps,
-		LogLevel: level,
-	}
 }
 
 // BuildControllerDeployment renders a Deployment for the given bundle.

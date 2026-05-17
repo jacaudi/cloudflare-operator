@@ -17,28 +17,24 @@ limitations under the License.
 package envtest_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
-	"github.com/jacaudi/cloudflare-operator/internal/bootstrap"
 )
 
 // sharedClient is set up once in TestMain and shared across all tests in the package.
@@ -103,18 +99,6 @@ func resolveGatewayAPICRDPaths() ([]string, error) {
 	}, nil
 }
 
-func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("timeout after %s", timeout)
-}
-
 func TestMain(m *testing.M) {
 	// Skip envtest when KUBEBUILDER_ASSETS isn't set (so unit-test CI without
 	// envtest still passes); the `make test` target sets it correctly.
@@ -140,7 +124,7 @@ func TestMain(m *testing.M) {
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths: append(
-			[]string{filepath.Join("..", "..", "internal", "bootstrap", "crds")},
+			[]string{filepath.Join("..", "..", "config", "crd", "bases")},
 			gwCRDPaths...,
 		),
 		ErrorIfCRDPathMissing: true,
@@ -166,26 +150,8 @@ func TestMain(m *testing.M) {
 	}
 	sharedClient = k8sClient
 
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme})
-	if err != nil {
-		panic("ctrl.NewManager: " + err.Error())
-	}
-
-	if err := (&bootstrap.Reconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		OperatorNamespace: "cloudflare-system",
-		OperatorImage:     "ghcr.io/test/manager:test",
-	}).SetupWithManager(mgr); err != nil {
-		panic("SetupWithManager: " + err.Error())
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = mgr.Start(ctx) }()
-
 	code := m.Run()
 
-	cancel()
 	_ = env.Stop()
 	os.Exit(code)
 }

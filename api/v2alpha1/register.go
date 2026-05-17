@@ -22,7 +22,6 @@ package v2alpha1
 // controller-gen in zz_generated.deepcopy.go — so registration must follow codegen.
 func init() {
 	SchemeBuilder.Register(
-		&CloudflareOperator{}, &CloudflareOperatorList{},
 		&CloudflareZone{}, &CloudflareZoneList{},
 		&CloudflareZoneConfig{}, &CloudflareZoneConfigList{},
 		&CloudflareDNSRecord{}, &CloudflareDNSRecordList{},

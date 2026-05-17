@@ -21,8 +21,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-
-	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 func TestBuildControllerDeployment_ZoneMode(t *testing.T) {
@@ -52,26 +50,6 @@ func TestBuildControllerDeployment_TunnelMode(t *testing.T) {
 	})
 	require.Equal(t, "cloudflare-tunnel-controller", dep.Name)
 	require.Contains(t, dep.Spec.Template.Spec.Containers[0].Args, "--mode=tunnel")
-}
-
-func TestApplyControllerSpec_FillsDefaults(t *testing.T) {
-	defaultImage := "default:1.0"
-	args := ApplyControllerSpec(v2alpha1.ControllerSpec{Enabled: true}, defaultImage)
-	require.Equal(t, defaultImage, args.Image)
-	require.Equal(t, int32(1), args.Replicas)
-	require.Equal(t, "info", args.LogLevel)
-}
-
-func TestApplyControllerSpec_PreservesOverrides(t *testing.T) {
-	args := ApplyControllerSpec(v2alpha1.ControllerSpec{
-		Enabled:  true,
-		Image:    "custom:2",
-		Replicas: 3,
-		LogLevel: "debug",
-	}, "default:1")
-	require.Equal(t, "custom:2", args.Image)
-	require.Equal(t, int32(3), args.Replicas)
-	require.Equal(t, "debug", args.LogLevel)
 }
 
 func TestBuildControllerDeployment_EnvCredentialPassthrough(t *testing.T) {

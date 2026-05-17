@@ -28,7 +28,6 @@ func TestAllTypesRegistered(t *testing.T) {
 	require.NoError(t, AddToScheme(s))
 
 	kinds := []string{
-		"CloudflareOperator",
 		"CloudflareZone",
 		"CloudflareZoneConfig",
 		"CloudflareDNSRecord",
