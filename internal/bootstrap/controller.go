@@ -149,8 +149,6 @@ func (r *Reconciler) reconcileDeployments(ctx context.Context, op *v2alpha1.Clou
 			args.Namespace = r.OperatorNamespace
 			args.MetricsAddress = op.Spec.Observability.MetricsAddress
 			args.HealthAddress = op.Spec.Observability.HealthAddress
-			args.TokenSecretRef = op.Spec.Cloudflare.TokenSecretRef
-			args.AccountID = op.Spec.Cloudflare.AccountID
 			args.LeaderElection = op.Spec.Observability.LeaderElection.Enabled
 			dep := BuildControllerDeployment(args)
 			if err := reconcile.Apply(ctx, r.Client, dep); err != nil {

@@ -110,3 +110,20 @@ func TestParseFlags_VersionFlag(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, opts.Version)
 }
+
+func TestParseFlags_ControllerToggles(t *testing.T) {
+	opts, err := parseFlags([]string{
+		"--mode=meta", "--controllers-zone-enabled=true", "--zone-replicas=3",
+		"--controllers-tunnel-enabled=true", "--tunnel-log-level=debug",
+		"--credentials-secret=cf-token", "--credentials-token-key=apiToken",
+		"--credentials-account-id-key=accountID",
+	})
+	require.NoError(t, err)
+	require.True(t, opts.ZoneEnabled)
+	require.Equal(t, 3, opts.ZoneReplicas)
+	require.True(t, opts.TunnelEnabled)
+	require.Equal(t, "debug", opts.TunnelLogLevel)
+	require.Equal(t, "cf-token", opts.CredentialsSecret)
+	require.Equal(t, "apiToken", opts.CredentialsTokenKey)
+	require.Equal(t, "accountID", opts.CredentialsAccountIDKey)
+}

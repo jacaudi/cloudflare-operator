@@ -76,30 +76,34 @@ func TestApplyControllerSpec_PreservesOverrides(t *testing.T) {
 
 func TestBuildControllerDeployment_EnvCredentialPassthrough(t *testing.T) {
 	dep := BuildControllerDeployment(BuildArgs{
-		Bundle:         "zone",
-		Namespace:      "cf",
-		Image:          "img:1",
-		Replicas:       1,
-		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Key: "token"},
-		AccountID:      "acct-123",
+		Bundle:                  "zone",
+		Namespace:               "cf",
+		Image:                   "img:1",
+		Replicas:                1,
+		CredentialsSecretName:   "cf-token",
+		CredentialsTokenKey:     "apiToken",
+		CredentialsAccountIDKey: "accountID",
 	})
 	env := dep.Spec.Template.Spec.Containers[0].Env
 	var sawAccount, sawToken bool
 	for _, e := range env {
 		if e.Name == "CLOUDFLARE_ACCOUNT_ID" {
-			require.Equal(t, "acct-123", e.Value)
+			require.NotNil(t, e.ValueFrom)
+			require.NotNil(t, e.ValueFrom.SecretKeyRef)
+			require.Equal(t, "cf-token", e.ValueFrom.SecretKeyRef.Name)
+			require.Equal(t, "accountID", e.ValueFrom.SecretKeyRef.Key)
 			sawAccount = true
 		}
 		if e.Name == "CLOUDFLARE_API_TOKEN" {
 			require.NotNil(t, e.ValueFrom)
 			require.NotNil(t, e.ValueFrom.SecretKeyRef)
 			require.Equal(t, "cf-token", e.ValueFrom.SecretKeyRef.Name)
-			require.Equal(t, "token", e.ValueFrom.SecretKeyRef.Key)
+			require.Equal(t, "apiToken", e.ValueFrom.SecretKeyRef.Key)
 			sawToken = true
 		}
 	}
-	require.True(t, sawAccount, "expected CLOUDFLARE_ACCOUNT_ID env var")
-	require.True(t, sawToken, "expected CLOUDFLARE_API_TOKEN env var sourced from secretKeyRef")
+	require.True(t, sawAccount, "expected CLOUDFLARE_ACCOUNT_ID via secretKeyRef")
+	require.True(t, sawToken, "expected CLOUDFLARE_API_TOKEN via secretKeyRef")
 }
 
 func TestBuildControllerDeployment_SecurityContext(t *testing.T) {

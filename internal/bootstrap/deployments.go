@@ -42,12 +42,14 @@ type BuildArgs struct {
 	MetricsAddress string
 	HealthAddress  string
 	LeaderElection bool
-	// Default-credential env passthrough. The bootstrap reconciler fills these
-	// from the top-level CloudflareOperator.spec.cloudflare so controllers have
-	// credentials at startup; per-CR overrides still work at reconcile time via
-	// LoadCredentialsHierarchical.
-	TokenSecretRef v2alpha1.SecretReference // sourced from top-level tokenSecretRef
-	AccountID      string                   // sourced from top-level accountID
+	// Default-credential env passthrough. The meta-operator fills these from
+	// its flags/env (chart-set credential Secret coordinates) so spawned
+	// controllers get CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID via
+	// valueFrom.secretKeyRef; per-CR overrides still work at reconcile time
+	// via LoadCredentialsHierarchical.
+	CredentialsSecretName   string
+	CredentialsTokenKey     string
+	CredentialsAccountIDKey string
 }
 
 // ApplyControllerSpec resolves user-supplied overrides against operator defaults.
@@ -98,25 +100,32 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 	}
 	args = append(args, fmt.Sprintf("--leader-election=%t", a.LeaderElection))
 
-	// Env vars. Controllers read these at startup as the default credentials;
-	// per-CR overrides still work at reconcile time via LoadCredentialsHierarchical.
-	envVars := []corev1.EnvVar{
-		{Name: "CLOUDFLARE_ACCOUNT_ID", Value: a.AccountID},
-	}
-	if a.TokenSecretRef.Name != "" {
-		key := a.TokenSecretRef.Key
-		if key == "" {
-			key = "token"
+	// Env vars. Spawned controllers read these at startup as the default
+	// credentials (both sourced from the chart-set credential Secret via
+	// valueFrom.secretKeyRef — no plaintext in the PodSpec); per-CR overrides
+	// still work at reconcile time via LoadCredentialsHierarchical.
+	var envVars []corev1.EnvVar
+	if a.CredentialsSecretName != "" {
+		tokenKey := a.CredentialsTokenKey
+		if tokenKey == "" {
+			tokenKey = "token"
 		}
-		envVars = append(envVars, corev1.EnvVar{
-			Name: "CLOUDFLARE_API_TOKEN",
-			ValueFrom: &corev1.EnvVarSource{
+		accountKey := a.CredentialsAccountIDKey
+		if accountKey == "" {
+			accountKey = "accountID"
+		}
+		envVars = []corev1.EnvVar{
+			{Name: "CLOUDFLARE_API_TOKEN", ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: a.TokenSecretRef.Name},
-					Key:                  key,
-				},
-			},
-		})
+					LocalObjectReference: corev1.LocalObjectReference{Name: a.CredentialsSecretName},
+					Key:                  tokenKey,
+				}}},
+			{Name: "CLOUDFLARE_ACCOUNT_ID", ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: a.CredentialsSecretName},
+					Key:                  accountKey,
+				}}},
+		}
 	}
 
 	return &appsv1.Deployment{

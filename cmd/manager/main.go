@@ -83,6 +83,17 @@ type Options struct {
 	OperatorNamespace string
 	OperatorImage     string
 	Version           bool
+
+	ZoneEnabled    bool
+	ZoneReplicas   int
+	ZoneLogLevel   string
+	TunnelEnabled  bool
+	TunnelReplicas int
+	TunnelLogLevel string
+
+	CredentialsSecret       string
+	CredentialsTokenKey     string
+	CredentialsAccountIDKey string
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -95,6 +106,15 @@ func parseFlags(args []string) (Options, error) {
 	opNamespace := fs.String("operator-namespace", envOr("OPERATOR_NAMESPACE", "cloudflare-system"), "namespace the operator runs in")
 	opImage := fs.String("operator-image", envOr("OPERATOR_IMAGE", ""), "image used for spawned controller Deployments")
 	versionFlag := fs.Bool("version", false, "print build version and exit")
+	zoneEnabled := fs.Bool("controllers-zone-enabled", false, "run the zone controller bundle")
+	zoneReplicas := fs.Int("zone-replicas", 1, "zone controller Deployment replicas")
+	zoneLogLevel := fs.String("zone-log-level", "info", "zone controller log level")
+	tunnelEnabled := fs.Bool("controllers-tunnel-enabled", false, "run the tunnel controller bundle")
+	tunnelReplicas := fs.Int("tunnel-replicas", 1, "tunnel controller Deployment replicas")
+	tunnelLogLevel := fs.String("tunnel-log-level", "info", "tunnel controller log level")
+	credsSecret := fs.String("credentials-secret", envOr("CLOUDFLARE_CREDENTIALS_SECRET", ""), "credential Secret propagated to spawned controllers")
+	credsTokenKey := fs.String("credentials-token-key", envOr("CLOUDFLARE_CREDENTIALS_TOKEN_KEY", "token"), "key in the credential Secret holding the API token")
+	credsAccountIDKey := fs.String("credentials-account-id-key", envOr("CLOUDFLARE_CREDENTIALS_ACCOUNT_ID_KEY", "accountID"), "key in the credential Secret holding the account ID")
 	if err := fs.Parse(args); err != nil {
 		return Options{}, err
 	}
@@ -119,6 +139,17 @@ func parseFlags(args []string) (Options, error) {
 		OperatorNamespace: *opNamespace,
 		OperatorImage:     *opImage,
 		Version:           *versionFlag,
+
+		ZoneEnabled:    *zoneEnabled,
+		ZoneReplicas:   *zoneReplicas,
+		ZoneLogLevel:   *zoneLogLevel,
+		TunnelEnabled:  *tunnelEnabled,
+		TunnelReplicas: *tunnelReplicas,
+		TunnelLogLevel: *tunnelLogLevel,
+
+		CredentialsSecret:       *credsSecret,
+		CredentialsTokenKey:     *credsTokenKey,
+		CredentialsAccountIDKey: *credsAccountIDKey,
 	}, nil
 }
 
@@ -216,15 +247,35 @@ func startManager(opts Options, scheme *runtime.Scheme, cfg *rest.Config, regist
 	return nil
 }
 
-// runMeta starts the controller-runtime manager with the bootstrap reconciler.
+// runMeta starts the controller-runtime manager with the MetaReconciler,
+// which ensures the zone/tunnel controller Deployments from flags/env config.
 func runMeta(opts Options, scheme *runtime.Scheme) {
 	log := ctrl.Log.WithName(string(opts.Mode))
+	cfg := bootstrap.Config{
+		OperatorNamespace:       opts.OperatorNamespace,
+		OperatorImage:           opts.OperatorImage,
+		MetricsAddress:          opts.MetricsAddress,
+		HealthAddress:           opts.HealthAddress,
+		LeaderElection:          opts.LeaderElection,
+		ZoneEnabled:             opts.ZoneEnabled,
+		ZoneReplicas:            int32(opts.ZoneReplicas), //nolint:gosec // G115: replica count is a small positive value from a CLI flag; int32 overflow is not a practical concern
+		ZoneLogLevel:            opts.ZoneLogLevel,
+		TunnelEnabled:           opts.TunnelEnabled,
+		TunnelReplicas:          int32(opts.TunnelReplicas), //nolint:gosec // G115: replica count is a small positive value from a CLI flag; int32 overflow is not a practical concern
+		TunnelLogLevel:          opts.TunnelLogLevel,
+		CredentialsSecretName:   opts.CredentialsSecret,
+		CredentialsTokenKey:     opts.CredentialsTokenKey,
+		CredentialsAccountIDKey: opts.CredentialsAccountIDKey,
+	}
+	if verr := cfg.Validate(); verr != nil {
+		log.Error(verr, "invalid meta configuration")
+		os.Exit(1)
+	}
 	err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
-		return (&bootstrap.Reconciler{
-			Client:            mgr.GetClient(),
-			Scheme:            mgr.GetScheme(),
-			OperatorNamespace: opts.OperatorNamespace,
-			OperatorImage:     opts.OperatorImage,
+		return (&bootstrap.MetaReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+			Config: cfg,
 		}).SetupWithManager(mgr)
 	})
 	if err != nil {
