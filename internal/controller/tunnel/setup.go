@@ -27,6 +27,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -64,6 +66,25 @@ type Options struct {
 	DefaultConnector v2alpha1.ConnectorSpec
 }
 
+// tlsRouteSupported reports whether the gateway-api TLSRoute kind is served
+// by the cluster (it lives only in the gateway-api EXPERIMENTAL channel).
+// (false, nil) => CRD genuinely absent (degrade gracefully). (false, err)
+// => discovery failed (caller should fail fast rather than silently drop
+// TLSRoute support on a transient blip).
+func tlsRouteSupported(rm meta.RESTMapper) (bool, error) {
+	_, err := rm.RESTMapping(
+		schema.GroupKind{Group: "gateway.networking.k8s.io", Kind: "TLSRoute"},
+		"v1alpha2",
+	)
+	if err == nil {
+		return true, nil
+	}
+	if meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	return false, err
+}
+
 // AddToManager registers all five tunnel-bundle reconcilers with mgr.
 // Caller is responsible for leader-election and signal-handling — the
 // controller-runtime manager wires those.
@@ -98,19 +119,34 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		opts.DefaultConnector.GracePeriodSeconds = 30
 	}
 
-	// Field indexers so gatewayToHTTPRoutes / gatewayToTLSRoutes can List by
-	// parent gateway instead of scanning the cluster-wide route cache. See A1.
+	tlsOK, err := tlsRouteSupported(mgr.GetRESTMapper())
+	if err != nil {
+		return fmt.Errorf("probe TLSRoute CRD support: %w", err)
+	}
+	if !tlsOK {
+		ctrl.Log.WithName("tunnel").Info(
+			"gateway-api TLSRoute CRD absent (experimental channel not installed) — " +
+				"skipping TLSRoute source; HTTPRoute/Service sources unaffected")
+	}
+
+	// Field indexer so gatewayToHTTPRoutes can List HTTPRoutes by parent
+	// gateway instead of scanning the cluster-wide route cache. See A1. The
+	// mirror TLSRoute indexer is registered below, gated on tlsOK.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(), &gwv1.HTTPRoute{}, IndexKeyRouteByGatewayParent,
 		indexHTTPRouteByGatewayParent,
 	); err != nil {
 		return fmt.Errorf("register HTTPRoute parent-gateway index: %w", err)
 	}
-	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &gwv1a2.TLSRoute{}, IndexKeyRouteByGatewayParent,
-		indexTLSRouteByGatewayParent,
-	); err != nil {
-		return fmt.Errorf("register TLSRoute parent-gateway index: %w", err)
+	if tlsOK {
+		// Mirror of the HTTPRoute indexer above so gatewayToTLSRoutes can
+		// List TLSRoutes by parent gateway. See A1.
+		if err := mgr.GetFieldIndexer().IndexField(
+			context.Background(), &gwv1a2.TLSRoute{}, IndexKeyRouteByGatewayParent,
+			indexTLSRouteByGatewayParent,
+		); err != nil {
+			return fmt.Errorf("register TLSRoute parent-gateway index: %w", err)
+		}
 	}
 
 	// Shared cache across the source reconcilers (writers) and the tunnel
@@ -200,19 +236,21 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	//   - TLSRoute (primary)
 	//   - Gateway (annotation/listener change → re-reconcile attached routes)
 	//   - CloudflareTunnel (deferred-emission retrigger)
-	tlsR := &TLSRouteSourceReconciler{
-		Client:   c,
-		Scheme:   scheme,
-		Cache:    cache,
-		Recorder: rec,
-	}
-	if err := ctrl.NewControllerManagedBy(mgr).
-		Named("tlsroute-source").
-		For(&gwv1a2.TLSRoute{}).
-		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr))).
-		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
-		Complete(tlsR); err != nil {
-		return fmt.Errorf("setup TLSRouteSource: %w", err)
+	if tlsOK {
+		tlsR := &TLSRouteSourceReconciler{
+			Client:   c,
+			Scheme:   scheme,
+			Cache:    cache,
+			Recorder: rec,
+		}
+		if err := ctrl.NewControllerManagedBy(mgr).
+			Named("tlsroute-source").
+			For(&gwv1a2.TLSRoute{}).
+			Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr))).
+			Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
+			Complete(tlsR); err != nil {
+			return fmt.Errorf("setup TLSRouteSource: %w", err)
+		}
 	}
 
 	return nil

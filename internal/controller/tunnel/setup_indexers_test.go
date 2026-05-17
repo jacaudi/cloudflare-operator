@@ -17,10 +17,13 @@ limitations under the License.
 package tunnel
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 )
@@ -75,4 +78,36 @@ func TestIndexTLSRouteByGatewayParent_Mirror(t *testing.T) {
 		},
 	}
 	require.Equal(t, []string{"ns-a/gw1"}, indexTLSRouteByGatewayParent(rt))
+}
+
+// boomRESTMapper embeds meta.RESTMapper (so it satisfies the interface) and
+// overrides only RESTMapping to return a non-no-match error, simulating a
+// transient discovery failure.
+type boomRESTMapper struct{ meta.RESTMapper }
+
+func (boomRESTMapper) RESTMapping(schema.GroupKind, ...string) (*meta.RESTMapping, error) {
+	return nil, errors.New("boom")
+}
+
+func TestTLSRouteSupported(t *testing.T) {
+	gk := schema.GroupKind{Group: "gateway.networking.k8s.io", Kind: "TLSRoute"}
+
+	// Case 1: CRD genuinely absent → (false, nil). NewDefaultRESTMapper(nil)
+	// returns a *meta.NoKindMatchError, which IsNoMatchError recognizes.
+	empty := meta.NewDefaultRESTMapper(nil)
+	ok, err := tlsRouteSupported(empty)
+	require.NoError(t, err)
+	require.False(t, ok, "expected (false, nil) when TLSRoute kind absent from RESTMapper")
+
+	// Case 2: CRD present → (true, nil).
+	m := meta.NewDefaultRESTMapper([]schema.GroupVersion{{Group: "gateway.networking.k8s.io", Version: "v1alpha2"}})
+	m.Add(gk.WithVersion("v1alpha2"), meta.RESTScopeNamespace)
+	ok, err = tlsRouteSupported(m)
+	require.NoError(t, err)
+	require.True(t, ok, "expected (true, nil) when TLSRoute kind present in RESTMapper")
+
+	// Case 3: discovery failed with a non-no-match error → (false, non-nil).
+	ok, err = tlsRouteSupported(boomRESTMapper{})
+	require.Error(t, err, "expected discovery error to propagate")
+	require.False(t, ok, "expected false when discovery fails")
 }
