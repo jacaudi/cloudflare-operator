@@ -104,6 +104,9 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	// docs/follow/chart-configured-operator-deferred.md): always use the
 	// plaintext codec. loadCodec(nil) returns the plaintext encoder, and the
 	// read side still auto-detects either form so existing companions work.
+	// The error is discarded deliberately: loadCodec returns (plaintextCodec,
+	// nil) for a nil keyRef before any I/O (see txt_registry.go), so the
+	// nil-ref path is structurally infallible.
 	encoder, _ := loadCodec(ctx, r.Client, nil, rec.Namespace)
 	readCodec := autoDetectingFor(encoder)
 
