@@ -36,7 +36,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	mockcf "github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/tunnel"
@@ -65,7 +65,7 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 
 	sch := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
-	utilruntime.Must(v1alpha1.AddToScheme(sch))
+	utilruntime.Must(v2alpha1.AddToScheme(sch))
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
@@ -98,7 +98,7 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflaretunnel-"+sanitizeTestName(t.Name())).
-		For(&v1alpha1.CloudflareTunnel{}).
+		For(&v2alpha1.CloudflareTunnel{}).
 		Complete(tunnelR))
 
 	// ServiceSource reconciler. The inline Watch on CloudflareTunnel
@@ -109,14 +109,14 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 		Scheme:   sch,
 		Cache:    cache,
 		Recorder: mgr.GetEventRecorderFor("cloudflare-operator-svc-source-test"),
-		DefaultConnector: v1alpha1.ConnectorSpec{
+		DefaultConnector: v2alpha1.ConnectorSpec{
 			Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 		},
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("servicesource-"+sanitizeTestName(t.Name())).
 		For(&corev1.Service{}).
-		Watches(&v1alpha1.CloudflareTunnel{},
+		Watches(&v2alpha1.CloudflareTunnel{},
 			handler.EnqueueRequestsFromMapFunc(tunnelToServicesTestMapFunc(mgr))).
 		Complete(svcR))
 
@@ -143,7 +143,7 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 // Re-implemented inline to keep the envtest self-contained.
 func tunnelToServicesTestMapFunc(mgr ctrl.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		tn, ok := obj.(*v1alpha1.CloudflareTunnel)
+		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
 		if !ok {
 			return nil
 		}
@@ -208,9 +208,9 @@ func TestServiceSourceEnvtest_OptInAutoCreatesTunnelAndDNS(t *testing.T) {
 	// uses spec.zoneRef (per design §14: tunnel-emitted CRs never set
 	// spec.zoneID directly). The CR's admission validation requires one of
 	// zoneID/zoneRef; without zoneRef the DNSRecord create would 422.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -238,13 +238,13 @@ func TestServiceSourceEnvtest_OptInAutoCreatesTunnelAndDNS(t *testing.T) {
 
 	// Auto-created CloudflareTunnel CR with the derived name.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		return f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn) == nil
 	}, 15*time.Second, 250*time.Millisecond, "CloudflareTunnel %q created", expectedTunnel)
 
 	// Wait for tunnel status to populate so the deferred emission can advance.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -253,7 +253,7 @@ func TestServiceSourceEnvtest_OptInAutoCreatesTunnelAndDNS(t *testing.T) {
 
 	// Dog-fooded CloudflareDNSRecord emitted once Status.TunnelCNAME populates.
 	require.Eventually(t, func() bool {
-		var list v1alpha1.CloudflareDNSRecordList
+		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
 			return false
 		}
@@ -295,7 +295,7 @@ func TestServiceSourceEnvtest_NoTunnelName_AttachesToNamespacePool(t *testing.T)
 	require.NoError(t, f.c.Create(ctx, svc))
 
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		return f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedPool}, &tn) == nil
 	}, 15*time.Second, 250*time.Millisecond, "namespace-pool CloudflareTunnel %q created", expectedPool)
 }
@@ -334,7 +334,7 @@ func TestServiceSourceEnvtest_NoTLSVerify_ThreadsIntoIngressEntry(t *testing.T) 
 	// to look up the configuration on the mock).
 	var tunnelID string
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -401,7 +401,7 @@ func TestServiceSourceEnvtest_NameTooLong_RejectedNoTunnelCreated(t *testing.T) 
 	// requeue) so a brief wait is sufficient.
 	time.Sleep(2 * time.Second)
 
-	var list v1alpha1.CloudflareTunnelList
+	var list v2alpha1.CloudflareTunnelList
 	require.NoError(t, f.c.List(ctx, &list, client.InNamespace(f.ns)))
 	require.Empty(t, list.Items, "no CloudflareTunnel CR created when derived name exceeds 52 chars")
 }

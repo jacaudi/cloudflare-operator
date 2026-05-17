@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v2alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -156,7 +156,7 @@ type ObservedTXTPayload struct {
 	// Version is the payload schema version (currently always 1).
 	// +optional
 	Version int `json:"version,omitempty"`
-	// Kind is the encoded owner kind ("CloudflareDNSRecord" in v1alpha1).
+	// Kind is the encoded owner kind ("CloudflareDNSRecord" in v2alpha1).
 	// +optional
 	Kind string `json:"kind,omitempty"`
 	// Namespace is the encoded owner namespace.

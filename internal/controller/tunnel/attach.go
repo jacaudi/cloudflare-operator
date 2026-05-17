@@ -36,7 +36,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
@@ -116,23 +116,23 @@ func EnsureTunnelCR(
 	owner client.Object,
 	ownerKind string,
 	derivedName string,
-	defaults v1alpha1.ConnectorSpec,
-) (*v1alpha1.CloudflareTunnel, error) {
+	defaults v2alpha1.ConnectorSpec,
+) (*v2alpha1.CloudflareTunnel, error) {
 	key := types.NamespacedName{Namespace: owner.GetNamespace(), Name: derivedName}
-	var existing v1alpha1.CloudflareTunnel
+	var existing v2alpha1.CloudflareTunnel
 	if err := c.Get(ctx, key, &existing); err == nil {
 		return &existing, nil
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
 	// Not found — create.
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        derivedName,
 			Namespace:   owner.GetNamespace(),
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      derivedName,
 			Connector: defaults,
 		},
@@ -159,7 +159,7 @@ func EnsureTunnelCR(
 // Strict equality with "true" — any other value (including absent,
 // empty, "yes", "1") returns false. Documented as: only CRs the operator
 // creates itself are eligible for cascade-GC.
-func isAutoCreated(tn *v1alpha1.CloudflareTunnel) bool {
+func isAutoCreated(tn *v2alpha1.CloudflareTunnel) bool {
 	return tn.Annotations[conventions.AnnotationAutoCreated] == "true"
 }
 
@@ -178,7 +178,7 @@ func isAutoCreated(tn *v1alpha1.CloudflareTunnel) bool {
 // With both cascade-GC predicates isAutoCreated-gated, the entire
 // cascade-GC machinery (owner-transfer rebalancing AND self-delete) is
 // inert for direct-create CRs.
-func needsOwnerTransfer(tn *v1alpha1.CloudflareTunnel) bool {
+func needsOwnerTransfer(tn *v2alpha1.CloudflareTunnel) bool {
 	return isAutoCreated(tn) &&
 		len(tn.OwnerReferences) == 0 &&
 		len(tn.Status.AttachedSources) > 0
@@ -192,7 +192,7 @@ func needsOwnerTransfer(tn *v1alpha1.CloudflareTunnel) bool {
 // Direct-create CRs (no AnnotationAutoCreated marker) are NEVER orphaned
 // regardless of OwnerReferences / AttachedSources state — they survive
 // indefinitely without operator-driven removal.
-func isOrphaned(tn *v1alpha1.CloudflareTunnel) bool {
+func isOrphaned(tn *v2alpha1.CloudflareTunnel) bool {
 	return isAutoCreated(tn) &&
 		len(tn.OwnerReferences) == 0 &&
 		len(tn.Status.AttachedSources) == 0
@@ -213,7 +213,7 @@ const transferOwnershipMaxAttempts = 5
 //
 // Returns an error for an unrecognized kind — that is a programming/config
 // error, not a transient one, so callers propagate it rather than skip.
-func getSourceObject(src v1alpha1.AttachedSource) (client.Object, error) {
+func getSourceObject(src v2alpha1.AttachedSource) (client.Object, error) {
 	switch src.Kind {
 	case "Service":
 		return &corev1.Service{}, nil
@@ -264,10 +264,10 @@ func TransferOwnershipIfNeeded(
 	ctx context.Context,
 	c client.Client,
 	scheme *runtime.Scheme,
-	tn *v1alpha1.CloudflareTunnel,
+	tn *v2alpha1.CloudflareTunnel,
 	recorder record.EventRecorder,
 ) (bool, error) {
-	candidates := make([]v1alpha1.AttachedSource, len(tn.Status.AttachedSources))
+	candidates := make([]v2alpha1.AttachedSource, len(tn.Status.AttachedSources))
 	copy(candidates, tn.Status.AttachedSources)
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
@@ -480,7 +480,7 @@ func findTunnelTargetedParentRef(
 	c client.Client,
 	defaultNamespace string,
 	parentRefs []gwv1.ParentReference,
-) (*gwv1.ParentReference, *gwv1.Gateway, *v1alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
+) (*gwv1.ParentReference, *gwv1.Gateway, *v2alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
 	for i := range parentRefs {
 		pr := parentRefs[i]
 		gwNS := defaultNamespace
@@ -499,7 +499,7 @@ func findTunnelTargetedParentRef(
 		if err != nil {
 			continue
 		}
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: derived}, &tn); err != nil {
 			continue
 		}

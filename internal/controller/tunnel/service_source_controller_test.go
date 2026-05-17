@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
@@ -41,23 +41,23 @@ func srcScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
 // preCreatedTunnel returns a CloudflareTunnel with TunnelCNAME populated so
 // the source reconciler can emit a DNSRecord on the first pass without
 // waiting for a Watches-driven retrigger.
-func preCreatedTunnel(name, namespace string) *v1alpha1.CloudflareTunnel {
-	return &v1alpha1.CloudflareTunnel{
+func preCreatedTunnel(name, namespace string) *v2alpha1.CloudflareTunnel {
+	return &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: name,
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 			},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID:    "tun-abc",
 			TunnelCNAME: "tun-abc.cfargotunnel.com",
 		},
@@ -80,24 +80,24 @@ func TestServiceSource_OptInCreatesTunnelAndDNSRecord(t *testing.T) {
 	// reconciler proceeds to emit the DNSRecord on first reconcile.
 	tn := preCreatedTunnel("cf-app-foo-payments", "app-foo")
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
 	require.NoError(t, err)
 
 	// CloudflareTunnel still present in source's namespace.
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app-foo", Name: "cf-app-foo-payments"}, &got))
 
 	// CloudflareDNSRecord emitted, owner-reffed to the Service, source labels stamped.
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1)
 	dr := dnsList.Items[0]
@@ -140,17 +140,17 @@ func TestServiceSource_AutoCreateStampsSourceLabels(t *testing.T) {
 	// NO pre-created tunnel — exercise the auto-create path through
 	// EnsureTunnelCR so the source-labels stamp is observable.
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
 	require.NoError(t, err)
 
-	var tn v1alpha1.CloudflareTunnel
+	var tn v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app-foo", Name: "cf-app-foo-payments"}, &tn))
 	require.Equal(t, "Service", tn.Labels[conventions.LabelSourceKind],
 		"source-kind label must be the literal 'Service', not '' (typed client clears TypeMeta on Get)")
@@ -170,14 +170,14 @@ func TestServiceSource_NoTunnelNameAttachesToNamespacePool(t *testing.T) {
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
 	require.NoError(t, err)
 
-	var tn v1alpha1.CloudflareTunnel
+	var tn v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app-foo", Name: "cf-app-foo"}, &tn))
 }
 
@@ -254,13 +254,13 @@ func TestServiceSource_AnnotationChangeSweepsPriorKey(t *testing.T) {
 	tnA := preCreatedTunnel("cf-ns-payments", "ns")
 	tnB := preCreatedTunnel("cf-ns-billing", "ns")
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svcA, tnA, tnB).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
 	require.NoError(t, err)
@@ -307,7 +307,7 @@ func TestServiceSource_NameTooLong_StatusEventOnly(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
 	require.NoError(t, err, "name-too-long is a stable failure surfaced via event, not an error return")
 
-	var list v1alpha1.CloudflareTunnelList
+	var list v2alpha1.CloudflareTunnelList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items)
 
@@ -334,17 +334,17 @@ func TestServiceSource_MultipleHostnames_EmitsOneRecordEach(t *testing.T) {
 	}
 	tn := preCreatedTunnel("cf-app-foo-payments", "app-foo")
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
 	require.NoError(t, err)
 
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 2)
 
@@ -373,28 +373,28 @@ func TestServiceSource_TunnelCNAMEEmpty_DefersEmission(t *testing.T) {
 		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	// Tunnel CR exists but has no TunnelCNAME.
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-app-foo-payments", Namespace: "app-foo"},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: "cf-app-foo-payments",
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 			},
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
 	require.NoError(t, err)
 
 	// No DNSRecord emitted yet — defer for Watches retrigger.
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Empty(t, dnsList.Items, "must not emit DNSRecord when TunnelCNAME is empty")
 
@@ -418,17 +418,17 @@ func TestServiceSource_ZoneRefAnnotation_ThreadedToDNSRecord(t *testing.T) {
 	}
 	tn := preCreatedTunnel("cf-app-foo-payments", "app-foo")
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(),
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
 	require.NoError(t, err)
 
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1)
 	require.NotNil(t, dnsList.Items[0].Spec.ZoneRef)
@@ -453,12 +453,12 @@ func TestServiceSource_ServiceDeletedSweepsCache(t *testing.T) {
 	}
 	preTun := preCreatedTunnel("cf-ns-payments", "ns")
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 
 	tunKey := tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-payments"}
@@ -501,7 +501,7 @@ func TestServiceSource_InvalidName_StatusEventOnly(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
 	require.NoError(t, err)
 
-	var list v1alpha1.CloudflareTunnelList
+	var list v2alpha1.CloudflareTunnelList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items)
 
@@ -533,12 +533,12 @@ func TestServiceSource_TranslatorWarningsEmitEvents(t *testing.T) {
 	}
 	preTun := preCreatedTunnel("cf-ns-payments", "ns")
 	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(10)
 	r := &ServiceSourceReconciler{
 		Client: c, Scheme: srcScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "svc"}})
 	require.NoError(t, err)

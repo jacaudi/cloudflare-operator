@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
@@ -56,14 +56,14 @@ func TestEnvtest_TunnelDriftDetection(t *testing.T) {
 	// Wait for the first reconcile to populate TunnelID + ObservedIngress —
 	// the populated baseline the drift guard requires before it engages.
 	require.Eventually(t, func() bool {
-		var got v1alpha1.CloudflareTunnel
+		var got v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got); err != nil {
 			return false
 		}
 		return got.Status.TunnelID != "" && len(got.Status.ObservedIngress) > 0
 	}, 15*time.Second, 250*time.Millisecond, "first reconcile populates TunnelID + ObservedIngress")
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got))
 	tunnelID := got.Status.TunnelID
 

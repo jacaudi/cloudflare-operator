@@ -33,7 +33,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
@@ -245,7 +245,7 @@ func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.
 func (r *TLSRouteSourceReconciler) findTunnelTargetedParent(
 	ctx context.Context,
 	rt *gwv1a2.TLSRoute,
-) (*gwv1.ParentReference, *gwv1.Gateway, *v1alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
+) (*gwv1.ParentReference, *gwv1.Gateway, *v2alpha1.CloudflareTunnel, *corev1.Service, int32, error) {
 	return findTunnelTargetedParentRef(ctx, r.Client, rt.Namespace, rt.Spec.ParentRefs)
 }
 

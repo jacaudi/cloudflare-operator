@@ -28,7 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -36,19 +36,19 @@ func haltTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
 func TestHaltDependency_PersistsConditionAndPhase(t *testing.T) {
 	s := haltTestScheme(t)
-	obj := &v1alpha1.CloudflareDNSRecord{
+	obj := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(obj).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 
 	res, err := HaltDependency(
@@ -61,25 +61,25 @@ func TestHaltDependency_PersistsConditionAndPhase(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 15*time.Second, res.RequeueAfter)
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.Len(t, got.Status.Conditions, 1)
 	require.Equal(t, conventions.ConditionTypeReady, got.Status.Conditions[0].Type)
 	require.Equal(t, metav1.ConditionFalse, got.Status.Conditions[0].Status)
 	require.Equal(t, conventions.ReasonDependencyMissing, got.Status.Conditions[0].Reason)
 	require.Equal(t, "zone not ready", got.Status.Conditions[0].Message)
-	require.Equal(t, v1alpha1.PhaseError, got.Status.Phase)
+	require.Equal(t, v2alpha1.PhaseError, got.Status.Phase)
 }
 
 func TestHaltDependency_ZeroRequeueFallsBackToDefault(t *testing.T) {
 	s := haltTestScheme(t)
-	obj := &v1alpha1.CloudflareDNSRecord{
+	obj := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(obj).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 
 	res, err := HaltDependency(

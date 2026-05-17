@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/reconcile"
@@ -74,7 +74,7 @@ type CloudflareRulesetReconciler struct {
 func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("cloudflareruleset", req.NamespacedName)
 
-	var rs v1alpha1.CloudflareRuleset
+	var rs v2alpha1.CloudflareRuleset
 	if err := r.Get(ctx, req.NamespacedName, &rs); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -204,7 +204,7 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 // haltDependency persists a DependencyMissing Ready=False and requeues; used
 // when the referenced CloudflareZone isn't ready yet.
-func (r *CloudflareRulesetReconciler) haltDependency(ctx context.Context, rs *v1alpha1.CloudflareRuleset, msg string) (ctrl.Result, error) {
+func (r *CloudflareRulesetReconciler) haltDependency(ctx context.Context, rs *v2alpha1.CloudflareRuleset, msg string) (ctrl.Result, error) {
 	return reconcile.HaltDependency(ctx, r.Client, rs, &rs.Status.Conditions, &rs.Status.Phase, msg, reconcile.DefaultRequeueAfter)
 }
 
@@ -218,7 +218,7 @@ func (r *CloudflareRulesetReconciler) haltDependency(ctx context.Context, rs *v1
 // Mirroring the normalization here ensures rulesetMatches compares equal and
 // avoids a permanent reconcile loop on explicit-disable inputs. To enable
 // logging, set Enabled=true.
-func specToCloudflareRules(specRules []v1alpha1.RulesetRuleSpec) ([]cloudflare.RulesetRule, error) {
+func specToCloudflareRules(specRules []v2alpha1.RulesetRuleSpec) ([]cloudflare.RulesetRule, error) {
 	rules := make([]cloudflare.RulesetRule, 0, len(specRules))
 	for _, sr := range specRules {
 		rule := cloudflare.RulesetRule{

@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
@@ -68,7 +68,7 @@ type ServiceSourceReconciler struct {
 	Scheme           *runtime.Scheme
 	Cache            *tunnelsynth.Cache
 	Recorder         record.EventRecorder
-	DefaultConnector v1alpha1.ConnectorSpec
+	DefaultConnector v2alpha1.ConnectorSpec
 
 	tracker     *cacheTracker
 	trackerOnce sync.Once
@@ -232,7 +232,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 //
 // Operator-edits-win: a user `kubectl edit` on the emitted CR will be
 // reverted on the next reconcile.
-func (r *ServiceSourceReconciler) emitDNSRecord(ctx context.Context, svc *corev1.Service, hostname string, tn *v1alpha1.CloudflareTunnel) error {
+func (r *ServiceSourceReconciler) emitDNSRecord(ctx context.Context, svc *corev1.Service, hostname string, tn *v2alpha1.CloudflareTunnel) error {
 	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
 		Owner:       svc,
 		OwnerKind:   "Service",

@@ -29,7 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
@@ -43,7 +43,7 @@ func rtScheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
 	require.NoError(t, gwv1.Install(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -77,9 +77,9 @@ func mkGwSvc(name, ns string) *corev1.Service {
 
 func TestHTTPRouteSource_HappyPath(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -96,7 +96,7 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
@@ -113,7 +113,7 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 	require.Equal(t, "http://gw-svc.gw-ns.svc.cluster.local:80", snap[0].Service)
 
 	// DNSRecord CR emitted: CNAME notes.example.com → external.example.com (chain hop).
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Len(t, list.Items, 1)
 	require.Equal(t, "notes.example.com", list.Items[0].Spec.Name)
@@ -137,9 +137,9 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 
 func TestHTTPRouteSource_FilterRejected_PartiallyInvalid(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -151,7 +151,7 @@ func TestHTTPRouteSource_FilterRejected_PartiallyInvalid(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
@@ -172,9 +172,9 @@ func TestHTTPRouteSource_FilterRejected_PartiallyInvalid(t *testing.T) {
 
 func TestHTTPRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	otherGw := &gwv1.Gateway{ // no tunnel annotation
 		ObjectMeta: metav1.ObjectMeta{Name: "other-gw", Namespace: "gw-ns"},
@@ -193,7 +193,7 @@ func TestHTTPRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
@@ -213,9 +213,9 @@ func TestHTTPRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 // owning controller, and we touch only the tunnel-targeted parent's entry.
 func TestHTTPRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	otherGw := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "other-gw", Namespace: "other-ns"},
@@ -247,7 +247,7 @@ func TestHTTPRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
@@ -282,7 +282,7 @@ func TestHTTPRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 // list) but defer DNSRecord emission. Mirrors the same guard in T10/T11.
 func TestHTTPRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
 		// TunnelCNAME deliberately empty — tunnel reconciler hasn't run yet.
 	}
@@ -311,7 +311,7 @@ func TestHTTPRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	// requires deferring DNS emission until the tunnel CR populates its
 	// status (so the per-route chain CNAME isn't created before the apex
 	// CNAME exists). T11 has the same guard.
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items, "DNSRecord emission deferred until tunnel CNAME populates")
 }
@@ -339,7 +339,7 @@ func TestHTTPRouteSource_NoTunnelTargetedParent(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
 
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items)
 
@@ -353,9 +353,9 @@ func TestHTTPRouteSource_NoTunnelTargetedParent(t *testing.T) {
 // previous successful Reconcile wrote.
 func TestHTTPRouteSource_DeleteSweepsCache(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -367,7 +367,7 @@ func TestHTTPRouteSource_DeleteSweepsCache(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
@@ -397,9 +397,9 @@ func ptrNs(s string) *gwv1.Namespace {
 // fan out per-Route, not per-rule.
 func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -417,7 +417,7 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
@@ -438,7 +438,7 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	require.True(t, gotHostnames["c.example.com"])
 
 	// DNSRecord CRs: one CNAME per hostname, all chaining to the Gateway apex.
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Len(t, list.Items, 3, "expected one DNSRecord CR per hostname")
 	gotNames := map[string]string{}
@@ -461,9 +461,9 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 	// First parent: tunnel "edge" → CR "cf-gw-ns-edge".
 	gw1 := mkParentGw("gw1", "gw-ns")
-	tn1 := &v1alpha1.CloudflareTunnel{
+	tn1 := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	// Second parent: distinct tunnel "edge2" → CR "cf-gw-ns-edge2".
 	h2 := gwv1.Hostname("other.example.com")
@@ -480,9 +480,9 @@ func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 			Listeners: []gwv1.Listener{{Name: "h", Hostname: &h2, Port: 80, Protocol: gwv1.HTTPProtocolType}},
 		},
 	}
-	tn2 := &v1alpha1.CloudflareTunnel{
+	tn2 := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge2", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: "tnl-2.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: "tnl-2.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -497,7 +497,7 @@ func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw1, gw2, tn1, tn2, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
@@ -543,7 +543,7 @@ func TestHTTPRouteSource_ParentGatewayNotFound_Skips(t *testing.T) {
 	require.NoError(t, err, "missing parent must NOT fail the reconcile")
 
 	// No CR emitted.
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items)
 
@@ -574,9 +574,9 @@ func TestHTTPRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 			Listeners: []gwv1.Listener{{Name: "h", Hostname: &h, Port: 80, Protocol: gwv1.HTTPProtocolType}},
 		},
 	}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	rt := &gwv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
@@ -602,7 +602,7 @@ func TestHTTPRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 	require.Empty(t, snap)
 
 	// No DNSRecord CR emitted.
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items)
 
@@ -621,9 +621,9 @@ func TestHTTPRouteSource_InheritsAdoptFromGateway(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	gw.Annotations[conventions.AnnotationAdopt] = "true"
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -639,7 +639,7 @@ func TestHTTPRouteSource_InheritsAdoptFromGateway(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
@@ -648,7 +648,7 @@ func TestHTTPRouteSource_InheritsAdoptFromGateway(t *testing.T) {
 
 	// Re-Get the emitted DNSRecord and assert Spec.Adopt reflects the Gateway's annotation.
 	drName := emittedDNSRecordName("r", "notes.example.com")
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: drName}, &got))
 	require.True(t, got.Spec.Adopt, "Spec.Adopt must be true (inherited from parent Gateway)")
 }
@@ -661,9 +661,9 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	gw.Annotations[conventions.AnnotationAdopt] = "true"
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -681,7 +681,7 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
@@ -690,7 +690,7 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 
 	// Re-Get the emitted DNSRecord and assert the route's own annotation wins.
 	drName := emittedDNSRecordName("r", "notes.example.com")
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: drName}, &got))
 	require.False(t, got.Spec.Adopt, "Spec.Adopt must be false (HTTPRoute annotation overrides Gateway)")
 }
@@ -705,9 +705,9 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 // Reason=IncompatibleFilters and message "all rules dropped during translation".
 func TestHTTPRouteSource_NoHostnameReason(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
-		Status:     v1alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1.HTTPRoute{
@@ -726,7 +726,7 @@ func TestHTTPRouteSource_NoHostnameReason(t *testing.T) {
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
-		WithStatusSubresource(&gwv1.HTTPRoute{}, &v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}

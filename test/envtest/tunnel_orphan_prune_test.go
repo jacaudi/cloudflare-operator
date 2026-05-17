@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -57,9 +57,9 @@ func TestEnvtest_OrphanPrune_RemovesDNSRecordWhenHostnameDropped(t *testing.T) {
 
 	// Zone CR — admission requires has(zoneRef); the Service carries zone-ref,
 	// so every emitted DNSRecord inherits it and passes CEL validation.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -88,7 +88,7 @@ func TestEnvtest_OrphanPrune_RemovesDNSRecordWhenHostnameDropped(t *testing.T) {
 	// Wait for the tunnel CR + Status.TunnelCNAME (deferred-emission flow).
 	expectedTunnel := "cf-" + f.ns + "-payments"
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -132,9 +132,9 @@ func TestEnvtest_OrphanPrune_RespectsLabelScope(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -180,7 +180,7 @@ func TestEnvtest_OrphanPrune_RespectsLabelScope(t *testing.T) {
 
 	expectedTunnel := "cf-" + f.ns + "-payments"
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -221,7 +221,7 @@ func TestEnvtest_OrphanPrune_RespectsLabelScope(t *testing.T) {
 // race the finalizer/GC.
 func dnsRecordExists(ctx context.Context, t *testing.T, c client.Client, ns, hostname string) bool {
 	t.Helper()
-	var list v1alpha1.CloudflareDNSRecordList
+	var list v2alpha1.CloudflareDNSRecordList
 	if err := c.List(ctx, &list, client.InNamespace(ns)); err != nil {
 		return false
 	}

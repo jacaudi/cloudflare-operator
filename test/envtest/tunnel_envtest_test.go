@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	mockcf "github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/tunnel"
@@ -73,7 +73,7 @@ func setupTunnelEnv(t *testing.T) *tunnelEnvFixture {
 
 	sch := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
-	utilruntime.Must(v1alpha1.AddToScheme(sch))
+	utilruntime.Must(v2alpha1.AddToScheme(sch))
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
@@ -98,7 +98,7 @@ func setupTunnelEnv(t *testing.T) *tunnelEnvFixture {
 	// gives each test (and sub-test) its own slot.
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflaretunnel-"+t.Name()).
-		For(&v1alpha1.CloudflareTunnel{}).
+		For(&v2alpha1.CloudflareTunnel{}).
 		Complete(tunnelR))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -141,12 +141,12 @@ func uniqueNamespace(t *testing.T) string {
 
 // makeTunnel returns a minimal valid CloudflareTunnel CR with the spec
 // defaults the implementation expects (Replicas=2, Protocol=auto, ...).
-func makeTunnel(name, namespace string) *v1alpha1.CloudflareTunnel {
-	return &v1alpha1.CloudflareTunnel{
+func makeTunnel(name, namespace string) *v2alpha1.CloudflareTunnel {
+	return &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: name,
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas:           2,
 				Protocol:           "auto",
 				LogLevel:           "info",
@@ -172,7 +172,7 @@ func TestTunnelEnvtest_CreatePopulatesStatusAndDataplane(t *testing.T) {
 	require.NoError(t, f.c.Create(ctx, tn))
 
 	require.Eventually(t, func() bool {
-		var got v1alpha1.CloudflareTunnel
+		var got v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got); err != nil {
 			return false
 		}
@@ -212,14 +212,14 @@ func TestTunnelEnvtest_DriftSkipsPut(t *testing.T) {
 	// Wait for the first reconcile to populate TunnelID AND ObservedIngress
 	// (the latter is what enables drift-skip on the second pass).
 	require.Eventually(t, func() bool {
-		var got v1alpha1.CloudflareTunnel
+		var got v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got); err != nil {
 			return false
 		}
 		return got.Status.TunnelID != "" && got.Status.ObservedIngress != nil
 	}, 10*time.Second, 200*time.Millisecond, "first reconcile populates TunnelID + ObservedIngress")
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got))
 	tunnelID := got.Status.TunnelID
 
@@ -231,7 +231,7 @@ func TestTunnelEnvtest_DriftSkipsPut(t *testing.T) {
 	// capture the stable version as the baseline.
 	var baselineVersion int
 	require.Eventually(t, func() bool {
-		var x v1alpha1.CloudflareTunnel
+		var x v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &x); err != nil {
 			return false
 		}
@@ -294,14 +294,14 @@ func TestTunnelEnvtest_FinalizerDrainSequence(t *testing.T) {
 	require.NoError(t, f.c.Create(ctx, tn))
 
 	require.Eventually(t, func() bool {
-		var got v1alpha1.CloudflareTunnel
+		var got v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got); err != nil {
 			return false
 		}
 		return got.Status.TunnelID != ""
 	}, 10*time.Second, 200*time.Millisecond, "tunnel created on Cloudflare side")
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got))
 	tunnelID := got.Status.TunnelID
 
@@ -316,7 +316,7 @@ func TestTunnelEnvtest_FinalizerDrainSequence(t *testing.T) {
 
 	// CR finalizer is dropped only after the full drain succeeds.
 	require.Eventually(t, func() bool {
-		var x v1alpha1.CloudflareTunnel
+		var x v2alpha1.CloudflareTunnel
 		err := f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &x)
 		return apierrors.IsNotFound(err)
 	}, 30*time.Second, 500*time.Millisecond, "CR removed after finalizer drain")

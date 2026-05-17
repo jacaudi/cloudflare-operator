@@ -36,7 +36,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
@@ -61,7 +61,7 @@ type Options struct {
 	// DefaultConnector is the ConnectorSpec seeded into newly-created tunnel
 	// CRs by the source reconcilers. Empty fields fall back to internal
 	// defaults (Replicas=2, Protocol="auto", LogLevel="info", GracePeriod=30s).
-	DefaultConnector v1alpha1.ConnectorSpec
+	DefaultConnector v2alpha1.ConnectorSpec
 }
 
 // AddToManager registers all five tunnel-bundle reconcilers with mgr.
@@ -127,7 +127,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		DefaultImage:   opts.DefaultImage,
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CloudflareTunnel{}).
+		For(&v2alpha1.CloudflareTunnel{}).
 		Complete(tunnelR); err != nil {
 		return fmt.Errorf("setup CloudflareTunnel: %w", err)
 	}
@@ -147,7 +147,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("service-source").
 		For(&corev1.Service{}).
-		Watches(&v1alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToServices(mgr))).
+		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToServices(mgr))).
 		Complete(svcR); err != nil {
 		return fmt.Errorf("setup ServiceSource: %w", err)
 	}
@@ -170,7 +170,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-source").
 		For(&gwv1.Gateway{}).
-		Watches(&v1alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToGateways(mgr))).
+		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToGateways(mgr))).
 		Complete(gwR); err != nil {
 		return fmt.Errorf("setup GatewaySource: %w", err)
 	}
@@ -190,7 +190,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		Named("httproute-source").
 		For(&gwv1.HTTPRoute{}).
 		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutes(mgr))).
-		Watches(&v1alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToHTTPRoutes(mgr))).
+		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToHTTPRoutes(mgr))).
 		Complete(httpR); err != nil {
 		return fmt.Errorf("setup HTTPRouteSource: %w", err)
 	}
@@ -210,7 +210,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		Named("tlsroute-source").
 		For(&gwv1a2.TLSRoute{}).
 		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr))).
-		Watches(&v1alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
+		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
 		Complete(tlsR); err != nil {
 		return fmt.Errorf("setup TLSRouteSource: %w", err)
 	}
@@ -274,7 +274,7 @@ func gatewayToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 // cheap (Services in one namespace).
 func tunnelToServices(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		tn, ok := obj.(*v1alpha1.CloudflareTunnel)
+		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
 		if !ok {
 			return nil
 		}
@@ -298,7 +298,7 @@ func tunnelToServices(mgr manager.Manager) handler.MapFunc {
 // with cloudflare.io/tunnel=true.
 func tunnelToGateways(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		tn, ok := obj.(*v1alpha1.CloudflareTunnel)
+		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
 		if !ok {
 			return nil
 		}
@@ -322,7 +322,7 @@ func tunnelToGateways(mgr manager.Manager) handler.MapFunc {
 // annotated with cloudflare.io/tunnel=true.
 func tunnelToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		tn, ok := obj.(*v1alpha1.CloudflareTunnel)
+		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
 		if !ok {
 			return nil
 		}
@@ -346,7 +346,7 @@ func tunnelToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 // annotated with cloudflare.io/tunnel=true.
 func tunnelToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		tn, ok := obj.(*v1alpha1.CloudflareTunnel)
+		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
 		if !ok {
 			return nil
 		}

@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -48,7 +48,7 @@ import (
 func gcEmulateStripDeadOwner(ctx context.Context, t *testing.T, c client.Client, tnKey client.ObjectKey, deadName string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := c.Get(ctx, tnKey, &tn); err != nil {
 			return false // tunnel not yet visible or already gone
 		}
@@ -93,7 +93,7 @@ func gcEmulateStripDeadOwner(ctx context.Context, t *testing.T, c client.Client,
 // — NOT cloudflare.io/ — because this is a test-only mechanical retriggering
 // device, not an operator annotation (same rationale as
 // gcEmulateStripDeadOwner's strip-tick label).
-func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v1alpha1.CloudflareTunnel) {
+func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v2alpha1.CloudflareTunnel) {
 	if tn.Labels == nil {
 		tn.Labels = map[string]string{}
 	}
@@ -146,9 +146,9 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 	defer cancel()
 
 	// CloudflareZone scaffold — DNSRecord admission CEL requires has(zoneID)||has(zoneRef).
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -162,16 +162,16 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 	tnName := "cf-" + f.ns + "-direct-owns"
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
-	directTunnel := &v1alpha1.CloudflareTunnel{
+	directTunnel := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tnName,
 			Namespace: f.ns,
 			// No cloudflare.io/auto-created annotation — direct-create path.
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: "cf-direct-owns",
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas:           1,
 				Protocol:           "auto",
 				LogLevel:           "info",
@@ -202,7 +202,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 	// Step 3: wait for the Service to attach (appears in AttachedSources)
 	// while the auto-created annotation stays absent (adopt = no backfill).
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false
 		}
@@ -226,7 +226,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 	// gate, the Service is promoted to controller-owner within a few reconciles
 	// and this require.Never trips.
 	require.Never(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false // transient Get error — not the failure condition
 		}
@@ -242,7 +242,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 		"direct-create tunnel must never acquire a controller OwnerReference (needsOwnerTransfer isAutoCreated-gated)")
 
 	// Final state: no owner refs, auto-created annotation still absent.
-	var finalTunnel v1alpha1.CloudflareTunnel
+	var finalTunnel v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, tnKey, &finalTunnel))
 	require.Empty(t, finalTunnel.OwnerReferences,
 		"direct-create tunnel must end with zero OwnerReferences")
@@ -296,9 +296,9 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 	// CloudflareZone — DNSRecord admission CEL requires has(zoneID)||has(zoneRef);
 	// the Services carry cloudflare.io/zone-ref so emitted DNSRecords pass
 	// admission. Spec shape mirrors the sibling orphan-prune envtest verbatim.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -337,7 +337,7 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 	// which one actually became owner — ordering is not guaranteed.
 	var initialOwner string
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tunnelKey, &tn); err != nil {
 			return false
 		}
@@ -376,7 +376,7 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 	// returns NotFound). Conflict-tolerant: a stale ResourceVersion just means
 	// the next poll iteration retries with a fresh Get.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tunnelKey, &tn); err != nil {
 			return false
 		}
@@ -402,7 +402,7 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 
 	// The tunnel must still exist — owner-transfer keeps an auto-created tunnel
 	// alive while >=1 source attaches; it is NOT cascade-GC'd here.
-	var final v1alpha1.CloudflareTunnel
+	var final v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, tunnelKey, &final),
 		"tunnel must persist after owner-transfer (>=1 source still attaches)")
 	require.Len(t, final.OwnerReferences, 1)
@@ -442,9 +442,9 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 
 	// CloudflareZone scaffold — DNSRecord admission CEL requires has(zoneID)||has(zoneRef);
 	// the Service carries cloudflare.io/zone-ref so emitted DNSRecords pass admission.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -475,7 +475,7 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 
 	// Wait for the auto-created tunnel owned by solo-svc.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false
 		}
@@ -501,7 +501,7 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 	// Production stamps LastOrphanedAt on the first orphan observation
 	// (len(OwnerReferences)==0 && len(AttachedSources)==0 && auto-created==true).
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false
 		}
@@ -514,7 +514,7 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 	// DeletionTimestamp on the CR), then reconcileDelete drains via the mock
 	// TunnelClient and drops the finalizer. The CR vanishes entirely.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		err := f.c.Get(ctx, tnKey, &tn)
 		return apierrors.IsNotFound(err)
 	}, 45*time.Second, 250*time.Millisecond,
@@ -556,9 +556,9 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	defer cancel()
 
 	// CloudflareZone scaffold — DNSRecord admission CEL requires has(zoneID)||has(zoneRef).
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -592,7 +592,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false
 		}
@@ -609,7 +609,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	// Step 3: wait for production to stamp LastOrphanedAt (first orphan observation).
 	// Do NOT sleep — capture the stamp time and immediately proceed to step 4.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false
 		}
@@ -627,7 +627,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	// transferred to "second". The tunnel must NOT be NotFound at any point after
 	// "second" is created — the Finally assertion below checks existence too.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			// NotFound here means self-delete beat "second"'s reattach — test fails.
 			return false
@@ -640,7 +640,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	// Step 6 (hardening): assert self-delete does NOT fire for ~6s after "second"
 	// exists — 2× the grace window, ensuring the clear is durable.
 	require.Never(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		err := f.c.Get(ctx, tnKey, &tn)
 		return apierrors.IsNotFound(err)
 	}, 6*time.Second, 250*time.Millisecond,
@@ -702,9 +702,9 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	defer cancel()
 
 	// CloudflareZone scaffold — DNSRecord admission CEL requires has(zoneID)||has(zoneRef).
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -718,7 +718,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	tnName := "cf-" + f.ns + "-direct-tnl"
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
-	directTunnel := &v1alpha1.CloudflareTunnel{
+	directTunnel := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tnName,
 			Namespace: f.ns,
@@ -726,9 +726,9 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 			// path. The operator must not backfill the marker on adopt.
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: "cf-direct",
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas:           1,
 				Protocol:           "auto",
 				LogLevel:           "info",
@@ -759,7 +759,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	// Step 3: wait for the Service to appear in Status.AttachedSources and
 	// verify the adopt path did NOT backfill the auto-created annotation.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return false
 		}
@@ -791,7 +791,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	// window and require.Never trips. Conflict-tolerant: error ignored, next tick
 	// retries with a fresh Get.
 	require.Never(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, tnKey, &tn); err != nil {
 			return apierrors.IsNotFound(err)
 		}
@@ -813,7 +813,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 		"direct-create tunnel must never be auto-GC'd (isAutoCreated gate skips orphan path)")
 
 	// Final state: LastOrphanedAt never stamped; auto-created annotation absent.
-	var finalTunnel v1alpha1.CloudflareTunnel
+	var finalTunnel v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, tnKey, &finalTunnel))
 	require.Nil(t, finalTunnel.Status.LastOrphanedAt,
 		"direct-create tunnel must never have LastOrphanedAt stamped")

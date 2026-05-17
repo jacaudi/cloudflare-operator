@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	mockcf "github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/tunnel"
@@ -63,7 +63,7 @@ func setupHTTPRouteEnv(t *testing.T) *httpRouteEnvFixture {
 
 	sch := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
-	utilruntime.Must(v1alpha1.AddToScheme(sch))
+	utilruntime.Must(v2alpha1.AddToScheme(sch))
 	utilruntime.Must(gwv1.Install(sch))
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
@@ -88,7 +88,7 @@ func setupHTTPRouteEnv(t *testing.T) *httpRouteEnvFixture {
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflaretunnel-"+sanitizeTestName(t.Name())).
-		For(&v1alpha1.CloudflareTunnel{}).
+		For(&v2alpha1.CloudflareTunnel{}).
 		Complete(tunnelR))
 
 	// GatewaySource — so the parent Gateway's tunnel CR is auto-created.
@@ -97,14 +97,14 @@ func setupHTTPRouteEnv(t *testing.T) *httpRouteEnvFixture {
 		Scheme:   sch,
 		Cache:    cache,
 		Recorder: mgr.GetEventRecorderFor("cloudflare-operator-gw-source-rt-test"),
-		DefaultConnector: v1alpha1.ConnectorSpec{
+		DefaultConnector: v2alpha1.ConnectorSpec{
 			Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 		},
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("gatewaysource-"+sanitizeTestName(t.Name())).
 		For(&gwv1.Gateway{}).
-		Watches(&v1alpha1.CloudflareTunnel{},
+		Watches(&v2alpha1.CloudflareTunnel{},
 			handler.EnqueueRequestsFromMapFunc(tunnelToGatewaysTestMapFunc(mgr))).
 		Complete(gwR))
 
@@ -222,7 +222,7 @@ func createGatewayForRouteTest(t *testing.T, f *httpRouteEnvFixture) {
 
 	expectedTunnel := "cf-" + f.ns + "-edge"
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -243,9 +243,9 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 	ctx := context.Background()
 
 	// Zone CR for example.com so the emitted DNSRecord has a valid zoneRef.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -278,7 +278,7 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 
 	// Chain CNAME: notes.example.com → ext.example.com (Spec.Content is *string).
 	require.Eventually(t, func() bool {
-		var list v1alpha1.CloudflareDNSRecordList
+		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
 			return false
 		}
@@ -295,7 +295,7 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 	// HTTPRoute source writes to the cache but does NOT touch the tunnel CR;
 	// production picks up the new contributions on the 30-min requeue or on
 	// the next tunnel-CR event. We trigger one via a no-op annotation update.
-	var tn v1alpha1.CloudflareTunnel
+	var tn v2alpha1.CloudflareTunnel
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: "cf-" + f.ns + "-edge"}, &tn))
 	require.NotEmpty(t, tn.Status.TunnelID)
 	if tn.Annotations == nil {
@@ -334,9 +334,9 @@ func TestHTTPRouteSourceEnvtest_FilterRejected_AcceptedFalse(t *testing.T) {
 	// CNAME per rt.Spec.Hostnames BEFORE writing parent-status, regardless of
 	// whether rules were filter-rejected. Without a valid zoneRef the
 	// DNSRecord create fails and the reconcile errors before writeParentStatus.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",

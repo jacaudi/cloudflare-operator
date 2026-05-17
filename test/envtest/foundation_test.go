@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // TestFoundation_BothBundlesEnabled verifies that when both zone and tunnel
@@ -52,16 +52,16 @@ func TestFoundation_BothBundlesEnabled(t *testing.T) {
 
 	setupSingleton(t)
 
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "cf-token", Namespace: "cloudflare-system", Key: "token"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "cloudflare-system", Key: "token"},
 				AccountID:      "acct-123",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
-				Tunnel: v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+				Tunnel: v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
 			},
 		},
 	}
@@ -69,7 +69,7 @@ func TestFoundation_BothBundlesEnabled(t *testing.T) {
 	t.Cleanup(func() {
 		_ = c.Delete(ctx, op)
 		waitFor(t, 10*time.Second, func() bool {
-			err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &v1alpha1.CloudflareOperator{})
+			err := c.Get(ctx, types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &v2alpha1.CloudflareOperator{})
 			return apierrors.IsNotFound(err)
 		})
 	})
@@ -103,8 +103,8 @@ func TestFoundation_BothBundlesEnabled(t *testing.T) {
 
 	// Operator should be Ready.
 	waitFor(t, 30*time.Second, func() bool {
-		var got v1alpha1.CloudflareOperator
-		if err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &got); err != nil {
+		var got v2alpha1.CloudflareOperator
+		if err := c.Get(ctx, types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &got); err != nil {
 			return false
 		}
 		for _, cond := range got.Status.Conditions {
@@ -128,16 +128,16 @@ func TestFoundation_TunnelDisabled_RemovesDeployment(t *testing.T) {
 
 	setupSingleton(t)
 
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "x"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "x"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
-				Tunnel: v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+				Tunnel: v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
 			},
 		},
 	}
@@ -145,7 +145,7 @@ func TestFoundation_TunnelDisabled_RemovesDeployment(t *testing.T) {
 	t.Cleanup(func() {
 		_ = c.Delete(ctx, op)
 		waitFor(t, 10*time.Second, func() bool {
-			err := c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &v1alpha1.CloudflareOperator{})
+			err := c.Get(ctx, types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &v2alpha1.CloudflareOperator{})
 			return apierrors.IsNotFound(err)
 		})
 	})
@@ -157,8 +157,8 @@ func TestFoundation_TunnelDisabled_RemovesDeployment(t *testing.T) {
 	})
 
 	// Re-Get before update to ensure we have the latest resourceVersion.
-	var current v1alpha1.CloudflareOperator
-	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &current))
+	var current v2alpha1.CloudflareOperator
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &current))
 	current.Spec.Controllers.Tunnel.Enabled = false
 	require.NoError(t, c.Update(ctx, &current))
 
@@ -185,16 +185,16 @@ func TestFoundation_TunnelWithoutZoneRejected(t *testing.T) {
 
 	setupSingleton(t)
 
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "x"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "x"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: false},
-				Tunnel: v1alpha1.ControllerSpec{Enabled: true},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: false},
+				Tunnel: v2alpha1.ControllerSpec{Enabled: true},
 			},
 		},
 	}
@@ -209,15 +209,15 @@ func TestFoundation_NonSingletonNameIgnored(t *testing.T) {
 	ctx := context.Background()
 	c := sharedClient
 
-	op := &v1alpha1.CloudflareOperator{
+	op := &v2alpha1.CloudflareOperator{
 		ObjectMeta: metav1.ObjectMeta{Name: "other"},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "x"},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "x"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone: v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone: v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
 			},
 		},
 	}
@@ -225,7 +225,7 @@ func TestFoundation_NonSingletonNameIgnored(t *testing.T) {
 	t.Cleanup(func() { _ = c.Delete(ctx, op) })
 
 	waitFor(t, 15*time.Second, func() bool {
-		var got v1alpha1.CloudflareOperator
+		var got v2alpha1.CloudflareOperator
 		if err := c.Get(ctx, types.NamespacedName{Name: "other"}, &got); err != nil {
 			return false
 		}

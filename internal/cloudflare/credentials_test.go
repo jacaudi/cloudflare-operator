@@ -26,14 +26,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 func newFakeClient(t *testing.T, objs ...runtime.Object) *fake.ClientBuilder {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
-	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, v2alpha1.AddToScheme(scheme))
 	return fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...)
 }
 
@@ -44,8 +44,8 @@ func TestResolveCredentials_HappyPath(t *testing.T) {
 	}
 	c := newFakeClient(t, secret).Build()
 
-	ref := v1alpha1.CloudflareCredentialRef{
-		TokenSecretRef: v1alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
 		AccountID:      "acct-123",
 	}
 	creds, err := ResolveCredentials(context.Background(), c, ref, "default")
@@ -56,8 +56,8 @@ func TestResolveCredentials_HappyPath(t *testing.T) {
 
 func TestResolveCredentials_MissingSecret(t *testing.T) {
 	c := newFakeClient(t).Build()
-	ref := v1alpha1.CloudflareCredentialRef{
-		TokenSecretRef: v1alpha1.SecretReference{Name: "missing", Namespace: "default", Key: "token"},
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "missing", Namespace: "default", Key: "token"},
 		AccountID:      "acct-123",
 	}
 	_, err := ResolveCredentials(context.Background(), c, ref, "default")
@@ -71,8 +71,8 @@ func TestResolveCredentials_MissingKey(t *testing.T) {
 		Data:       map[string][]byte{"other": []byte("x")},
 	}
 	c := newFakeClient(t, secret).Build()
-	ref := v1alpha1.CloudflareCredentialRef{
-		TokenSecretRef: v1alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
 		AccountID:      "acct-123",
 	}
 	_, err := ResolveCredentials(context.Background(), c, ref, "default")
@@ -86,8 +86,8 @@ func TestResolveCredentials_DefaultsNamespace(t *testing.T) {
 		Data:       map[string][]byte{"token": []byte("token-xyz")},
 	}
 	c := newFakeClient(t, secret).Build()
-	ref := v1alpha1.CloudflareCredentialRef{
-		TokenSecretRef: v1alpha1.SecretReference{Name: "cf-token", Key: "token"}, // Namespace empty
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Key: "token"}, // Namespace empty
 		AccountID:      "acct-123",
 	}
 	creds, err := ResolveCredentials(context.Background(), c, ref, "media")
@@ -101,8 +101,8 @@ func TestResolveCredentials_MissingAccountID(t *testing.T) {
 		Data:       map[string][]byte{"token": []byte("abc")},
 	}
 	c := newFakeClient(t, secret).Build()
-	ref := v1alpha1.CloudflareCredentialRef{
-		TokenSecretRef: v1alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
 		AccountID:      "",
 	}
 	_, err := ResolveCredentials(context.Background(), c, ref, "default")

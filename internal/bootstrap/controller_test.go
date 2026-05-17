@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 )
@@ -42,42 +42,42 @@ import (
 func newBootstrapScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	require.NoError(t, appsv1.AddToScheme(s))
 	require.NoError(t, apiextv1.AddToScheme(s))
 	return s
 }
 
 func TestReconcile_RejectsNonClusterName(t *testing.T) {
-	op := &v1alpha1.CloudflareOperator{ObjectMeta: metav1.ObjectMeta{Name: "other"}}
+	op := &v2alpha1.CloudflareOperator{ObjectMeta: metav1.ObjectMeta{Name: "other"}}
 	s := newBootstrapScheme(t)
 	base := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(op).
-		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
+		WithStatusSubresource(&v2alpha1.CloudflareOperator{}).
 		Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "other"}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareOperator
+	var got v2alpha1.CloudflareOperator
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "other"}, &got))
 	require.Len(t, got.Status.Conditions, 1)
 	require.Equal(t, conventions.ReasonIgnored, got.Status.Conditions[0].Reason)
 }
 
 func TestReconcile_BothBundlesEnabled_CreatesAll(t *testing.T) {
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "t"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "t"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
-				Tunnel: v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+				Tunnel: v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
 			},
 		},
 	}
@@ -85,11 +85,11 @@ func TestReconcile_BothBundlesEnabled_CreatesAll(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(op).
-		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
+		WithStatusSubresource(&v2alpha1.CloudflareOperator{}).
 		Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
-	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}})
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}})
 	require.NoError(t, err)
 	require.Equal(t, ctrl.Result{}, res)
 
@@ -107,16 +107,16 @@ func TestReconcile_TunnelDisabled_DeletesTunnelDeployment(t *testing.T) {
 	existing := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "cloudflare-tunnel-controller", Namespace: "cf"},
 	}
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "t"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "t"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
-				Tunnel: v1alpha1.ControllerSpec{Enabled: false},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+				Tunnel: v2alpha1.ControllerSpec{Enabled: false},
 			},
 		},
 	}
@@ -124,11 +124,11 @@ func TestReconcile_TunnelDisabled_DeletesTunnelDeployment(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(op, existing).
-		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
+		WithStatusSubresource(&v2alpha1.CloudflareOperator{}).
 		Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
-	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}})
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}})
 	require.NoError(t, err)
 
 	var dep appsv1.Deployment
@@ -172,16 +172,16 @@ func TestBundleMembership_MatchesBundleKinds(t *testing.T) {
 // SubResourceUpdate hook that counts the call then delegates to the real update
 // so reconcile continues to completion.
 func TestReconcile_NoStatusUpdateWhenUnchanged(t *testing.T) {
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "t"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "t"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
-				Tunnel: v1alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
+				Tunnel: v2alpha1.ControllerSpec{Enabled: true, Replicas: 1},
 			},
 		},
 	}
@@ -189,7 +189,7 @@ func TestReconcile_NoStatusUpdateWhenUnchanged(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(op).
-		WithStatusSubresource(&v1alpha1.CloudflareOperator{}).
+		WithStatusSubresource(&v2alpha1.CloudflareOperator{}).
 		Build()
 	ssa := reconcilelib.SSATranslatingClient(t, base)
 
@@ -202,7 +202,7 @@ func TestReconcile_NoStatusUpdateWhenUnchanged(t *testing.T) {
 	})
 
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
-	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}}
 
 	// Pass 1: status goes from empty → populated; the Status().Update is expected.
 	_, err := r.Reconcile(context.Background(), req)
@@ -219,19 +219,19 @@ func TestReconcile_NoStatusUpdateWhenUnchanged(t *testing.T) {
 }
 
 func TestReconcile_StaleCRSweep_OnDisable(t *testing.T) {
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "z1", Namespace: "media"},
 	}
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "t"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "t"},
 				AccountID:      "acct",
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone:   v1alpha1.ControllerSpec{Enabled: false}, // already disabled — triggers sweep
-				Tunnel: v1alpha1.ControllerSpec{Enabled: false},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone:   v2alpha1.ControllerSpec{Enabled: false}, // already disabled — triggers sweep
+				Tunnel: v2alpha1.ControllerSpec{Enabled: false},
 			},
 		},
 	}
@@ -240,16 +240,16 @@ func TestReconcile_StaleCRSweep_OnDisable(t *testing.T) {
 		WithScheme(s).
 		WithObjects(op, zone).
 		WithStatusSubresource(
-			&v1alpha1.CloudflareOperator{},
-			&v1alpha1.CloudflareZone{},
+			&v2alpha1.CloudflareOperator{},
+			&v2alpha1.CloudflareZone{},
 		).
 		Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &Reconciler{Client: c, Scheme: s, OperatorNamespace: "cf", OperatorImage: "img:1"}
-	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}})
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareZone
+	var got v2alpha1.CloudflareZone
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "z1", Namespace: "media"}, &got))
 	var sawOffline bool
 	for _, cond := range got.Status.Conditions {

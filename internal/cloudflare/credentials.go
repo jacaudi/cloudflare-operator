@@ -24,7 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // Credentials are the resolved token + account pair used to talk to Cloudflare.
@@ -44,7 +44,7 @@ type Credentials struct {
 func ResolveCredentials(
 	ctx context.Context,
 	c client.Client,
-	ref v1alpha1.CloudflareCredentialRef,
+	ref v2alpha1.CloudflareCredentialRef,
 	defaultNamespace string,
 ) (Credentials, error) {
 	if ref.TokenSecretRef.IsEmpty() {

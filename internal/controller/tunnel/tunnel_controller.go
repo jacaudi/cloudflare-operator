@@ -37,7 +37,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	cloudflare "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
@@ -119,7 +119,7 @@ func (r *CloudflareTunnelReconciler) gracePeriod() time.Duration {
 func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("cloudflaretunnel", req.NamespacedName)
 
-	var tn v1alpha1.CloudflareTunnel
+	var tn v2alpha1.CloudflareTunnel
 	if err := r.Get(ctx, req.NamespacedName, &tn); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -288,7 +288,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 // Steps 3 + 4 route through reconcilelib.WrapDeleteErr so a Cloudflare 404
 // (already-deleted state) collapses to nil rather than stranding the
 // finalizer.
-func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v1alpha1.CloudflareTunnel) (ctrl.Result, error) {
+func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v2alpha1.CloudflareTunnel) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// 1+2. Scale Deployment to 0, wait for Pods gone.
@@ -373,7 +373,7 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v1
 // reconciler's flow.
 func (r *CloudflareTunnelReconciler) ensureTunnel(
 	ctx context.Context,
-	tn *v1alpha1.CloudflareTunnel,
+	tn *v2alpha1.CloudflareTunnel,
 	tc cloudflare.TunnelClient,
 	accountID string,
 ) error {
@@ -415,7 +415,7 @@ func (r *CloudflareTunnelReconciler) ensureTunnel(
 // rotation).
 func (r *CloudflareTunnelReconciler) ensureTokenSecret(
 	ctx context.Context,
-	tn *v1alpha1.CloudflareTunnel,
+	tn *v2alpha1.CloudflareTunnel,
 	tc cloudflare.TunnelClient,
 	accountID string,
 ) error {
@@ -444,7 +444,7 @@ func (r *CloudflareTunnelReconciler) ensureTokenSecret(
 // ensureDataplane SSAs the cloudflared Deployment + metrics Service. All
 // owner-reffed to the tunnel so cascade delete cleans them up if the
 // finalizer drain is short-circuited.
-func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v1alpha1.CloudflareTunnel) error {
+func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v2alpha1.CloudflareTunnel) error {
 	dep := BuildDeployment(tn, r.resolvedDefaultImage())
 	if err := reconcilelib.SetControllerOwner(tn, dep, r.Scheme); err != nil {
 		return err
@@ -466,7 +466,7 @@ func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v1
 // Cloudflare has no merge semantics on /configurations.
 func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	ctx context.Context,
-	tn *v1alpha1.CloudflareTunnel,
+	tn *v2alpha1.CloudflareTunnel,
 	tc cloudflare.TunnelClient,
 	accountID string,
 ) error {
@@ -601,10 +601,10 @@ func (r *CloudflareTunnelReconciler) fetchSource(ctx context.Context, src tunnel
 
 // snapshotFromConfig converts a cf.TunnelConfig into the status-side
 // IngressEntrySnapshot list used for drift detection.
-func snapshotFromConfig(cfg cloudflare.TunnelConfig) []v1alpha1.IngressEntrySnapshot {
-	out := make([]v1alpha1.IngressEntrySnapshot, 0, len(cfg.Ingress))
+func snapshotFromConfig(cfg cloudflare.TunnelConfig) []v2alpha1.IngressEntrySnapshot {
+	out := make([]v2alpha1.IngressEntrySnapshot, 0, len(cfg.Ingress))
 	for _, e := range cfg.Ingress {
-		out = append(out, v1alpha1.IngressEntrySnapshot{Hostname: e.Hostname, Path: e.Path, Service: e.Service})
+		out = append(out, v2alpha1.IngressEntrySnapshot{Hostname: e.Hostname, Path: e.Path, Service: e.Service})
 	}
 	return out
 }
@@ -614,7 +614,7 @@ func snapshotFromConfig(cfg cloudflare.TunnelConfig) []v1alpha1.IngressEntrySnap
 // effort and must not block the reconcile.
 func (r *CloudflareTunnelReconciler) observeConnectors(
 	ctx context.Context,
-	tn *v1alpha1.CloudflareTunnel,
+	tn *v2alpha1.CloudflareTunnel,
 	tc cloudflare.TunnelClient,
 	accountID string,
 ) {
@@ -634,11 +634,11 @@ func (r *CloudflareTunnelReconciler) observeConnectors(
 // observeAttachedSources mirrors the in-memory cache's source list into
 // status.attachedSources. Sorted by Cache.AttachedSources (which returns in
 // insertion order); for determinism we sort here.
-func (r *CloudflareTunnelReconciler) observeAttachedSources(tn *v1alpha1.CloudflareTunnel) {
+func (r *CloudflareTunnelReconciler) observeAttachedSources(tn *v2alpha1.CloudflareTunnel) {
 	srcs := r.Cache.AttachedSources(tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name})
-	out := make([]v1alpha1.AttachedSource, 0, len(srcs))
+	out := make([]v2alpha1.AttachedSource, 0, len(srcs))
 	for _, s := range srcs {
-		out = append(out, v1alpha1.AttachedSource{Kind: s.Kind, Name: s.Name, Namespace: s.Namespace})
+		out = append(out, v2alpha1.AttachedSource{Kind: s.Kind, Name: s.Name, Namespace: s.Namespace})
 	}
 	tn.Status.AttachedSources = out
 }
@@ -653,7 +653,7 @@ func (r *CloudflareTunnelReconciler) observeAttachedSources(tn *v1alpha1.Cloudfl
 //   - at least one connector connected (ConnectionsHealthy > 0),
 //   - remote-config applied (set by the rollup whenever the preceding gates
 //     hold or the dataplane / connector gates are the only obstacle).
-func (r *CloudflareTunnelReconciler) rollupStatus(tn *v1alpha1.CloudflareTunnel, depAvailable bool) {
+func (r *CloudflareTunnelReconciler) rollupStatus(tn *v2alpha1.CloudflareTunnel, depAvailable bool) {
 	switch {
 	case tn.Status.TunnelID == "":
 		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions,
@@ -689,7 +689,7 @@ func (r *CloudflareTunnelReconciler) rollupStatus(tn *v1alpha1.CloudflareTunnel,
 // false when the Deployment doesn't exist yet, hasn't reported a status, or
 // the Get fails — a transient client error must not flip Ready in either
 // direction; the next reconcile re-checks.
-func (r *CloudflareTunnelReconciler) isDeploymentAvailable(ctx context.Context, tn *v1alpha1.CloudflareTunnel) bool {
+func (r *CloudflareTunnelReconciler) isDeploymentAvailable(ctx context.Context, tn *v2alpha1.CloudflareTunnel) bool {
 	var dep appsv1.Deployment
 	key := types.NamespacedName{Name: dataplaneName(tn), Namespace: tn.Namespace}
 	if err := r.Get(ctx, key, &dep); err != nil {
@@ -719,7 +719,7 @@ func readyFromConditions(conds []metav1.Condition) (metav1.ConditionStatus, stri
 // loop requeues. Defensive — the main flow's helpers normally only mutate
 // in-memory and let the outer Status().Update persist, but on early-exit
 // errors we want the failure reason visible to operators immediately.
-func (r *CloudflareTunnelReconciler) failStatus(ctx context.Context, tn *v1alpha1.CloudflareTunnel, reason string, err error) error {
+func (r *CloudflareTunnelReconciler) failStatus(ctx context.Context, tn *v2alpha1.CloudflareTunnel, reason string, err error) error {
 	tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse, reason, err.Error())
 	tn.Status.Phase = reconcilelib.DerivePhase(metav1.ConditionFalse, reason)
 	_ = r.Status().Update(ctx, tn)

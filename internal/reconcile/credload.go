@@ -24,7 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
@@ -39,7 +39,7 @@ import (
 func LoadCredentials(
 	ctx context.Context,
 	c client.Client,
-	ref v1alpha1.CloudflareCredentialRef,
+	ref v2alpha1.CloudflareCredentialRef,
 	defaultNamespace string,
 ) (cloudflare.Credentials, *ctrl.Result, error) {
 	creds, err := cloudflare.ResolveCredentials(ctx, c, ref, defaultNamespace)
@@ -85,7 +85,7 @@ func EnvCredentials() (cloudflare.Credentials, bool) {
 func LoadCredentialsHierarchical(
 	ctx context.Context,
 	c client.Client,
-	crRef *v1alpha1.CloudflareCredentialRef,
+	crRef *v2alpha1.CloudflareCredentialRef,
 	defaultNamespace string,
 ) (cloudflare.Credentials, *ctrl.Result, error) {
 	if crRef != nil && !crRef.TokenSecretRef.IsEmpty() {

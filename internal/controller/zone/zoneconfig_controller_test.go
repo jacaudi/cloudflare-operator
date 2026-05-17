@@ -28,7 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -41,22 +41,22 @@ func TestZoneConfig_AllSixGroupsApply(t *testing.T) {
 	ipv6 := "on"
 	cname := "flatten_at_root"
 	enableJS := true
-	cfg := &v1alpha1.CloudflareZoneConfig{
+	cfg := &v2alpha1.CloudflareZoneConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
-		Spec: v1alpha1.CloudflareZoneConfigSpec{
+		Spec: v2alpha1.CloudflareZoneConfigSpec{
 			ZoneID:        "z1",
-			SSL:           &v1alpha1.SSLSettings{Mode: &mode},
-			Security:      &v1alpha1.SecuritySettings{SecurityLevel: &level},
-			Performance:   &v1alpha1.PerformanceSettings{CacheLevel: &cache},
-			Network:       &v1alpha1.NetworkSettings{IPv6: &ipv6},
-			DNS:           &v1alpha1.DNSSettings{CNAMEFlattening: &cname},
-			BotManagement: &v1alpha1.BotManagementSettings{EnableJS: &enableJS},
+			SSL:           &v2alpha1.SSLSettings{Mode: &mode},
+			Security:      &v2alpha1.SecuritySettings{SecurityLevel: &level},
+			Performance:   &v2alpha1.PerformanceSettings{CacheLevel: &cache},
+			Network:       &v2alpha1.NetworkSettings{IPv6: &ipv6},
+			DNS:           &v2alpha1.DNSSettings{CNAMEFlattening: &cname},
+			BotManagement: &v2alpha1.BotManagementSettings{EnableJS: &enableJS},
 		},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v1alpha1.CloudflareZoneConfig{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v2alpha1.CloudflareZoneConfig{}).Build()
 	m := mock.New()
 	r := &CloudflareZoneConfigReconciler{
 		Client: c, Scheme: s,
@@ -68,7 +68,7 @@ func TestZoneConfig_AllSixGroupsApply(t *testing.T) {
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "cfg", Namespace: "default"}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareZoneConfig
+	var got v2alpha1.CloudflareZoneConfig
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "cfg", Namespace: "default"}, &got))
 
 	conds := condMap(got.Status.Conditions)
@@ -79,20 +79,20 @@ func TestZoneConfig_AllSixGroupsApply(t *testing.T) {
 	require.Equal(t, metav1.ConditionTrue, conds[conventions.ConditionTypeDNSApplied])
 	require.Equal(t, metav1.ConditionTrue, conds[conventions.ConditionTypeBotManagementApplied])
 	require.NotEmpty(t, got.Status.AppliedSpecHash)
-	require.Equal(t, v1alpha1.PhaseReady, got.Status.Phase)
+	require.Equal(t, v2alpha1.PhaseReady, got.Status.Phase)
 	require.Len(t, conds, 7, "six groups + Ready")
 }
 
 func TestZoneConfig_FastSkipOnUnchangedHash(t *testing.T) {
 	mode := "strict"
-	cfg := &v1alpha1.CloudflareZoneConfig{
+	cfg := &v2alpha1.CloudflareZoneConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
-		Spec:       v1alpha1.CloudflareZoneConfigSpec{ZoneID: "z1", SSL: &v1alpha1.SSLSettings{Mode: &mode}},
+		Spec:       v2alpha1.CloudflareZoneConfigSpec{ZoneID: "z1", SSL: &v2alpha1.SSLSettings{Mode: &mode}},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v1alpha1.CloudflareZoneConfig{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v2alpha1.CloudflareZoneConfig{}).Build()
 	m := mock.New()
 	r := &CloudflareZoneConfigReconciler{Client: c, Scheme: s,
 		ZoneConfigClientFn: func(_ cloudflare.Credentials) (cloudflare.ZoneConfigClient, error) { return m.ZoneConfig, nil },
@@ -114,14 +114,14 @@ func TestZoneConfig_FastSkipOnUnchangedHash(t *testing.T) {
 
 func TestZoneConfig_FastSkipSkipsClientConstruction(t *testing.T) {
 	mode := "strict"
-	cfg := &v1alpha1.CloudflareZoneConfig{
+	cfg := &v2alpha1.CloudflareZoneConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
-		Spec:       v1alpha1.CloudflareZoneConfigSpec{ZoneID: "z1", SSL: &v1alpha1.SSLSettings{Mode: &mode}},
+		Spec:       v2alpha1.CloudflareZoneConfigSpec{ZoneID: "z1", SSL: &v2alpha1.SSLSettings{Mode: &mode}},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v1alpha1.CloudflareZoneConfig{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).WithStatusSubresource(&v2alpha1.CloudflareZoneConfig{}).Build()
 
 	// Converge to Ready state so AppliedSpecHash is set.
 	m := mock.New()
@@ -170,14 +170,14 @@ func TestApplyAllGroups_FansOutConcurrently(t *testing.T) {
 	dnsCNAME := "flatten_at_root"
 	botEnableJS := true
 
-	cfg := &v1alpha1.CloudflareZoneConfig{
-		Spec: v1alpha1.CloudflareZoneConfigSpec{
-			SSL:           &v1alpha1.SSLSettings{Mode: &sslMode},
-			Security:      &v1alpha1.SecuritySettings{SecurityLevel: &secLevel},
-			Performance:   &v1alpha1.PerformanceSettings{CacheLevel: &perfCache},
-			Network:       &v1alpha1.NetworkSettings{IPv6: &netIPv6},
-			DNS:           &v1alpha1.DNSSettings{CNAMEFlattening: &dnsCNAME},
-			BotManagement: &v1alpha1.BotManagementSettings{EnableJS: &botEnableJS},
+	cfg := &v2alpha1.CloudflareZoneConfig{
+		Spec: v2alpha1.CloudflareZoneConfigSpec{
+			SSL:           &v2alpha1.SSLSettings{Mode: &sslMode},
+			Security:      &v2alpha1.SecuritySettings{SecurityLevel: &secLevel},
+			Performance:   &v2alpha1.PerformanceSettings{CacheLevel: &perfCache},
+			Network:       &v2alpha1.NetworkSettings{IPv6: &netIPv6},
+			DNS:           &v2alpha1.DNSSettings{CNAMEFlattening: &dnsCNAME},
+			BotManagement: &v2alpha1.BotManagementSettings{EnableJS: &botEnableJS},
 		},
 	}
 

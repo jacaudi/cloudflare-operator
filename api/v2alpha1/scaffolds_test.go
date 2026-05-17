@@ -14,13 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v2alpha1
 
 import "testing"
 
 // TestDomainCRDTypesExist verifies the five domain CRD types compile cleanly.
 // Scheme registration is exercised in T4 once controller-gen has produced
-// DeepCopyObject methods and api/v1alpha1/register.go is in place.
+// DeepCopyObject methods and api/v2alpha1/register.go is in place.
 func TestDomainCRDTypesExist(t *testing.T) {
 	var (
 		_ CloudflareZone

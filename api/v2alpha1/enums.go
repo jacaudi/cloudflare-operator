@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v2alpha1
 
 // DNS record type constants (mirrors the kubebuilder enum on CloudflareDNSRecordSpec.Type).
 const (

@@ -34,7 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/reconcile"
 )
@@ -50,7 +50,7 @@ type Reconciler struct {
 // SetupWithManager registers the reconciler with the manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CloudflareOperator{}).
+		For(&v2alpha1.CloudflareOperator{}).
 		Owns(&apiextv1.CustomResourceDefinition{}).
 		Owns(&appsv1.Deployment{}).
 		Complete(r)
@@ -60,12 +60,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("op", req.Name)
 
-	var op v1alpha1.CloudflareOperator
+	var op v2alpha1.CloudflareOperator
 	if err := r.Client.Get(ctx, req.NamespacedName, &op); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if op.Name != v1alpha1.CloudflareOperatorSingletonName {
+	if op.Name != v2alpha1.CloudflareOperatorSingletonName {
 		return r.markIgnored(ctx, &op)
 	}
 
@@ -98,7 +98,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 // reconcileCRDs SSAs the CRDs for enabled bundles and reports the list of
 // installed CRD names.
-func (r *Reconciler) reconcileCRDs(ctx context.Context, op *v1alpha1.CloudflareOperator, logger logr.Logger) ([]string, error) {
+func (r *Reconciler) reconcileCRDs(ctx context.Context, op *v2alpha1.CloudflareOperator, logger logr.Logger) ([]string, error) {
 	var wanted []Bundle
 	if op.Spec.Controllers.Zone.Enabled {
 		wanted = append(wanted, BundleZone)
@@ -130,11 +130,11 @@ func (r *Reconciler) reconcileCRDs(ctx context.Context, op *v1alpha1.CloudflareO
 
 // reconcileDeployments SSAs the controller Deployment for each enabled bundle
 // and deletes the Deployment + sweeps stale CRs for each disabled bundle.
-func (r *Reconciler) reconcileDeployments(ctx context.Context, op *v1alpha1.CloudflareOperator, logger logr.Logger) ([]string, error) {
+func (r *Reconciler) reconcileDeployments(ctx context.Context, op *v2alpha1.CloudflareOperator, logger logr.Logger) ([]string, error) {
 	type bundlePlan struct {
 		bundle  Bundle
 		enabled bool
-		spec    v1alpha1.ControllerSpec
+		spec    v2alpha1.ControllerSpec
 	}
 	plans := []bundlePlan{
 		{bundle: BundleZone, enabled: op.Spec.Controllers.Zone.Enabled, spec: op.Spec.Controllers.Zone},
@@ -217,7 +217,7 @@ func (r *Reconciler) sweepStaleCRs(ctx context.Context, bundle Bundle, logger lo
 
 // bundleKinds returns the GroupVersionKinds belonging to each bundle.
 func bundleKinds(b Bundle) []schema.GroupVersionKind {
-	gv := schema.GroupVersion{Group: "cloudflare.io", Version: "v1alpha1"}
+	gv := schema.GroupVersion{Group: "cloudflare.io", Version: "v2alpha1"}
 	switch b {
 	case BundleZone:
 		return []schema.GroupVersionKind{
@@ -246,9 +246,9 @@ func upsertOfflineCondition(conds []interface{}) []interface{} {
 }
 
 // markIgnored stamps an Ignored condition on non-singleton CRs.
-func (r *Reconciler) markIgnored(ctx context.Context, op *v1alpha1.CloudflareOperator) (ctrl.Result, error) {
+func (r *Reconciler) markIgnored(ctx context.Context, op *v2alpha1.CloudflareOperator) (ctrl.Result, error) {
 	op.Status.Conditions = reconcile.SetReady(op.Status.Conditions, metav1.ConditionFalse, conventions.ReasonIgnored,
-		fmt.Sprintf("only the singleton CR named %q is reconciled", v1alpha1.CloudflareOperatorSingletonName))
+		fmt.Sprintf("only the singleton CR named %q is reconciled", v2alpha1.CloudflareOperatorSingletonName))
 	op.Status.ObservedGeneration = op.Generation
 	if err := r.Client.Status().Update(ctx, op); err != nil {
 		return ctrl.Result{}, err
@@ -257,7 +257,7 @@ func (r *Reconciler) markIgnored(ctx context.Context, op *v1alpha1.CloudflareOpe
 }
 
 // markFailure stamps Ready=False with reason+msg and returns the FailReconcile result.
-func (r *Reconciler) markFailure(ctx context.Context, op *v1alpha1.CloudflareOperator, reason, msg string) (ctrl.Result, error) {
+func (r *Reconciler) markFailure(ctx context.Context, op *v2alpha1.CloudflareOperator, reason, msg string) (ctrl.Result, error) {
 	op.Status.Conditions = reconcile.SetReady(op.Status.Conditions, metav1.ConditionFalse, reason, msg)
 	op.Status.ObservedGeneration = op.Generation
 	if err := r.Client.Status().Update(ctx, op); err != nil {

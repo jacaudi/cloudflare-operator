@@ -24,7 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // Sentinel errors.
@@ -38,7 +38,7 @@ var (
 // enforces it defensively.
 type ZoneRefInputs struct {
 	ZoneID  string
-	ZoneRef *v1alpha1.ZoneReference
+	ZoneRef *v2alpha1.ZoneReference
 }
 
 // ZoneRefResult is the resolved zone identity. ZoneObject is set only when
@@ -46,7 +46,7 @@ type ZoneRefInputs struct {
 type ZoneRefResult struct {
 	ZoneID     string
 	ZoneName   string
-	ZoneObject *v1alpha1.CloudflareZone
+	ZoneObject *v2alpha1.CloudflareZone
 }
 
 // ResolveZoneID converts ZoneRefInputs to (zoneID, zoneName).
@@ -82,7 +82,7 @@ func ResolveZoneID(ctx context.Context, c client.Client, in ZoneRefInputs, defau
 	if ns == "" {
 		ns = defaultNamespace
 	}
-	var zone v1alpha1.CloudflareZone
+	var zone v2alpha1.CloudflareZone
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: in.ZoneRef.Name}, &zone); err != nil {
 		if client.IgnoreNotFound(err) == nil {
 			return ZoneRefResult{}, fmt.Errorf("%w: %s/%s", ErrZoneRefNotFound, ns, in.ZoneRef.Name)
@@ -102,6 +102,6 @@ func ResolveZoneID(ctx context.Context, c client.Client, in ZoneRefInputs, defau
 // zoneStatusID returns the Cloudflare zone ID recorded by the CloudflareZone
 // reconciler in status. An empty string means the reconciler has not yet
 // populated status; callers should treat that as a requeue signal.
-func zoneStatusID(z *v1alpha1.CloudflareZone) string {
+func zoneStatusID(z *v2alpha1.CloudflareZone) string {
 	return z.Status.ZoneID
 }

@@ -24,7 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -45,7 +45,7 @@ func HaltDependency(
 	c client.Client,
 	obj client.Object,
 	conds *[]metav1.Condition,
-	phase *v1alpha1.Phase,
+	phase *v2alpha1.Phase,
 	msg string,
 	requeueAfter time.Duration,
 ) (ctrl.Result, error) {
@@ -75,7 +75,7 @@ func HaltCredentialsUnavailable(
 	c client.Client,
 	obj client.Object,
 	conds *[]metav1.Condition,
-	phase *v1alpha1.Phase,
+	phase *v2alpha1.Phase,
 	halt *ctrl.Result,
 ) (ctrl.Result, error) {
 	*conds = SetReady(*conds, metav1.ConditionFalse,

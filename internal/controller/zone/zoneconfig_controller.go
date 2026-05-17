@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/reconcile"
@@ -72,7 +72,7 @@ type CloudflareZoneConfigReconciler struct {
 func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("cloudflarezoneconfig", req.NamespacedName)
 
-	var cfg v1alpha1.CloudflareZoneConfig
+	var cfg v2alpha1.CloudflareZoneConfig
 	if err := r.Get(ctx, req.NamespacedName, &cfg); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -135,7 +135,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// itself changes. Exit BEFORE constructing the Cloudflare client
 	// (pre-flight contract: no client construction on the fast-skip path).
 	desiredHash := hashZoneConfigSpec(&cfg.Spec)
-	if cfg.Status.AppliedSpecHash == desiredHash && cfg.Status.Phase == v1alpha1.PhaseReady {
+	if cfg.Status.AppliedSpecHash == desiredHash && cfg.Status.Phase == v2alpha1.PhaseReady {
 		logger.V(1).Info("zoneconfig spec unchanged, fast-skip", "hash", desiredHash)
 		return ctrl.Result{RequeueAfter: interval}, nil
 	}
@@ -203,7 +203,7 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 // haltDependency persists a DependencyMissing Ready=False with the given
 // message and requeues after a short interval. Used when zone resolution
 // can't proceed because the referenced CloudflareZone isn't ready yet.
-func (r *CloudflareZoneConfigReconciler) haltDependency(ctx context.Context, cfg *v1alpha1.CloudflareZoneConfig, msg string) (ctrl.Result, error) {
+func (r *CloudflareZoneConfigReconciler) haltDependency(ctx context.Context, cfg *v2alpha1.CloudflareZoneConfig, msg string) (ctrl.Result, error) {
 	return reconcile.HaltDependency(ctx, r.Client, cfg, &cfg.Status.Conditions, &cfg.Status.Phase, msg, 30*time.Second)
 }
 
@@ -247,7 +247,7 @@ func (g groupResult) message() string {
 }
 
 // settingUpdate is a single (id, value) pair fed to UpdateSetting. The
-// appendX helpers convert typed v1alpha1 structs to a flat list, using the
+// appendX helpers convert typed v2alpha1 structs to a flat list, using the
 // exact Cloudflare zone-settings setting IDs.
 type settingUpdate struct {
 	id    string
@@ -261,7 +261,7 @@ func appendIfSet[T any](u []settingUpdate, id string, v *T) []settingUpdate {
 	return append(u, settingUpdate{id, *v})
 }
 
-func appendSSL(u []settingUpdate, s *v1alpha1.SSLSettings) []settingUpdate {
+func appendSSL(u []settingUpdate, s *v2alpha1.SSLSettings) []settingUpdate {
 	if s == nil {
 		return u
 	}
@@ -283,7 +283,7 @@ func putIfSet[T any](m map[string]any, k string, v *T) {
 	}
 }
 
-func appendSecurity(u []settingUpdate, s *v1alpha1.SecuritySettings) []settingUpdate {
+func appendSecurity(u []settingUpdate, s *v2alpha1.SecuritySettings) []settingUpdate {
 	if s == nil {
 		return u
 	}
@@ -308,7 +308,7 @@ func appendSecurity(u []settingUpdate, s *v1alpha1.SecuritySettings) []settingUp
 	return u
 }
 
-func appendPerformance(u []settingUpdate, p *v1alpha1.PerformanceSettings) []settingUpdate {
+func appendPerformance(u []settingUpdate, p *v2alpha1.PerformanceSettings) []settingUpdate {
 	if p == nil {
 		return u
 	}
@@ -333,7 +333,7 @@ func appendPerformance(u []settingUpdate, p *v1alpha1.PerformanceSettings) []set
 	return u
 }
 
-func appendNetwork(u []settingUpdate, n *v1alpha1.NetworkSettings) []settingUpdate {
+func appendNetwork(u []settingUpdate, n *v2alpha1.NetworkSettings) []settingUpdate {
 	if n == nil {
 		return u
 	}
@@ -345,7 +345,7 @@ func appendNetwork(u []settingUpdate, n *v1alpha1.NetworkSettings) []settingUpda
 	return u
 }
 
-func appendDNS(u []settingUpdate, d *v1alpha1.DNSSettings) []settingUpdate {
+func appendDNS(u []settingUpdate, d *v2alpha1.DNSSettings) []settingUpdate {
 	if d == nil {
 		return u
 	}
@@ -389,7 +389,7 @@ func applySettingsGroup[T any](
 // The cloudflare-go SDK absorbs 429s with Retry-After honoring up to its
 // configured MaxRetries (capped to 3 in NewClient), so the fan-out is
 // rate-limit-safe at scale.
-func applyAllGroups(ctx context.Context, zcc cloudflare.ZoneConfigClient, zoneID string, cfg *v1alpha1.CloudflareZoneConfig) []groupResult {
+func applyAllGroups(ctx context.Context, zcc cloudflare.ZoneConfigClient, zoneID string, cfg *v2alpha1.CloudflareZoneConfig) []groupResult {
 	var ssl, sec, perf, net, dns, bot groupResult
 	var g errgroup.Group
 	// Each closure writes to a distinct outer-scoped groupResult; g.Wait
@@ -406,30 +406,30 @@ func applyAllGroups(ctx context.Context, zcc cloudflare.ZoneConfigClient, zoneID
 	return []groupResult{ssl, sec, perf, net, dns, bot}
 }
 
-func applySSLGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.SSLSettings) groupResult {
+func applySSLGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v2alpha1.SSLSettings) groupResult {
 	return applySettingsGroup(ctx, c, zoneID, conventions.ConditionTypeSSLApplied, "SSL", conventions.ReasonSSLApplied, s, appendSSL)
 }
 
-func applySecurityGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.SecuritySettings) groupResult {
+func applySecurityGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v2alpha1.SecuritySettings) groupResult {
 	return applySettingsGroup(ctx, c, zoneID, conventions.ConditionTypeSecurityApplied, "Security", conventions.ReasonSecurityApplied, s, appendSecurity)
 }
 
-func applyPerformanceGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.PerformanceSettings) groupResult {
+func applyPerformanceGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v2alpha1.PerformanceSettings) groupResult {
 	return applySettingsGroup(ctx, c, zoneID, conventions.ConditionTypePerformanceApplied, "Performance", conventions.ReasonPerformanceApplied, s, appendPerformance)
 }
 
-func applyNetworkGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.NetworkSettings) groupResult {
+func applyNetworkGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v2alpha1.NetworkSettings) groupResult {
 	return applySettingsGroup(ctx, c, zoneID, conventions.ConditionTypeNetworkApplied, "Network", conventions.ReasonNetworkApplied, s, appendNetwork)
 }
 
-func applyDNSGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.DNSSettings) groupResult {
+func applyDNSGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v2alpha1.DNSSettings) groupResult {
 	return applySettingsGroup(ctx, c, zoneID, conventions.ConditionTypeDNSApplied, "DNS", conventions.ReasonDNSApplied, s, appendDNS)
 }
 
 // applyBotManagementGroup uses the dedicated /bot_management endpoint rather
 // than UpdateSetting. A plan-tier 403 surfaces as ErrPlanTierInsufficient
 // from the underlying client and is classified by groupResult.reason().
-func applyBotManagementGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v1alpha1.BotManagementSettings) groupResult {
+func applyBotManagementGroup(ctx context.Context, c cloudflare.ZoneConfigClient, zoneID string, s *v2alpha1.BotManagementSettings) groupResult {
 	g := groupResult{
 		conditionType: conventions.ConditionTypeBotManagementApplied,
 		groupLabel:    "BotManagement",
@@ -492,14 +492,14 @@ func (r *CloudflareZoneConfigReconciler) emitGroupTransitionEvents(
 // hashZoneConfigSpec returns a sha256 hex digest over the settings-relevant
 // spec fields. Operational fields (Interval, Cloudflare, ZoneID/Ref) are
 // excluded so changing them doesn't spuriously re-apply settings.
-func hashZoneConfigSpec(spec *v1alpha1.CloudflareZoneConfigSpec) string {
+func hashZoneConfigSpec(spec *v2alpha1.CloudflareZoneConfigSpec) string {
 	payload := struct {
-		SSL           *v1alpha1.SSLSettings           `json:"ssl,omitempty"`
-		Security      *v1alpha1.SecuritySettings      `json:"security,omitempty"`
-		Performance   *v1alpha1.PerformanceSettings   `json:"performance,omitempty"`
-		Network       *v1alpha1.NetworkSettings       `json:"network,omitempty"`
-		DNS           *v1alpha1.DNSSettings           `json:"dns,omitempty"`
-		BotManagement *v1alpha1.BotManagementSettings `json:"botManagement,omitempty"`
+		SSL           *v2alpha1.SSLSettings           `json:"ssl,omitempty"`
+		Security      *v2alpha1.SecuritySettings      `json:"security,omitempty"`
+		Performance   *v2alpha1.PerformanceSettings   `json:"performance,omitempty"`
+		Network       *v2alpha1.NetworkSettings       `json:"network,omitempty"`
+		DNS           *v2alpha1.DNSSettings           `json:"dns,omitempty"`
+		BotManagement *v2alpha1.BotManagementSettings `json:"botManagement,omitempty"`
 	}{spec.SSL, spec.Security, spec.Performance, spec.Network, spec.DNS, spec.BotManagement}
 
 	data, err := json.Marshal(payload)

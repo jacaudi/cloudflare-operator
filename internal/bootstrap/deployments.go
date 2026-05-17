@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // BuildArgs is the resolved input set for a single controller Deployment.
@@ -46,7 +46,7 @@ type BuildArgs struct {
 	// from the top-level CloudflareOperator.spec.cloudflare so controllers have
 	// credentials at startup; per-CR overrides still work at reconcile time via
 	// LoadCredentialsHierarchical.
-	TokenSecretRef v1alpha1.SecretReference // sourced from top-level tokenSecretRef
+	TokenSecretRef v2alpha1.SecretReference // sourced from top-level tokenSecretRef
 	AccountID      string                   // sourced from top-level accountID
 }
 
@@ -57,7 +57,7 @@ type BuildArgs struct {
 // who want to scale a bundle to zero set Enabled: false (which fully
 // deprovisions the controller Deployment); Replicas: 0 with Enabled: true
 // is not a supported configuration.
-func ApplyControllerSpec(spec v1alpha1.ControllerSpec, defaultImage string) BuildArgs {
+func ApplyControllerSpec(spec v2alpha1.ControllerSpec, defaultImage string) BuildArgs {
 	img := spec.Image
 	if img == "" {
 		img = defaultImage

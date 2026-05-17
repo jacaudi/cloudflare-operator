@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/reconcile"
@@ -79,7 +79,7 @@ type CloudflareZoneReconciler struct {
 func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("cloudflarezone", req.NamespacedName)
 
-	var z v1alpha1.CloudflareZone
+	var z v2alpha1.CloudflareZone
 	if err := r.Get(ctx, req.NamespacedName, &z); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -154,12 +154,12 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	reflectZoneStatus(&z, got, now)
 
 	switch got.Status {
-	case v1alpha1.ZoneStatusActive:
+	case v2alpha1.ZoneStatusActive:
 		z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
 			conventions.ConditionTypeReady, metav1.ConditionTrue,
 			conventions.ReasonZoneActivated, "zone is active")
-		z.Status.Phase = v1alpha1.PhaseReady
-	case v1alpha1.ZoneStatusPending, v1alpha1.ZoneStatusInitializing:
+		z.Status.Phase = v2alpha1.PhaseReady
+	case v2alpha1.ZoneStatusPending, v2alpha1.ZoneStatusInitializing:
 		// Pending / initializing path:
 		//
 		// Cloudflare's TriggerActivationCheck is documented as asynchronous —
@@ -189,22 +189,22 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		} else if gerr != nil {
 			logger.V(1).Info("activation refresh GetZone failed", "err", gerr.Error())
 		}
-		if z.Status.Status == v1alpha1.ZoneStatusActive {
+		if z.Status.Status == v2alpha1.ZoneStatusActive {
 			z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
 				conventions.ConditionTypeReady, metav1.ConditionTrue,
 				conventions.ReasonZoneActivated, "zone is active")
-			z.Status.Phase = v1alpha1.PhaseReady
+			z.Status.Phase = v2alpha1.PhaseReady
 		} else {
 			z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
 				conventions.ConditionTypeReady, metav1.ConditionFalse,
 				conventions.ReasonZoneActivating, "awaiting NS delegation")
-			z.Status.Phase = v1alpha1.PhaseReconciling
+			z.Status.Phase = v2alpha1.PhaseReconciling
 		}
 	default:
 		z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
 			conventions.ConditionTypeReady, metav1.ConditionUnknown,
 			conventions.ReasonReconciling, "zone status: "+got.Status)
-		z.Status.Phase = v1alpha1.PhasePending
+		z.Status.Phase = v2alpha1.PhasePending
 	}
 
 	candidate := z.Status.DeepCopy()
@@ -228,10 +228,10 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // reconcileDelete handles the deletion path: optionally remove the zone on
 // Cloudflare (DeletionPolicyDelete), then drop the finalizer. The CR is
 // already deletion-marked so no status update is attempted.
-func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v1alpha1.CloudflareZone) (ctrl.Result, error) {
+func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v2alpha1.CloudflareZone) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	if z.Status.ZoneID != "" && z.Spec.DeletionPolicy == v1alpha1.DeletionPolicyDelete {
+	if z.Status.ZoneID != "" && z.Spec.DeletionPolicy == v2alpha1.DeletionPolicyDelete {
 		creds, halt, err := reconcile.LoadCredentialsHierarchical(ctx, r.Client, z.Spec.Cloudflare, z.Namespace)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -293,7 +293,7 @@ func (r *CloudflareZoneReconciler) drainZoneHold(ctx context.Context, creds clou
 // Passing the `now` timestamp in (rather than calling metav1.Now() inside)
 // keeps LastSyncedAt consistent across multiple reflect calls within the same
 // reconcile pass.
-func reflectZoneStatus(z *v1alpha1.CloudflareZone, observed *cloudflare.Zone, now metav1.Time) {
+func reflectZoneStatus(z *v2alpha1.CloudflareZone, observed *cloudflare.Zone, now metav1.Time) {
 	z.Status.Status = observed.Status
 	z.Status.NameServers = observed.NameServers
 	z.Status.OriginalNameServers = observed.OriginalNameServers

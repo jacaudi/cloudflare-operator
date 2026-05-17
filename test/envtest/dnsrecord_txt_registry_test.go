@@ -48,7 +48,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/zone"
@@ -85,7 +85,7 @@ func newTxtRegistryHarness(t *testing.T) (context.Context, *mock.Mock, client.Cl
 
 	sch := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
-	utilruntime.Must(v1alpha1.AddToScheme(sch))
+	utilruntime.Must(v2alpha1.AddToScheme(sch))
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
@@ -106,7 +106,7 @@ func newTxtRegistryHarness(t *testing.T) (context.Context, *mock.Mock, client.Cl
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflarezone-"+slug).
-		For(&v1alpha1.CloudflareZone{}).
+		For(&v2alpha1.CloudflareZone{}).
 		Complete(zoneR))
 
 	// ZoneConfig reconciler: wired but not exercised in these tests.
@@ -119,7 +119,7 @@ func newTxtRegistryHarness(t *testing.T) (context.Context, *mock.Mock, client.Cl
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflarezoneconfig-"+slug).
-		For(&v1alpha1.CloudflareZoneConfig{}).
+		For(&v2alpha1.CloudflareZoneConfig{}).
 		Complete(zcR))
 
 	// DNS reconciler: the CUT for all TXT registry scenarios.
@@ -133,7 +133,7 @@ func newTxtRegistryHarness(t *testing.T) (context.Context, *mock.Mock, client.Cl
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflarednsrecord-"+slug).
-		For(&v1alpha1.CloudflareDNSRecord{}).
+		For(&v2alpha1.CloudflareDNSRecord{}).
 		Complete(dnsR))
 
 	// Ruleset reconciler: wired for schema completeness.
@@ -146,7 +146,7 @@ func newTxtRegistryHarness(t *testing.T) (context.Context, *mock.Mock, client.Cl
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflareruleset-"+slug).
-		For(&v1alpha1.CloudflareRuleset{}).
+		For(&v2alpha1.CloudflareRuleset{}).
 		Complete(rsR))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -166,9 +166,9 @@ func newTxtRegistryHarness(t *testing.T) (context.Context, *mock.Mock, client.Cl
 // CloudflareDNSRecord.Spec.ZoneID directly. Uses the test's context and client.
 func scaffoldZoneMgr(t *testing.T, ctx context.Context, c client.Client, crName, namespace string) string {
 	t.Helper()
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: crName, Namespace: namespace},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           crName + ".example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -179,7 +179,7 @@ func scaffoldZoneMgr(t *testing.T, ctx context.Context, c client.Client, crName,
 
 	var zoneID string
 	require.Eventually(t, func() bool {
-		var got v1alpha1.CloudflareZone
+		var got v2alpha1.CloudflareZone
 		if err := c.Get(ctx, types.NamespacedName{Name: crName, Namespace: namespace}, &got); err != nil {
 			return false
 		}
@@ -196,20 +196,20 @@ func scaffoldZoneMgr(t *testing.T, ctx context.Context, c client.Client, crName,
 // scaffoldOperatorSingleton creates the CloudflareOperator "cluster" CR. Calls
 // setupSingleton (from helpers_test.go) first to evict any leftover CR from a
 // prior test. keyRef may be nil (plaintext mode).
-func scaffoldOperatorSingleton(t *testing.T, ctx context.Context, c client.Client, keyRef *v1alpha1.SecretReference) {
+func scaffoldOperatorSingleton(t *testing.T, ctx context.Context, c client.Client, keyRef *v2alpha1.SecretReference) {
 	t.Helper()
 	setupSingleton(t)
 
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef:          v1alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef:          v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
 				AccountID:               "acct-txt",
 				TxtRegistryKeySecretRef: keyRef,
 			},
-			Controllers: v1alpha1.ControllersSpec{
-				Zone: v1alpha1.ControllerSpec{Enabled: false},
+			Controllers: v2alpha1.ControllersSpec{
+				Zone: v2alpha1.ControllerSpec{Enabled: false},
 			},
 		},
 	}
@@ -217,9 +217,9 @@ func scaffoldOperatorSingleton(t *testing.T, ctx context.Context, c client.Clien
 	t.Cleanup(func() {
 		_ = c.Delete(context.Background(), op)
 		waitFor(t, 10*time.Second, func() bool {
-			var got v1alpha1.CloudflareOperator
+			var got v2alpha1.CloudflareOperator
 			err := sharedClient.Get(context.Background(),
-				types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &got)
+				types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &got)
 			return err != nil
 		})
 	})
@@ -228,7 +228,7 @@ func scaffoldOperatorSingleton(t *testing.T, ctx context.Context, c client.Clien
 // dnsRecordReadyReason reads the Ready condition Reason from the apiserver.
 // Returns "" when the CR cannot be fetched or has no Ready condition yet.
 func dnsRecordReadyReason(ctx context.Context, c client.Client, name, namespace string) string {
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &got); err != nil {
 		return ""
 	}
@@ -266,15 +266,15 @@ func TestEnvtest_TxtRegistry_FullAdoptCycle(t *testing.T) {
 
 	// Phase 1: Adopt:true with no TXT → AdoptRefusedNoTXT.
 	content := "192.0.2.50"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "txtr-full-adopt-rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "migrate.txtr.example.com",
 			Type:    "A",
 			Content: &content,
 			ZoneID:  zoneID,
 			Adopt:   true,
-			Mode:    v1alpha1.RecordModeManaged,
+			Mode:    v2alpha1.RecordModeManaged,
 		},
 	}
 	require.NoError(t, c.Create(ctx, rec))
@@ -284,7 +284,7 @@ func TestEnvtest_TxtRegistry_FullAdoptCycle(t *testing.T) {
 		return dnsRecordReadyReason(ctx, c, "txtr-full-adopt-rec", "default") == conventions.ReasonAdoptRefusedNoTXT
 	}, 15*time.Second, 200*time.Millisecond, "Phase 1: AdoptRefusedNoTXT condition set")
 
-	var gotRec v1alpha1.CloudflareDNSRecord
+	var gotRec v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-full-adopt-rec", Namespace: "default"}, &gotRec))
 	require.Empty(t, gotRec.Status.RecordID, "RecordID must be empty when adoption refused (no TXT)")
 	require.Equal(t, createsBefore, m.Calls("DNS.CreateRecord"),
@@ -292,7 +292,7 @@ func TestEnvtest_TxtRegistry_FullAdoptCycle(t *testing.T) {
 
 	// Phase 2: Switch to Observe mode → reads state, zero mutations.
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-full-adopt-rec", Namespace: "default"}, &gotRec))
-	gotRec.Spec.Mode = v1alpha1.RecordModeObserve
+	gotRec.Spec.Mode = v2alpha1.RecordModeObserve
 	require.NoError(t, c.Update(ctx, &gotRec))
 
 	createsBefore2 := m.Calls("DNS.CreateRecord")
@@ -321,11 +321,11 @@ func TestEnvtest_TxtRegistry_FullAdoptCycle(t *testing.T) {
 
 	// Switch back to Managed+Adopt — adoption must succeed.
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-full-adopt-rec", Namespace: "default"}, &gotRec))
-	gotRec.Spec.Mode = v1alpha1.RecordModeManaged
+	gotRec.Spec.Mode = v2alpha1.RecordModeManaged
 	require.NoError(t, c.Update(ctx, &gotRec))
 
 	require.Eventually(t, func() bool {
-		var r v1alpha1.CloudflareDNSRecord
+		var r v2alpha1.CloudflareDNSRecord
 		if err2 := c.Get(ctx, types.NamespacedName{Name: "txtr-full-adopt-rec", Namespace: "default"}, &r); err2 != nil {
 			return false
 		}
@@ -367,15 +367,15 @@ func TestEnvtest_TxtRegistry_ForeignAdoptionRefused(t *testing.T) {
 	require.NoError(t, err)
 
 	recContent := "192.0.2.60"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "txtr-foreign-rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "foreign.txtr.example.com",
 			Type:    "A",
 			Content: &recContent,
 			ZoneID:  zoneID,
 			Adopt:   true,
-			Mode:    v1alpha1.RecordModeManaged,
+			Mode:    v2alpha1.RecordModeManaged,
 		},
 	}
 	require.NoError(t, c.Create(ctx, rec))
@@ -385,7 +385,7 @@ func TestEnvtest_TxtRegistry_ForeignAdoptionRefused(t *testing.T) {
 		return dnsRecordReadyReason(ctx, c, "txtr-foreign-rec", "default") == conventions.ReasonAdoptRefusedForeign
 	}, 15*time.Second, 200*time.Millisecond, "AdoptRefusedForeign condition set")
 
-	var gotRec v1alpha1.CloudflareDNSRecord
+	var gotRec v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-foreign-rec", Namespace: "default"}, &gotRec))
 	require.Empty(t, gotRec.Status.RecordID, "RecordID must remain empty after foreign-adoption refusal")
 
@@ -430,14 +430,14 @@ func TestEnvtest_TxtRegistry_ObserveMode_HappyPath(t *testing.T) {
 	deletesBefore := m.Calls("DNS.DeleteRecord")
 
 	recContent := "192.0.2.70"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "txtr-observe-happy-rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "obs.txtr.example.com",
 			Type:    "A",
 			Content: &recContent,
 			ZoneID:  zoneID,
-			Mode:    v1alpha1.RecordModeObserve,
+			Mode:    v2alpha1.RecordModeObserve,
 		},
 	}
 	require.NoError(t, c.Create(ctx, rec))
@@ -447,7 +447,7 @@ func TestEnvtest_TxtRegistry_ObserveMode_HappyPath(t *testing.T) {
 		return dnsRecordReadyReason(ctx, c, "txtr-observe-happy-rec", "default") == conventions.ReasonObserving
 	}, 15*time.Second, 200*time.Millisecond, "Observing condition set")
 
-	var gotRec v1alpha1.CloudflareDNSRecord
+	var gotRec v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-observe-happy-rec", Namespace: "default"}, &gotRec))
 
 	// CurrentContent must reflect CF state.
@@ -495,14 +495,14 @@ func TestEnvtest_TxtRegistry_ObserveToManagedTransition(t *testing.T) {
 	require.NoError(t, err)
 
 	recContent := "192.0.2.80"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "txtr-obs-to-mgd-rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "transition.txtr.example.com",
 			Type:    "A",
 			Content: &recContent,
 			ZoneID:  zoneID,
-			Mode:    v1alpha1.RecordModeObserve,
+			Mode:    v2alpha1.RecordModeObserve,
 			Adopt:   true, // no-op in Observe; takes effect after switch to Managed
 		},
 	}
@@ -515,13 +515,13 @@ func TestEnvtest_TxtRegistry_ObserveToManagedTransition(t *testing.T) {
 	}, 15*time.Second, 200*time.Millisecond, "Observing condition set")
 
 	// Transition to Managed → should successfully adopt the record.
-	var gotRec v1alpha1.CloudflareDNSRecord
+	var gotRec v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-obs-to-mgd-rec", Namespace: "default"}, &gotRec))
-	gotRec.Spec.Mode = v1alpha1.RecordModeManaged
+	gotRec.Spec.Mode = v2alpha1.RecordModeManaged
 	require.NoError(t, c.Update(ctx, &gotRec))
 
 	require.Eventually(t, func() bool {
-		var r v1alpha1.CloudflareDNSRecord
+		var r v2alpha1.CloudflareDNSRecord
 		if err2 := c.Get(ctx, types.NamespacedName{Name: "txtr-obs-to-mgd-rec", Namespace: "default"}, &r); err2 != nil {
 			return false
 		}
@@ -566,7 +566,7 @@ func TestEnvtest_TxtRegistry_EncryptedRoundtrip(t *testing.T) {
 	require.NoError(t, c.Create(ctx, keySecret))
 	t.Cleanup(func() { _ = c.Delete(context.Background(), keySecret) })
 
-	scaffoldOperatorSingleton(t, ctx, c, &v1alpha1.SecretReference{
+	scaffoldOperatorSingleton(t, ctx, c, &v2alpha1.SecretReference{
 		Name:      "txt-key-enc",
 		Namespace: "default",
 		Key:       "key",
@@ -575,14 +575,14 @@ func TestEnvtest_TxtRegistry_EncryptedRoundtrip(t *testing.T) {
 	// Create a Managed DNSRecord (no pre-existing CF record) — reconciler
 	// creates both the main A record and the AES-encrypted TXT companion.
 	content := "192.0.2.90"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "txtr-enc-roundtrip-rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "enc.txtr.example.com",
 			Type:    "A",
 			Content: &content,
 			ZoneID:  zoneID,
-			Mode:    v1alpha1.RecordModeManaged,
+			Mode:    v2alpha1.RecordModeManaged,
 		},
 	}
 	require.NoError(t, c.Create(ctx, rec))
@@ -590,7 +590,7 @@ func TestEnvtest_TxtRegistry_EncryptedRoundtrip(t *testing.T) {
 
 	// Wait for Ready — both records written.
 	require.Eventually(t, func() bool {
-		var r v1alpha1.CloudflareDNSRecord
+		var r v2alpha1.CloudflareDNSRecord
 		if err2 := c.Get(ctx, types.NamespacedName{Name: "txtr-enc-roundtrip-rec", Namespace: "default"}, &r); err2 != nil {
 			return false
 		}
@@ -678,7 +678,7 @@ func TestEnvtest_TxtRegistry_KeyRotation_RefusesOldRecords(t *testing.T) {
 	require.NoError(t, c.Create(ctx, keySecretB))
 	t.Cleanup(func() { _ = c.Delete(context.Background(), keySecretB) })
 
-	scaffoldOperatorSingleton(t, ctx, c, &v1alpha1.SecretReference{
+	scaffoldOperatorSingleton(t, ctx, c, &v2alpha1.SecretReference{
 		Name:      "txt-key-b",
 		Namespace: "default",
 		Key:       "key",
@@ -688,15 +688,15 @@ func TestEnvtest_TxtRegistry_KeyRotation_RefusesOldRecords(t *testing.T) {
 	// detecting codec sniffs "v1:", attempts AES decrypt with key B → fails →
 	// TxtOwnershipUnrecognized → AdoptRefusedNoTXT (conservative refusal).
 	recContent := "192.0.2.100"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "txtr-key-rotation-rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "rotated.txtr.example.com",
 			Type:    "A",
 			Content: &recContent,
 			ZoneID:  zoneID,
 			Adopt:   true,
-			Mode:    v1alpha1.RecordModeManaged,
+			Mode:    v2alpha1.RecordModeManaged,
 		},
 	}
 	require.NoError(t, c.Create(ctx, rec))
@@ -706,7 +706,7 @@ func TestEnvtest_TxtRegistry_KeyRotation_RefusesOldRecords(t *testing.T) {
 		return dnsRecordReadyReason(ctx, c, "txtr-key-rotation-rec", "default") == conventions.ReasonAdoptRefusedNoTXT
 	}, 15*time.Second, 200*time.Millisecond, "AdoptRefusedNoTXT: old key-A TXT not decodable with key B")
 
-	var gotRec v1alpha1.CloudflareDNSRecord
+	var gotRec v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "txtr-key-rotation-rec", Namespace: "default"}, &gotRec))
 	require.Empty(t, gotRec.Status.RecordID, "RecordID must remain empty after key-rotation refusal")
 

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package v2alpha1
 
 // init registers all CRD type pairs (root + List) with the package's SchemeBuilder.
 // Co-located here rather than in each _types.go because the SchemeBuilder.Register

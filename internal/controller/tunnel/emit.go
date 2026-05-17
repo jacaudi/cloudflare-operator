@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 )
@@ -69,16 +69,16 @@ type EmitOpts struct {
 // source, not on the emitted CR.
 func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme, opts EmitOpts) error {
 	content := opts.Content // local copy so we can take its address; Spec.Content is *string
-	dr := &v1alpha1.CloudflareDNSRecord{
+	dr := &v2alpha1.CloudflareDNSRecord{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: v1alpha1.GroupVersion.String(),
+			APIVersion: v2alpha1.GroupVersion.String(),
 			Kind:       "CloudflareDNSRecord",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      emittedDNSRecordName(opts.Owner.GetName(), opts.Hostname),
 			Namespace: opts.Owner.GetNamespace(),
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Type:    "CNAME",
 			Name:    opts.Hostname,
 			Content: &content,
@@ -89,7 +89,7 @@ func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		return err
 	}
 	if zr := opts.Annotations[conventions.AnnotationZoneRef]; zr != "" {
-		dr.Spec.ZoneRef = &v1alpha1.ZoneReference{Name: zr, Namespace: opts.Owner.GetNamespace()}
+		dr.Spec.ZoneRef = &v2alpha1.ZoneReference{Name: zr, Namespace: opts.Owner.GetNamespace()}
 	}
 	if adopt, _ := conventions.ParseTruthy(opts.Annotations[conventions.AnnotationAdopt]); adopt {
 		dr.Spec.Adopt = true

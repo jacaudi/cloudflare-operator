@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	mockcf "github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/tunnel"
@@ -64,7 +64,7 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 
 	sch := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
-	utilruntime.Must(v1alpha1.AddToScheme(sch))
+	utilruntime.Must(v2alpha1.AddToScheme(sch))
 	utilruntime.Must(gwv1.Install(sch))
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
@@ -90,7 +90,7 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("cloudflaretunnel-"+sanitizeTestName(t.Name())).
-		For(&v1alpha1.CloudflareTunnel{}).
+		For(&v2alpha1.CloudflareTunnel{}).
 		Complete(tunnelR))
 
 	// GatewaySource reconciler. The inline Watch on CloudflareTunnel retriggers
@@ -101,14 +101,14 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 		Scheme:   sch,
 		Cache:    cache,
 		Recorder: mgr.GetEventRecorderFor("cloudflare-operator-gw-source-test"),
-		DefaultConnector: v1alpha1.ConnectorSpec{
+		DefaultConnector: v2alpha1.ConnectorSpec{
 			Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 		},
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("gatewaysource-"+sanitizeTestName(t.Name())).
 		For(&gwv1.Gateway{}).
-		Watches(&v1alpha1.CloudflareTunnel{},
+		Watches(&v2alpha1.CloudflareTunnel{},
 			handler.EnqueueRequestsFromMapFunc(tunnelToGatewaysTestMapFunc(mgr))).
 		Complete(gwR))
 
@@ -136,7 +136,7 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 // SetupTunnelControllers (which wires every source reconciler).
 func tunnelToGatewaysTestMapFunc(mgr ctrl.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		tn, ok := obj.(*v1alpha1.CloudflareTunnel)
+		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
 		if !ok {
 			return nil
 		}
@@ -174,9 +174,9 @@ func TestGatewaySourceEnvtest_ListenerProducesApexCNAME(t *testing.T) {
 	// CloudflareZone CR for example.com — the emitted CloudflareDNSRecord uses
 	// spec.zoneRef (per design §14: tunnel-emitted CRs never set spec.zoneID
 	// directly). Without zoneRef the DNSRecord CRD admission rejects with 422.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -223,13 +223,13 @@ func TestGatewaySourceEnvtest_ListenerProducesApexCNAME(t *testing.T) {
 
 	// Auto-created CloudflareTunnel CR with the derived name.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		return f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn) == nil
 	}, 15*time.Second, 250*time.Millisecond, "CloudflareTunnel %q created", expectedTunnel)
 
 	// Wait for tunnel status to populate so the deferred emission can advance.
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -240,7 +240,7 @@ func TestGatewaySourceEnvtest_ListenerProducesApexCNAME(t *testing.T) {
 	// CNAME ext.example.com → <tunnel-CNAME> (the apex-of-the-chain hop; see
 	// design §4.2 and gateway_source_controller.go::emitDNSRecord).
 	require.Eventually(t, func() bool {
-		var list v1alpha1.CloudflareDNSRecordList
+		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
 			return false
 		}

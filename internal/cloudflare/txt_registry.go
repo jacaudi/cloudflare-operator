@@ -88,14 +88,14 @@ type Codec interface {
 
 // plaintextCodec writes bare JSON; reads JSON OR rejects with
 // ErrUnrecognizedCodec when the input is anything else. Used when no key
-// Secret is configured (the v1alpha1 default).
+// Secret is configured (the v2alpha1 default).
 type plaintextCodec struct{}
 
 var _ Codec = plaintextCodec{}
 
 func (plaintextCodec) Encode(p RegistryPayload) (string, error) {
 	if p.V == 0 {
-		p.V = 1 // default — callers always intend v1 in v1alpha1
+		p.V = 1 // default — callers always intend v1 in v2alpha1
 	}
 	b, err := json.Marshal(p)
 	if err != nil {

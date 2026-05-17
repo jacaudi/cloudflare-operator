@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -62,34 +62,34 @@ func newDNSReconciler(_ *testing.T, c client.Client, scheme *runtime.Scheme, m *
 func TestDNS_CreateAllTypes(t *testing.T) {
 	cases := []struct {
 		name, ty string
-		setSpec  func(*v1alpha1.CloudflareDNSRecordSpec)
+		setSpec  func(*v2alpha1.CloudflareDNSRecordSpec)
 	}{
-		{"A", "A", func(s *v1alpha1.CloudflareDNSRecordSpec) { c := "192.0.2.1"; s.Content = &c }},
-		{"AAAA", "AAAA", func(s *v1alpha1.CloudflareDNSRecordSpec) { c := "2001:db8::1"; s.Content = &c }},
-		{"CNAME", "CNAME", func(s *v1alpha1.CloudflareDNSRecordSpec) { c := "target.example.com"; s.Content = &c }},
-		{"TXT", "TXT", func(s *v1alpha1.CloudflareDNSRecordSpec) { c := "v=spf1 -all"; s.Content = &c }},
-		{"NS", "NS", func(s *v1alpha1.CloudflareDNSRecordSpec) { c := "ns1.example.org"; s.Content = &c }},
-		{"MX", "MX", func(s *v1alpha1.CloudflareDNSRecordSpec) {
+		{"A", "A", func(s *v2alpha1.CloudflareDNSRecordSpec) { c := "192.0.2.1"; s.Content = &c }},
+		{"AAAA", "AAAA", func(s *v2alpha1.CloudflareDNSRecordSpec) { c := "2001:db8::1"; s.Content = &c }},
+		{"CNAME", "CNAME", func(s *v2alpha1.CloudflareDNSRecordSpec) { c := "target.example.com"; s.Content = &c }},
+		{"TXT", "TXT", func(s *v2alpha1.CloudflareDNSRecordSpec) { c := "v=spf1 -all"; s.Content = &c }},
+		{"NS", "NS", func(s *v2alpha1.CloudflareDNSRecordSpec) { c := "ns1.example.org"; s.Content = &c }},
+		{"MX", "MX", func(s *v2alpha1.CloudflareDNSRecordSpec) {
 			c := "mail.example.com"
 			p := 10
 			s.Content = &c
 			s.Priority = &p
 		}},
-		{"SRV", "SRV", func(s *v1alpha1.CloudflareDNSRecordSpec) {
-			s.SRVData = &v1alpha1.SRVData{Service: "_satisfactory", Proto: "_tcp", Priority: 0, Weight: 10, Port: 7777, Target: "game.example.com"}
+		{"SRV", "SRV", func(s *v2alpha1.CloudflareDNSRecordSpec) {
+			s.SRVData = &v2alpha1.SRVData{Service: "_satisfactory", Proto: "_tcp", Priority: 0, Weight: 10, Port: 7777, Target: "game.example.com"}
 		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := zoneTestScheme(t)
-			rec := &v1alpha1.CloudflareDNSRecord{
+			rec := &v2alpha1.CloudflareDNSRecord{
 				ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
-				Spec:       v1alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: tc.ty, ZoneID: "z1"},
+				Spec:       v2alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: tc.ty, ZoneID: "z1"},
 			}
 			tc.setSpec(&rec.Spec)
 			t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 			t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-			c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 			m := mock.New()
 			r := newDNSReconciler(t, c, s, m)
 			// Converge: finalizer-set requeue, then create.
@@ -97,10 +97,10 @@ func TestDNS_CreateAllTypes(t *testing.T) {
 			require.NoError(t, err)
 			_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 			require.NoError(t, err)
-			var got v1alpha1.CloudflareDNSRecord
+			var got v2alpha1.CloudflareDNSRecord
 			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 			require.NotEmpty(t, got.Status.RecordID)
-			require.Equal(t, v1alpha1.PhaseReady, got.Status.Phase)
+			require.Equal(t, v2alpha1.PhaseReady, got.Status.Phase)
 		})
 	}
 }
@@ -108,11 +108,11 @@ func TestDNS_CreateAllTypes(t *testing.T) {
 func TestDNS_DriftDetected_TriggersUpdate(t *testing.T) {
 	s := zoneTestScheme(t)
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default", Finalizers: []string{conventions.FinalizerName}},
-		Spec:       v1alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1"},
+		Spec:       v2alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
@@ -124,7 +124,7 @@ func TestDNS_DriftDetected_TriggersUpdate(t *testing.T) {
 	r := newDNSReconciler(t, c, s, m)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.Equal(t, "192.0.2.1", got.Status.CurrentContent, "reconciler corrects drift")
 }
@@ -135,15 +135,15 @@ func TestDNS_AdoptBareTakeover(t *testing.T) {
 	// The old bare-takeover behavior is superseded by TXT-verified adoption.
 	s := zoneTestScheme(t)
 	content := "192.0.2.50"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1", Adopt: true,
 		},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 	// Pre-existing A record with no TXT companion — adoption must be refused.
 	_, _ = m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{Name: "app.example.com", Type: "A", Content: "1.1.1.1", TTL: 1})
@@ -156,7 +156,7 @@ func TestDNS_AdoptBareTakeover(t *testing.T) {
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
 	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not backfill a TXT for a pre-existing record")
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.Empty(t, got.Status.RecordID, "adoption must be refused — no TXT companion")
 	cond := findReadyCondition(got.Status.Conditions)
@@ -169,22 +169,22 @@ func TestDNS_AdoptNoMatch_CreatesNew(t *testing.T) {
 	// adopt: true but no matching record on CF — fall through to Create.
 	s := zoneTestScheme(t)
 	content := "192.0.2.50"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1", Adopt: true,
 		},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 	r := newDNSReconciler(t, c, s, m)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.NotEmpty(t, got.Status.RecordID, "fell through to create")
 	require.Equal(t, "192.0.2.50", got.Status.CurrentContent)
@@ -196,20 +196,20 @@ func TestDNS_DynamicIP_ResolvesAndWritesA(t *testing.T) {
 	}))
 	defer srv.Close()
 	s := zoneTestScheme(t)
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
-		Spec:       v1alpha1.CloudflareDNSRecordSpec{Name: "apex.example.com", Type: "A", DynamicIP: true, ZoneID: "z1"},
+		Spec:       v2alpha1.CloudflareDNSRecordSpec{Name: "apex.example.com", Type: "A", DynamicIP: true, ZoneID: "z1"},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 	r := newDNSReconciler(t, c, s, m, srv.URL)
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.Equal(t, "198.51.100.7", got.Status.CurrentContent)
 }
@@ -223,13 +223,13 @@ func TestDNS_NoDrift_NoUpdate(t *testing.T) {
 	s := zoneTestScheme(t)
 	content := "192.0.2.1"
 	proxied := false
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default", Finalizers: []string{conventions.FinalizerName}},
-		Spec:       v1alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1", TTL: 1, Proxied: &proxied},
+		Spec:       v2alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1", TTL: 1, Proxied: &proxied},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 	// Seed the mock with a record that exactly matches spec (name, type,
 	// content, TTL, proxied).
@@ -257,29 +257,29 @@ func TestReconcile_TxtRegistryKeyUnavailable_Halts(t *testing.T) {
 
 	// CloudflareOperator/cluster with TxtRegistryKeySecretRef → a Secret that
 	// does NOT exist.
-	op := &v1alpha1.CloudflareOperator{
-		ObjectMeta: metav1.ObjectMeta{Name: v1alpha1.CloudflareOperatorSingletonName},
-		Spec: v1alpha1.CloudflareOperatorSpec{
-			Cloudflare: v1alpha1.CloudflareCredentialRef{
-				TokenSecretRef: v1alpha1.SecretReference{Name: "cred", Key: "token"},
+	op := &v2alpha1.CloudflareOperator{
+		ObjectMeta: metav1.ObjectMeta{Name: v2alpha1.CloudflareOperatorSingletonName},
+		Spec: v2alpha1.CloudflareOperatorSpec{
+			Cloudflare: v2alpha1.CloudflareCredentialRef{
+				TokenSecretRef: v2alpha1.SecretReference{Name: "cred", Key: "token"},
 				AccountID:      "acct-1",
-				TxtRegistryKeySecretRef: &v1alpha1.SecretReference{
+				TxtRegistryKeySecretRef: &v2alpha1.SecretReference{
 					Name: "missing-key",
 					Key:  "key",
 				},
 			},
-			Controllers: v1alpha1.ControllersSpec{},
+			Controllers: v2alpha1.ControllersSpec{},
 		},
 	}
 
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "rec",
 			Namespace:  "default",
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &content,
@@ -295,7 +295,7 @@ func TestReconcile_TxtRegistryKeyUnavailable_Halts(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(op, rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 	r := newDNSReconciler(t, c, s, m)
@@ -308,7 +308,7 @@ func TestReconcile_TxtRegistryKeyUnavailable_Halts(t *testing.T) {
 	require.Greater(t, result.RequeueAfter.Nanoseconds(), int64(0), "expect non-zero RequeueAfter")
 
 	// Ready condition reason must be TxtRegistryKeyUnavailable.
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	var found *metav1.Condition
 	for i := range got.Status.Conditions {
@@ -326,17 +326,17 @@ func TestDNS_Delete_RemovesUpstream(t *testing.T) {
 	now := metav1.Now()
 	s := zoneTestScheme(t)
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "rec", Namespace: "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1"},
+		Spec: v2alpha1.CloudflareDNSRecordSpec{Name: "app.example.com", Type: "A", Content: &content, ZoneID: "z1"},
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 	created, _ := m.DNS.CreateRecord(context.Background(), "z1", cloudflare.DNSRecordParams{Name: "app.example.com", Type: "A", Content: "192.0.2.1"})
 	rec.Status.RecordID = created.ID
@@ -352,19 +352,19 @@ func TestDNS_Delete_RemovesUpstream(t *testing.T) {
 
 // observeModeRec builds a minimal CloudflareDNSRecord in Observe mode with
 // the finalizer already set and the given ZoneID pre-resolved.
-func observeModeRec(name, ns, zoneID string, extra ...func(*v1alpha1.CloudflareDNSRecord)) *v1alpha1.CloudflareDNSRecord {
+func observeModeRec(name, ns, zoneID string, extra ...func(*v2alpha1.CloudflareDNSRecord)) *v2alpha1.CloudflareDNSRecord {
 	content := "1.1.1.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
 			Namespace:  ns,
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:   "test.example.com",
 			Type:   "A",
 			ZoneID: zoneID,
-			Mode:   v1alpha1.RecordModeObserve,
+			Mode:   v2alpha1.RecordModeObserve,
 			// Content set so admission CEL is satisfied in fake client;
 			// observe mode does NOT read this to mutate CF.
 			Content: &content,
@@ -431,7 +431,7 @@ func TestReconcile_ObserveMode_RecordExists_PopulatesStatus(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -456,7 +456,7 @@ func TestReconcile_ObserveMode_RecordExists_PopulatesStatus(t *testing.T) {
 	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not call UpdateRecord")
 	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not call DeleteRecord")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
 
 	require.Equal(t, "1.1.1.1", got.Status.CurrentContent, "Status.CurrentContent must be populated from CF")
@@ -481,13 +481,13 @@ func TestReconcile_ObserveMode_AdoptHasNoEffect(t *testing.T) {
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
-	rec := observeModeRec("r", "ns", "z1", func(r *v1alpha1.CloudflareDNSRecord) {
+	rec := observeModeRec("r", "ns", "z1", func(r *v2alpha1.CloudflareDNSRecord) {
 		r.Spec.Adopt = true
 	})
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -510,7 +510,7 @@ func TestReconcile_ObserveMode_AdoptHasNoEffect(t *testing.T) {
 	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not call UpdateRecord")
 	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not call DeleteRecord")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
 
 	cond := findReadyCondition(got.Status.Conditions)
@@ -537,14 +537,14 @@ func TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately(t *testing.T) {
 	// Build the CR with DeletionTimestamp + finalizer. The finalizer must be
 	// present so the fake client retains the object after DeletionTimestamp is
 	// set.
-	rec := observeModeRec("r", "ns", "z1", func(r *v1alpha1.CloudflareDNSRecord) {
+	rec := observeModeRec("r", "ns", "z1", func(r *v2alpha1.CloudflareDNSRecord) {
 		r.DeletionTimestamp = &now
 	})
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -560,7 +560,7 @@ func TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately(t *testing.T) {
 	require.NoError(t, c.Status().Update(context.Background(), rec))
 
 	// Verify the Status round-tripped correctly before reconciling.
-	var check v1alpha1.CloudflareDNSRecord
+	var check v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &check))
 	require.Equal(t, aID, check.Status.RecordID, "test setup: Status.RecordID must be persisted before Reconcile")
 
@@ -582,7 +582,7 @@ func TestReconcile_ObserveMode_DeletionDropsFinalizerImmediately(t *testing.T) {
 	// Finalizer must be removed. Use a strict check: if the object is gone
 	// (fake client GC after finalizer cleared), NotFound is acceptable; if it
 	// still exists, Finalizers must be empty.
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got)
 	if err != nil {
 		require.True(t, apierrors.IsNotFound(err), "unexpected get error: %v", err)
@@ -603,7 +603,7 @@ func TestReconcile_ObserveMode_RecordAbsent_NoOp(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 	// No records seeded — CF is empty.
@@ -622,7 +622,7 @@ func TestReconcile_ObserveMode_RecordAbsent_NoOp(t *testing.T) {
 	require.Equal(t, updateBefore, m.Calls("DNS.UpdateRecord"), "observe must not update")
 	require.Equal(t, deleteBefore, m.Calls("DNS.DeleteRecord"), "observe must not delete")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
 
 	require.Empty(t, got.Status.RecordID, "RecordID must be empty when no CF record found")
@@ -647,7 +647,7 @@ func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -660,7 +660,7 @@ func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "r", Namespace: "ns"}, &got))
 
 	require.NotNil(t, got.Status.ObservedTXT, "plaintext TXT must decode even without singleton")
@@ -678,15 +678,15 @@ func TestReconcile_ObserveMode_NoOperatorSingleton_PlaintextOK(t *testing.T) {
 // adoptRec builds a Managed-mode CloudflareDNSRecord with Adopt:true,
 // Status.RecordID empty, and the finalizer already set (to skip the finalizer
 // requeue and land directly in the Adopt branch).
-func adoptRec(name, ns, zoneID string) *v1alpha1.CloudflareDNSRecord {
+func adoptRec(name, ns, zoneID string) *v2alpha1.CloudflareDNSRecord {
 	content := "1.1.1.1"
-	return &v1alpha1.CloudflareDNSRecord{
+	return &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       name,
 			Namespace:  ns,
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "test.example.com",
 			Type:    "A",
 			Content: &content,
@@ -709,7 +709,7 @@ func TestReconcile_AdoptWithNoTXT_Refused(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -727,7 +727,7 @@ func TestReconcile_AdoptWithNoTXT_Refused(t *testing.T) {
 	// No TXT must have been created (no silent backfill).
 	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not create a TXT for a pre-existing untracked record")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	require.Empty(t, got.Status.RecordID, "RecordID must be empty — adoption refused")
@@ -750,7 +750,7 @@ func TestReconcile_AdoptWithForeignTXT_Refused(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -769,7 +769,7 @@ func TestReconcile_AdoptWithForeignTXT_Refused(t *testing.T) {
 	// No TXT must have been created.
 	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not create a TXT when foreign owner detected")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	require.Empty(t, got.Status.RecordID, "RecordID must be empty — adoption refused")
@@ -792,7 +792,7 @@ func TestReconcile_AdoptWithMatchingTXT_Succeeds(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -806,7 +806,7 @@ func TestReconcile_AdoptWithMatchingTXT_Succeeds(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	require.Equal(t, aID, got.Status.RecordID, "RecordID must be set to the pre-existing A record")
@@ -839,9 +839,9 @@ func TestReconcile_CreateWritesTxtCompanion(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &content,
@@ -851,7 +851,7 @@ func TestReconcile_CreateWritesTxtCompanion(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 	r := newDNSReconciler(t, c, s, m)
@@ -863,7 +863,7 @@ func TestReconcile_CreateWritesTxtCompanion(t *testing.T) {
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	require.NotEmpty(t, got.Status.RecordID, "main record must be created")
@@ -894,13 +894,13 @@ func TestReconcile_UpdateRefreshesTxtHash(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
 	newContent := "192.0.2.99"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "rec",
 			Namespace:  "default",
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &newContent, // desired new content
@@ -910,7 +910,7 @@ func TestReconcile_UpdateRefreshesTxtHash(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -938,7 +938,7 @@ func TestReconcile_UpdateRefreshesTxtHash(t *testing.T) {
 	// At least one UpdateRecord must have been called (main + TXT).
 	require.Greater(t, m.Calls("DNS.UpdateRecord"), updatesBefore, "UpdateRecord must be called for drift")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	require.NotEmpty(t, got.Status.TxtRecordID, "TxtRecordID must remain set after update")
@@ -967,13 +967,13 @@ func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "rec",
 			Namespace:  "default",
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &content,
@@ -983,7 +983,7 @@ func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -1004,7 +1004,7 @@ func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
 	// Reconciler must requeue so the TXT write is retried.
 	require.Greater(t, result.RequeueAfter.Nanoseconds(), int64(0), "expect non-zero RequeueAfter so TXT write is retried")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	// Main record was created.
@@ -1037,13 +1037,13 @@ func TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "rec",
 			Namespace:  "default",
 			Finalizers: []string{conventions.FinalizerName},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &content,
@@ -1053,7 +1053,7 @@ func TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -1067,7 +1067,7 @@ func TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err, "partial TXT failure must not fail the first reconcile")
 
-	var afterFirst v1alpha1.CloudflareDNSRecord
+	var afterFirst v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &afterFirst))
 	require.NotEmpty(t, afterFirst.Status.RecordID, "RecordID must be set after first reconcile")
 	require.Empty(t, afterFirst.Status.TxtRecordID, "TxtRecordID must be empty after partial TXT failure")
@@ -1084,7 +1084,7 @@ func TestReconcile_TxtWrite_RetriesOnNextReconcileNoDrift(t *testing.T) {
 	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "rec", Namespace: "default"}})
 	require.NoError(t, err, "second reconcile must not fail")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	// The retry must have written the TXT companion.
@@ -1116,14 +1116,14 @@ func TestReconcile_DeleteCascadesTxtCompanion(t *testing.T) {
 	now := metav1.Now()
 	s := zoneTestScheme(t)
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "rec",
 			Namespace:         "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &content,
@@ -1133,7 +1133,7 @@ func TestReconcile_DeleteCascadesTxtCompanion(t *testing.T) {
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 
 	// Pre-seed the main A record and a TXT companion in the mock.
@@ -1146,7 +1146,7 @@ func TestReconcile_DeleteCascadesTxtCompanion(t *testing.T) {
 	require.NoError(t, c.Status().Update(context.Background(), rec))
 
 	// Verify setup round-tripped correctly.
-	var check v1alpha1.CloudflareDNSRecord
+	var check v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &check))
 	require.Equal(t, aID, check.Status.RecordID, "test setup: Status.RecordID must be persisted")
 	require.Equal(t, txtID, check.Status.TxtRecordID, "test setup: Status.TxtRecordID must be persisted")
@@ -1172,7 +1172,7 @@ func TestReconcile_DeleteCascadesTxtCompanion(t *testing.T) {
 	require.Empty(t, txtRecs, "TXT companion must be deleted from Cloudflare (cascade delete)")
 
 	// Finalizer must be removed.
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got)
 	if err != nil {
 		require.True(t, apierrors.IsNotFound(err), "unexpected get error: %v", err)
@@ -1189,14 +1189,14 @@ func TestReconcile_DeleteTxtCompanion_NotFoundTolerated(t *testing.T) {
 	now := metav1.Now()
 	s := zoneTestScheme(t)
 	content := "192.0.2.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "rec",
 			Namespace:         "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "app.example.com",
 			Type:    "A",
 			Content: &content,
@@ -1205,7 +1205,7 @@ func TestReconcile_DeleteTxtCompanion_NotFoundTolerated(t *testing.T) {
 	}
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
 	m := mock.New()
 
 	// Seed only the main A record. The TxtRecordID will reference a non-existent
@@ -1227,7 +1227,7 @@ func TestReconcile_DeleteTxtCompanion_NotFoundTolerated(t *testing.T) {
 	require.Error(t, gerr, "main A record must be deleted even when TXT companion was already gone")
 
 	// Finalizer must be removed.
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got)
 	if err != nil {
 		require.True(t, apierrors.IsNotFound(err), "unexpected get error: %v", err)
@@ -1250,9 +1250,9 @@ func TestReconcile_ManagedToObserveTransition_StopsWriting(t *testing.T) {
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
 	content := "10.0.0.1"
-	rec := &v1alpha1.CloudflareDNSRecord{
+	rec := &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{Name: "rec", Namespace: "default"},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Name:    "transition.example.com",
 			Type:    "A",
 			Content: &content,
@@ -1263,7 +1263,7 @@ func TestReconcile_ManagedToObserveTransition_StopsWriting(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 	r := newDNSReconciler(t, c, s, m)
@@ -1276,13 +1276,13 @@ func TestReconcile_ManagedToObserveTransition_StopsWriting(t *testing.T) {
 	require.NoError(t, err)
 
 	// Confirm Managed path populated both IDs.
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 	require.NotEmpty(t, got.Status.RecordID, "setup: RecordID must be set after Managed reconcile")
 	require.NotEmpty(t, got.Status.TxtRecordID, "setup: TxtRecordID must be set after Managed reconcile")
 
 	// Flip to Observe mode.
-	got.Spec.Mode = v1alpha1.RecordModeObserve
+	got.Spec.Mode = v2alpha1.RecordModeObserve
 	require.NoError(t, c.Update(context.Background(), &got))
 
 	// Snapshot mutating-call counters BEFORE the post-flip reconcile.
@@ -1316,7 +1316,7 @@ func TestReconcile_AdoptWithUnparseableTXT_Refused(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(rec).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).
 		Build()
 	m := mock.New()
 
@@ -1339,7 +1339,7 @@ func TestReconcile_AdoptWithUnparseableTXT_Refused(t *testing.T) {
 	// No TXT must have been created.
 	require.Equal(t, createBefore, m.Calls("DNS.CreateRecord"), "must not create a TXT when TXT content is unrecognized")
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "rec", Namespace: "default"}, &got))
 
 	require.Empty(t, got.Status.RecordID, "RecordID must be empty — adoption refused")

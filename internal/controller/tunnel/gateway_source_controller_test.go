@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
@@ -42,7 +42,7 @@ func gwScheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
 	require.NoError(t, gwv1.Install(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -82,16 +82,16 @@ func mkGw(name, ns, gwSvcRef string, hostnames []string) *gwv1.Gateway {
 
 // gwPreCreatedTunnel returns a CloudflareTunnel with TunnelCNAME populated so
 // the Gateway reconciler can emit DNSRecord CRs on the first pass.
-func gwPreCreatedTunnel(name, namespace string) *v1alpha1.CloudflareTunnel {
-	return &v1alpha1.CloudflareTunnel{
+func gwPreCreatedTunnel(name, namespace string) *v2alpha1.CloudflareTunnel {
+	return &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: name,
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 			},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID:    "tun-abc",
 			TunnelCNAME: "tun-abc.cfargotunnel.com",
 		},
@@ -106,20 +106,20 @@ func TestGatewaySource_HappyPath(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-gw-ns-edge", "gw-ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "gw-ns", Name: "gw"}})
 	require.NoError(t, err)
 
 	// Tunnel CR exists (pre-created).
-	var tn v1alpha1.CloudflareTunnel
+	var tn v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "gw-ns", Name: "cf-gw-ns-edge"}, &tn))
 
 	// Cache snapshot has exactly one HTTP contribution to envoy-gw.gw-ns.
@@ -130,7 +130,7 @@ func TestGatewaySource_HappyPath(t *testing.T) {
 	require.Contains(t, snap[0].Service, ":80")
 
 	// Exactly one DNSRecord emitted, owner-reffed to the Gateway, CNAME → tunnel CNAME.
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1)
 	dr := dnsList.Items[0]
@@ -154,17 +154,17 @@ func TestGatewaySource_AutoCreateStampsSourceLabels(t *testing.T) {
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(),
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "gw-ns", Name: "gw"}})
 	require.NoError(t, err)
 
-	var tn v1alpha1.CloudflareTunnel
+	var tn v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "gw-ns", Name: "cf-gw-ns-edge"}, &tn))
 	require.Equal(t, "Gateway", tn.Labels[conventions.LabelSourceKind],
 		"source-kind label must be 'Gateway' literal (typed client clears TypeMeta on Get)")
@@ -209,18 +209,18 @@ func TestGatewaySource_NoGatewayServiceAnnotation_RejectsWithEvent(t *testing.T)
 		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{gwListener("h", "h.example.com", 80, gwv1.HTTPProtocolType)}},
 	}
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(8)
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
 
 	// No DNSRecord emitted.
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Empty(t, dnsList.Items)
 
@@ -268,18 +268,18 @@ func TestGatewaySource_MultipleListenerHostnames(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
 	require.Len(t, cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-edge"}), 2)
 
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 2)
 }
@@ -292,28 +292,28 @@ func TestGatewaySource_TunnelCNAMEEmpty_DefersEmission(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
 		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
 	}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-ns-edge", Namespace: "ns"},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: "cf-ns-edge",
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 			},
 		},
 		// No Status.TunnelCNAME.
 	}
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
 
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Empty(t, dnsList.Items, "must not emit DNSRecord when TunnelCNAME is empty")
 	require.Len(t, cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-edge"}), 1,
@@ -330,12 +330,12 @@ func TestGatewaySource_AnnotationPortOverride(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
@@ -354,12 +354,12 @@ func TestGatewaySource_FallsBackToServiceFirstPort(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
@@ -398,12 +398,12 @@ func TestGatewaySource_AllTLSListeners_RegistersEmptyContribs(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
@@ -441,13 +441,13 @@ func TestGatewaySource_UnsupportedProtocol_EmitsEvent(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(16)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
@@ -494,12 +494,12 @@ func TestGatewaySource_HTTPSScheme(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
@@ -520,12 +520,12 @@ func TestGatewaySource_AnnotationChangeSweepsPriorKey(t *testing.T) {
 	tnA := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	tnB := gwPreCreatedTunnel("cf-ns-billing", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, tnA, tnB).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
@@ -553,12 +553,12 @@ func TestGatewaySource_GatewayDeletedSweepsCache(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	tunKey := tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-edge"}
 
@@ -582,16 +582,16 @@ func TestGatewaySource_ZoneRefAndAdoptThreaded(t *testing.T) {
 	}
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}, &v1alpha1.CloudflareDNSRecord{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(),
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
 
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1)
 	require.NotNil(t, dnsList.Items[0].Spec.ZoneRef)
@@ -611,7 +611,7 @@ func TestGatewaySource_InvalidName_StatusEventOnly(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
 	require.NoError(t, err)
 
-	var list v1alpha1.CloudflareTunnelList
+	var list v2alpha1.CloudflareTunnelList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items)
 
@@ -720,13 +720,13 @@ func TestGatewaySource_NoDNSForTCPListener(t *testing.T) {
 	// emits DNSRecord CRs on the very first pass (no second reconcile needed).
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(16)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
@@ -734,7 +734,7 @@ func TestGatewaySource_NoDNSForTCPListener(t *testing.T) {
 
 	// Exactly ONE CloudflareDNSRecord must exist: the one for web.example.com.
 	// db.example.com must not receive a record (TCP → no ingress contribution).
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1, "expected exactly one DNSRecord (HTTPS listener only); TCP listener must not emit")
 	require.Equal(t, "web.example.com", dnsList.Items[0].Spec.Name,
@@ -782,13 +782,13 @@ func TestGatewaySource_TLSListenerEmitsApexCNAME(t *testing.T) {
 	// so the reconciler emits DNSRecord CRs on the first pass.
 	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
 	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
-		WithStatusSubresource(&v1alpha1.CloudflareDNSRecord{}, &v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(16)
 	cache := tunnelsynth.NewCache()
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
-		DefaultConnector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 	}
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
@@ -796,7 +796,7 @@ func TestGatewaySource_TLSListenerEmitsApexCNAME(t *testing.T) {
 
 	// Exactly ONE CloudflareDNSRecord: the apex CNAME tls-apex.example.com ->
 	// tunnel CNAME. This is the record the TLSRoute chain depends on.
-	var dnsList v1alpha1.CloudflareDNSRecordList
+	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1, "TLS-apex Gateway must still emit its apex->tunnel CNAME")
 	dr := dnsList.Items[0]

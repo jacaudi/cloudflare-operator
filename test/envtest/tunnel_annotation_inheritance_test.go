@@ -29,7 +29,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -60,9 +60,9 @@ func TestEnvtest_HTTPRoute_InheritsAdoptFromGateway(t *testing.T) {
 
 	// Zone CR — admission requires has(zoneRef); the Gateway carries zone-ref,
 	// so the emitted DNSRecord inherits it and passes CEL validation.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -107,7 +107,7 @@ func TestEnvtest_HTTPRoute_InheritsAdoptFromGateway(t *testing.T) {
 	// deferred-emission guard on the first reconcile pass.
 	expectedTunnel := "cf-" + f.ns + "-edge"
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -136,7 +136,7 @@ func TestEnvtest_HTTPRoute_InheritsAdoptFromGateway(t *testing.T) {
 	// The emitted CloudflareDNSRecord must carry Spec.Adopt=true (inherited
 	// from the Gateway's cloudflare.io/adopt annotation).
 	require.Eventually(t, func() bool {
-		var list v1alpha1.CloudflareDNSRecordList
+		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
 			return false
 		}
@@ -175,9 +175,9 @@ func TestEnvtest_TLSRoute_InheritsAdoptFromGateway(t *testing.T) {
 
 	// Zone CR — admission requires has(zoneRef); the Gateway carries zone-ref,
 	// so the emitted DNSRecord inherits it and passes CEL validation.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -222,7 +222,7 @@ func TestEnvtest_TLSRoute_InheritsAdoptFromGateway(t *testing.T) {
 	// deferred-emission guard on the first reconcile pass.
 	expectedTunnel := "cf-" + f.ns + "-edge"
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -252,7 +252,7 @@ func TestEnvtest_TLSRoute_InheritsAdoptFromGateway(t *testing.T) {
 	// The emitted CloudflareDNSRecord must carry Spec.Adopt=true (inherited
 	// from the Gateway's cloudflare.io/adopt annotation).
 	require.Eventually(t, func() bool {
-		var list v1alpha1.CloudflareDNSRecordList
+		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
 			return false
 		}

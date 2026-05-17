@@ -30,7 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/controller/zone"
@@ -53,7 +53,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 
 	sch := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
-	utilruntime.Must(v1alpha1.AddToScheme(sch))
+	utilruntime.Must(v2alpha1.AddToScheme(sch))
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
@@ -74,7 +74,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		},
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CloudflareZone{}).
+		For(&v2alpha1.CloudflareZone{}).
 		Complete(zoneR))
 
 	zcR := &zone.CloudflareZoneConfigReconciler{
@@ -85,7 +85,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		},
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CloudflareZoneConfig{}).
+		For(&v2alpha1.CloudflareZoneConfig{}).
 		Complete(zcR))
 
 	dnsR := &zone.CloudflareDNSRecordReconciler{
@@ -97,7 +97,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		IPResolver: ipresolver.NewResolver(),
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CloudflareDNSRecord{}).
+		For(&v2alpha1.CloudflareDNSRecord{}).
 		Complete(dnsR))
 
 	rsR := &zone.CloudflareRulesetReconciler{
@@ -108,7 +108,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		},
 	}
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CloudflareRuleset{}).
+		For(&v2alpha1.CloudflareRuleset{}).
 		Complete(rsR))
 
 	ctx := t.Context()
@@ -129,28 +129,28 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 	var zoneID string
 
 	t.Run("§10.1 CRDs install + sample CRs listable", func(t *testing.T) {
-		var zl v1alpha1.CloudflareZoneList
+		var zl v2alpha1.CloudflareZoneList
 		require.NoError(t, c.List(ctx, &zl))
-		var dl v1alpha1.CloudflareDNSRecordList
+		var dl v2alpha1.CloudflareDNSRecordList
 		require.NoError(t, c.List(ctx, &dl))
-		var zcl v1alpha1.CloudflareZoneConfigList
+		var zcl v2alpha1.CloudflareZoneConfigList
 		require.NoError(t, c.List(ctx, &zcl))
-		var rl v1alpha1.CloudflareRulesetList
+		var rl v2alpha1.CloudflareRulesetList
 		require.NoError(t, c.List(ctx, &rl))
 	})
 
 	t.Run("§10.2 Zone create populates Status.ZoneID", func(t *testing.T) {
-		z := &v1alpha1.CloudflareZone{
+		z := &v2alpha1.CloudflareZone{
 			ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "default"},
-			Spec: v1alpha1.CloudflareZoneSpec{
+			Spec: v2alpha1.CloudflareZoneSpec{
 				Name:           "example.com",
 				Type:           "full",
-				DeletionPolicy: v1alpha1.DeletionPolicyRetain,
+				DeletionPolicy: v2alpha1.DeletionPolicyRetain,
 			},
 		}
 		require.NoError(t, c.Create(ctx, z))
 		require.Eventually(t, func() bool {
-			var got v1alpha1.CloudflareZone
+			var got v2alpha1.CloudflareZone
 			if err := c.Get(ctx, types.NamespacedName{Name: "example", Namespace: "default"}, &got); err != nil {
 				return false
 			}
@@ -165,16 +165,16 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 	t.Run("§10.3 ZoneConfig group condition", func(t *testing.T) {
 		require.NotEmpty(t, zoneID, "§10.2 must populate zoneID before downstream tests")
 		mode := "strict"
-		cfg := &v1alpha1.CloudflareZoneConfig{
+		cfg := &v2alpha1.CloudflareZoneConfig{
 			ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"},
-			Spec: v1alpha1.CloudflareZoneConfigSpec{
+			Spec: v2alpha1.CloudflareZoneConfigSpec{
 				ZoneID: zoneID,
-				SSL:    &v1alpha1.SSLSettings{Mode: &mode},
+				SSL:    &v2alpha1.SSLSettings{Mode: &mode},
 			},
 		}
 		require.NoError(t, c.Create(ctx, cfg))
 		require.Eventually(t, func() bool {
-			var got v1alpha1.CloudflareZoneConfig
+			var got v2alpha1.CloudflareZoneConfig
 			if err := c.Get(ctx, types.NamespacedName{Name: "cfg", Namespace: "default"}, &got); err != nil {
 				return false
 			}
@@ -207,9 +207,9 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		})
 		require.NoError(t, err)
 		content := "192.0.2.20"
-		rec := &v1alpha1.CloudflareDNSRecord{
+		rec := &v2alpha1.CloudflareDNSRecord{
 			ObjectMeta: metav1.ObjectMeta{Name: "rec-adopt", Namespace: "default"},
-			Spec: v1alpha1.CloudflareDNSRecordSpec{
+			Spec: v2alpha1.CloudflareDNSRecordSpec{
 				Name:    "app.example.com",
 				Type:    "A",
 				Content: &content,
@@ -219,7 +219,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		}
 		require.NoError(t, c.Create(ctx, rec))
 		require.Eventually(t, func() bool {
-			var got v1alpha1.CloudflareDNSRecord
+			var got v2alpha1.CloudflareDNSRecord
 			if err := c.Get(ctx, types.NamespacedName{Name: "rec-adopt", Namespace: "default"}, &got); err != nil {
 				return false
 			}
@@ -231,13 +231,13 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 
 	t.Run("§10.5 Ruleset PUT-entrypoint creates rules", func(t *testing.T) {
 		require.NotEmpty(t, zoneID, "§10.2 must populate zoneID before downstream tests")
-		rs := &v1alpha1.CloudflareRuleset{
+		rs := &v2alpha1.CloudflareRuleset{
 			ObjectMeta: metav1.ObjectMeta{Name: "waf", Namespace: "default"},
-			Spec: v1alpha1.CloudflareRulesetSpec{
+			Spec: v2alpha1.CloudflareRulesetSpec{
 				ZoneID: zoneID,
 				Name:   "waf",
 				Phase:  "http_request_firewall_custom",
-				Rules: []v1alpha1.RulesetRuleSpec{{
+				Rules: []v2alpha1.RulesetRuleSpec{{
 					Action:     "block",
 					Expression: `(ip.src eq 192.0.2.4)`,
 				}},

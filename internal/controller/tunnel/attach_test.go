@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -151,7 +151,7 @@ func TestEnsureTunnelCR_StampsAutoCreatedAnnotation(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
 
-	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v1alpha1.ConnectorSpec{
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v2alpha1.ConnectorSpec{
 		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 	})
 	require.NoError(t, err)
@@ -160,7 +160,7 @@ func TestEnsureTunnelCR_StampsAutoCreatedAnnotation(t *testing.T) {
 }
 
 func TestIsAutoCreated_AnnotationTrue(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
 			conventions.AnnotationAutoCreated: "true",
 		}},
@@ -169,13 +169,13 @@ func TestIsAutoCreated_AnnotationTrue(t *testing.T) {
 }
 
 func TestIsAutoCreated_AnnotationAbsent(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{}
+	tn := &v2alpha1.CloudflareTunnel{}
 	require.False(t, isAutoCreated(tn), "absent annotation must default to direct-create (no GC)")
 }
 
 func TestIsAutoCreated_AnnotationOtherValue(t *testing.T) {
 	for _, v := range []string{"false", "", "1", "yes", "gibberish"} {
-		tn := &v1alpha1.CloudflareTunnel{
+		tn := &v2alpha1.CloudflareTunnel{
 			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
 				conventions.AnnotationAutoCreated: v,
 			}},
@@ -186,7 +186,7 @@ func TestIsAutoCreated_AnnotationOtherValue(t *testing.T) {
 
 func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T) {
 	s := tunnelScheme(t)
-	existing := &v1alpha1.CloudflareTunnel{
+	existing := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "cf-ns", Namespace: "ns"},
 	}
 	svc := &corev1.Service{
@@ -194,7 +194,7 @@ func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T)
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(existing, svc).Build()
 
-	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v1alpha1.ConnectorSpec{
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v2alpha1.ConnectorSpec{
 		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 	})
 	require.NoError(t, err)
@@ -207,12 +207,12 @@ func TestNeedsOwnerTransfer_OwnerGoneSourcesExist(t *testing.T) {
 	// so the TRUE path requires the annotation in addition to no owner +
 	// attaching sources (a direct-create CR is never owner-transferred —
 	// see TestNeedsOwnerTransfer_DirectCreateNeverTransfers).
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
-			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
 		},
 	}
 	require.True(t, needsOwnerTransfer(tn))
@@ -222,9 +222,9 @@ func TestNeedsOwnerTransfer_DirectCreateNeverTransfers(t *testing.T) {
 	// No cloudflare.io/auto-created annotation: a user-authored direct-create
 	// tunnel must never be owner-transferred (else a Service becomes its
 	// k8s-controller-owner and GC deletes the user's CR — design §7).
-	tn := &v1alpha1.CloudflareTunnel{
-		Status: v1alpha1.CloudflareTunnelStatus{
-			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+	tn := &v2alpha1.CloudflareTunnel{
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
 		},
 	}
 	require.False(t, needsOwnerTransfer(tn),
@@ -235,13 +235,13 @@ func TestNeedsOwnerTransfer_OwnerExists(t *testing.T) {
 	// Auto-created marker present so the isAutoCreated gate is satisfied —
 	// the discriminating clause under test is "owner present blocks transfer",
 	// not the auto-created gate.
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
 			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
-			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
 		},
 	}
 	require.False(t, needsOwnerTransfer(tn), "owner present → no transfer needed (auto-created gate satisfied)")
@@ -251,7 +251,7 @@ func TestNeedsOwnerTransfer_OwnerGoneNoSources(t *testing.T) {
 	// Auto-created marker present so the isAutoCreated gate is satisfied —
 	// the discriminating clause under test is "no sources → delegated to
 	// isOrphaned", not the auto-created gate.
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
@@ -260,7 +260,7 @@ func TestNeedsOwnerTransfer_OwnerGoneNoSources(t *testing.T) {
 }
 
 func TestIsOrphaned_AutoCreatedAllConditionsMet(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
@@ -269,25 +269,25 @@ func TestIsOrphaned_AutoCreatedAllConditionsMet(t *testing.T) {
 }
 
 func TestIsOrphaned_DirectCreateNeverOrphaned(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{} // no annotation
+	tn := &v2alpha1.CloudflareTunnel{} // no annotation
 	require.False(t, isOrphaned(tn),
 		"direct-create CRs are never orphaned regardless of OwnerReferences or AttachedSources state")
 }
 
 func TestIsOrphaned_AutoCreatedWithSourcesNotOrphaned(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
-			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
 		},
 	}
 	require.False(t, isOrphaned(tn), "sources present → not orphaned, may need transfer")
 }
 
 func TestIsOrphaned_AutoCreatedWithOwnerNotOrphaned(t *testing.T) {
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
 			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
@@ -297,8 +297,8 @@ func TestIsOrphaned_AutoCreatedWithOwnerNotOrphaned(t *testing.T) {
 }
 
 func TestPredicates_MutuallyExclusive(t *testing.T) {
-	for _, tn := range []*v1alpha1.CloudflareTunnel{
-		{Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a"}}}},
+	for _, tn := range []*v2alpha1.CloudflareTunnel{
+		{Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a"}}}},
 		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}}},
 		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}, OwnerReferences: []metav1.OwnerReference{{UID: "u"}}}},
 		// 4th case is THE discriminator: auto-created + sources + no owners —
@@ -313,8 +313,8 @@ func TestPredicates_MutuallyExclusive(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 			},
-			Status: v1alpha1.CloudflareTunnelStatus{
-				AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Name: "a"}},
+			Status: v2alpha1.CloudflareTunnelStatus{
+				AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a"}},
 			},
 		},
 	} {
@@ -323,8 +323,8 @@ func TestPredicates_MutuallyExclusive(t *testing.T) {
 	}
 }
 
-func makeAttachedSource(kind, ns, name string) v1alpha1.AttachedSource {
-	return v1alpha1.AttachedSource{Kind: kind, Namespace: ns, Name: name}
+func makeAttachedSource(kind, ns, name string) v2alpha1.AttachedSource {
+	return v2alpha1.AttachedSource{Kind: kind, Namespace: ns, Name: name}
 }
 
 func TestTransferOwnership_PicksLexSmallestLive(t *testing.T) {
@@ -332,10 +332,10 @@ func TestTransferOwnership_PicksLexSmallestLive(t *testing.T) {
 	svcA := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
 	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
 	svcC := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "c-svc", Namespace: "ns", UID: "uid-c"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl",
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "c-svc"),
 			makeAttachedSource("Service", "ns", "a-svc"),
 			makeAttachedSource("Service", "ns", "b-svc"),
@@ -346,7 +346,7 @@ func TestTransferOwnership_PicksLexSmallestLive(t *testing.T) {
 	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	require.True(t, transferred)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Len(t, got.OwnerReferences, 1)
 	require.Equal(t, "a-svc", got.OwnerReferences[0].Name)
@@ -365,10 +365,10 @@ func TestTransferOwnership_SkipsCandidatesWithDeletionTimestamp(t *testing.T) {
 	svcA := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a",
 		DeletionTimestamp: &now, Finalizers: []string{"keep-alive-for-test"}}}
 	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl",
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc"),
 			makeAttachedSource("Service", "ns", "b-svc"),
 		}},
@@ -378,16 +378,16 @@ func TestTransferOwnership_SkipsCandidatesWithDeletionTimestamp(t *testing.T) {
 	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	require.True(t, transferred)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Equal(t, "b-svc", got.OwnerReferences[0].Name, "lex-smallest live (non-deleting) candidate")
 }
 
 func TestTransferOwnership_AllCandidatesNotFound(t *testing.T) {
 	s := tunnelScheme(t)
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc"),
 			makeAttachedSource("Service", "ns", "b-svc"),
 		}},
@@ -397,7 +397,7 @@ func TestTransferOwnership_AllCandidatesNotFound(t *testing.T) {
 	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err, "all-NotFound is not an error; next reconcile retries with stable state")
 	require.False(t, transferred)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Empty(t, got.OwnerReferences)
 }
@@ -405,9 +405,9 @@ func TestTransferOwnership_AllCandidatesNotFound(t *testing.T) {
 func TestTransferOwnership_EmitsOwnerTransferredEvent(t *testing.T) {
 	s := tunnelScheme(t)
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc")}},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
@@ -431,9 +431,9 @@ func TestTransferOwnership_EmitsOwnerTransferredEvent(t *testing.T) {
 func TestTransferOwnership_ConflictReturnsFalseNil(t *testing.T) {
 	s := tunnelScheme(t)
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc")}},
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
@@ -453,9 +453,9 @@ func TestTransferOwnership_ConflictReturnsFalseNil(t *testing.T) {
 func TestTransferOwnership_GenericPatchErrorPropagates(t *testing.T) {
 	s := tunnelScheme(t)
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc")}},
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
@@ -475,9 +475,9 @@ func TestTransferOwnership_GenericPatchErrorPropagates(t *testing.T) {
 func TestTransferOwnership_NilRecorderNoPanic(t *testing.T) {
 	s := tunnelScheme(t)
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc")}},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
@@ -490,9 +490,9 @@ func TestTransferOwnership_NilRecorderNoPanic(t *testing.T) {
 // getSourceObject returns an error which propagates as (false, err).
 func TestTransferOwnership_UnknownKindErrors(t *testing.T) {
 	s := tunnelScheme(t)
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Widget", "ns", "w1")}},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).Build()
@@ -509,10 +509,10 @@ func TestTransferOwnership_NotFoundSkipsToNextLive(t *testing.T) {
 	s := tunnelScheme(t)
 	// "a-svc" is NOT created (NotFound); "b-svc" is live.
 	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl",
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
 			makeAttachedSource("Service", "ns", "a-svc"),
 			makeAttachedSource("Service", "ns", "b-svc"),
 		}},
@@ -522,7 +522,7 @@ func TestTransferOwnership_NotFoundSkipsToNextLive(t *testing.T) {
 	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	require.True(t, transferred)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Equal(t, "b-svc", got.OwnerReferences[0].Name, "NotFound on a-svc skips to live b-svc")
 }
@@ -554,7 +554,7 @@ func TestFindTunnelTargetedParentRef(t *testing.T) {
 		// TestHTTPRouteSource_HappyPath for namespace "gw-ns" and tunnel-name "edge").
 		tnName, err := DeriveTunnelName("ns1", "edge")
 		require.NoError(t, err)
-		tn := &v1alpha1.CloudflareTunnel{
+		tn := &v2alpha1.CloudflareTunnel{
 			ObjectMeta: metav1.ObjectMeta{Name: tnName, Namespace: "ns1"},
 		}
 

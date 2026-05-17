@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -57,12 +57,12 @@ func TestDerivePhase(t *testing.T) {
 		name   string
 		status metav1.ConditionStatus
 		reason string
-		want   v1alpha1.Phase
+		want   v2alpha1.Phase
 	}{
-		{"ready-true", metav1.ConditionTrue, conventions.ReasonReady, v1alpha1.PhaseReady},
-		{"reconciling", metav1.ConditionFalse, conventions.ReasonReconciling, v1alpha1.PhaseReconciling},
-		{"error", metav1.ConditionFalse, conventions.ReasonDegraded, v1alpha1.PhaseError},
-		{"unknown", metav1.ConditionUnknown, "", v1alpha1.PhasePending},
+		{"ready-true", metav1.ConditionTrue, conventions.ReasonReady, v2alpha1.PhaseReady},
+		{"reconciling", metav1.ConditionFalse, conventions.ReasonReconciling, v2alpha1.PhaseReconciling},
+		{"error", metav1.ConditionFalse, conventions.ReasonDegraded, v2alpha1.PhaseError},
+		{"unknown", metav1.ConditionUnknown, "", v2alpha1.PhasePending},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

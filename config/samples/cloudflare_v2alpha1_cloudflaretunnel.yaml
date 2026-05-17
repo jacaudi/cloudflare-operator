@@ -5,7 +5,7 @@
 # For annotation-driven attachment, opt a Service or Gateway in via
 # `cloudflare.io/tunnel: "true"` instead — the operator auto-creates a tunnel
 # CR named cf-<namespace>[-<tunnel-name>] per design §6.
-apiVersion: cloudflare.io/v1alpha1
+apiVersion: cloudflare.io/v2alpha1
 kind: CloudflareTunnel
 metadata:
   name: example-tunnel

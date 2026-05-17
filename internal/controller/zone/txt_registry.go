@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 )
 
@@ -62,7 +62,7 @@ const (
 // The key name inside the Secret defaults to "key" (not "token") when
 // keyRef.Key is empty — the TXT key Secret uses a different default than the
 // credential Secret.
-func loadCodec(ctx context.Context, c client.Client, keyRef *v1alpha1.SecretReference, defaultNamespace string) (cloudflare.Codec, error) {
+func loadCodec(ctx context.Context, c client.Client, keyRef *v2alpha1.SecretReference, defaultNamespace string) (cloudflare.Codec, error) {
 	if keyRef == nil || keyRef.Name == "" {
 		return cloudflare.NewPlaintextCodec(), nil
 	}

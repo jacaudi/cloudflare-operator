@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -51,9 +51,9 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 
 	// Zone CR for example.com — the emitted DNSRecord references this via
 	// spec.zoneRef per the same convention used in the sibling envtests.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
-		Spec: v1alpha1.CloudflareZoneSpec{
+		Spec: v2alpha1.CloudflareZoneSpec{
 			Name:           "example.com",
 			Type:           "full",
 			DeletionPolicy: "Retain",
@@ -84,7 +84,7 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 	// envtest's deferred-emission flow).
 	expectedTunnel := "cf-" + f.ns + "-payments"
 	require.Eventually(t, func() bool {
-		var tn v1alpha1.CloudflareTunnel
+		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
 			return false
 		}
@@ -93,9 +93,9 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 
 	// Wait for the emitted DNSRecord with Spec.Adopt=false.
 	// List by namespace and filter — the namespace is unique to this test.
-	var initialDR *v1alpha1.CloudflareDNSRecord
+	var initialDR *v2alpha1.CloudflareDNSRecord
 	require.Eventually(t, func() bool {
-		var list v1alpha1.CloudflareDNSRecordList
+		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
 			return false
 		}
@@ -120,7 +120,7 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 	// to Spec.Adopt on the existing emitted CR. The silent-bug regression
 	// would leave Spec.Adopt=false here.
 	require.Eventually(t, func() bool {
-		var got v1alpha1.CloudflareDNSRecord
+		var got v2alpha1.CloudflareDNSRecord
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: drName}, &got); err != nil {
 			return false
 		}
@@ -131,7 +131,7 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 	// The DNSRecord must be updated in place, not recreated. A future
 	// regression that accidentally introduced delete+recreate would pass
 	// the Spec.Adopt poll but break this UID assertion.
-	var finalDR v1alpha1.CloudflareDNSRecord
+	var finalDR v2alpha1.CloudflareDNSRecord
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: drName}, &finalDR))
 	require.Equal(t, initialDR.UID, finalDR.UID,
 		"DNSRecord must be updated in place (UID preserved), not recreated")

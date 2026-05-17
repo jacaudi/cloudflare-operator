@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 )
@@ -36,7 +36,7 @@ func emitTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -58,7 +58,7 @@ func TestEmitDNSRecord_CreatesNew(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	name := emittedDNSRecordName("svc", "foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, "CNAME", got.Spec.Type)
@@ -94,7 +94,7 @@ func TestEmitDNSRecord_UpdatesSpecOnAnnotationChange(t *testing.T) {
 		Annotations: map[string]string{conventions.AnnotationAdopt: "true"},
 	}))
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	name := emittedDNSRecordName("svc", "foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.True(t, got.Spec.Adopt,
@@ -115,7 +115,7 @@ func TestEmitDNSRecord_NoAnnotationsAreNoOpFields(t *testing.T) {
 		Hostname: "foo.example.com", Content: "tunnel.cfargotunnel.com",
 	}))
 
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	name := emittedDNSRecordName("svc", "foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Nil(t, got.Spec.ZoneRef, "no zoneRef annotation → no ZoneRef")

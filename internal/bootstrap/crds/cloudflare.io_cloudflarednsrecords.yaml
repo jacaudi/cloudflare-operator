@@ -36,7 +36,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v2alpha1
     schema:
       openAPIV3Schema:
         description: CloudflareDNSRecord is the Schema for the cloudflarednsrecords
@@ -356,7 +356,7 @@ spec:
                     type: string
                   kind:
                     description: Kind is the encoded owner kind ("CloudflareDNSRecord"
-                      in v1alpha1).
+                      in v2alpha1).
                     type: string
                   name:
                     description: Name is the encoded owner name.

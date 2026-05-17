@@ -35,7 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
@@ -79,7 +79,7 @@ type CloudflareDNSRecordReconciler struct {
 func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("cloudflarednsrecord", req.NamespacedName)
 
-	var rec v1alpha1.CloudflareDNSRecord
+	var rec v2alpha1.CloudflareDNSRecord
 	if err := r.Get(ctx, req.NamespacedName, &rec); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -106,8 +106,8 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	// Fetch the CloudflareOperator singleton to resolve the TXT-registry key.
 	// NotFound is treated as no key configured (bootstrap creates it eventually).
 	// Any other Get error is hard-returned so the reconciler retries.
-	var op v1alpha1.CloudflareOperator
-	if err := r.Get(ctx, types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}, &op); err != nil {
+	var op v2alpha1.CloudflareOperator
+	if err := r.Get(ctx, types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}, &op); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("get CloudflareOperator/cluster: %w", err)
 		}
@@ -174,7 +174,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			return ctrl.Result{}, fmt.Errorf("observe: list TXT: %w", terr)
 		}
 		if len(txtRecs) > 0 {
-			obs := &v1alpha1.ObservedTXTPayload{}
+			obs := &v2alpha1.ObservedTXTPayload{}
 			if payload, derr := readCodec.Decode(txtRecs[0].Content); derr != nil {
 				obs.RawContent = txtRecs[0].Content
 				obs.Codec = "unrecognized"
@@ -401,14 +401,14 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 // haltDependency persists a DependencyMissing Ready=False with the given
 // message and requeues. Used when zone resolution can't proceed because the
 // referenced CloudflareZone isn't ready yet.
-func (r *CloudflareDNSRecordReconciler) haltDependency(ctx context.Context, rec *v1alpha1.CloudflareDNSRecord, msg string) (ctrl.Result, error) {
+func (r *CloudflareDNSRecordReconciler) haltDependency(ctx context.Context, rec *v2alpha1.CloudflareDNSRecord, msg string) (ctrl.Result, error) {
 	return reconcile.HaltDependency(ctx, r.Client, rec, &rec.Status.Conditions, &rec.Status.Phase, msg, reconcile.DefaultRequeueAfter)
 }
 
 // reconcileDelete handles the deletion path: best-effort remove the record on
 // Cloudflare (NotFound is treated as success via WrapDeleteErr), then drop the
 // finalizer.
-func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec *v1alpha1.CloudflareDNSRecord) (ctrl.Result, error) {
+func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec *v2alpha1.CloudflareDNSRecord) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Observe mode never wrote anything to Cloudflare; drop the finalizer
@@ -480,9 +480,9 @@ func (r *CloudflareDNSRecordReconciler) reconcileDelete(ctx context.Context, rec
 //   - DynamicIP: external IP via r.IPResolver (A only; admission CEL gates type).
 //   - SRV: empty (content lives in Data; populated by buildParams).
 //   - default: *Spec.Content.
-func (r *CloudflareDNSRecordReconciler) resolveContent(ctx context.Context, rec *v1alpha1.CloudflareDNSRecord) (string, error) {
+func (r *CloudflareDNSRecordReconciler) resolveContent(ctx context.Context, rec *v2alpha1.CloudflareDNSRecord) (string, error) {
 	if rec.Spec.DynamicIP {
-		if rec.Spec.Type != v1alpha1.DNSRecordTypeA {
+		if rec.Spec.Type != v2alpha1.DNSRecordTypeA {
 			return "", fmt.Errorf("dynamicIP is only valid for type A records")
 		}
 		if r.IPResolver == nil {
@@ -490,7 +490,7 @@ func (r *CloudflareDNSRecordReconciler) resolveContent(ctx context.Context, rec 
 		}
 		return r.IPResolver.GetExternalIP(ctx)
 	}
-	if rec.Spec.Type == v1alpha1.DNSRecordTypeSRV {
+	if rec.Spec.Type == v2alpha1.DNSRecordTypeSRV {
 		// SRV content is computed from SRVData via the Data map in buildParams.
 		return "", nil
 	}
@@ -502,7 +502,7 @@ func (r *CloudflareDNSRecordReconciler) resolveContent(ctx context.Context, rec 
 
 // buildParams maps a CR's desired state to cloudflare.DNSRecordParams.
 // SRV records carry their structured fields in Data; other types use Content.
-func buildParams(rec *v1alpha1.CloudflareDNSRecord, content string) cloudflare.DNSRecordParams {
+func buildParams(rec *v2alpha1.CloudflareDNSRecord, content string) cloudflare.DNSRecordParams {
 	params := cloudflare.DNSRecordParams{
 		Name:    rec.Spec.Name,
 		Type:    rec.Spec.Type,
@@ -531,18 +531,18 @@ func buildParams(rec *v1alpha1.CloudflareDNSRecord, content string) cloudflare.D
 // spec. SRV records skip the top-level Content comparison because their
 // content is computed server-side from Data; instead they get a per-field
 // comparison against the structured SRVData.
-func needsUpdate(observed *cloudflare.DNSRecord, spec *v1alpha1.CloudflareDNSRecordSpec, content string) bool {
+func needsUpdate(observed *cloudflare.DNSRecord, spec *v2alpha1.CloudflareDNSRecordSpec, content string) bool {
 	if observed.Name != spec.Name {
 		return true
 	}
 	// SRV records: compare structured Data fields and short-circuit out
 	// before the Content branch (their Content is server-computed).
-	if spec.Type == v1alpha1.DNSRecordTypeSRV && spec.SRVData != nil {
+	if spec.Type == v2alpha1.DNSRecordTypeSRV && spec.SRVData != nil {
 		if srvDriftDetected(observed.Data, spec.SRVData) {
 			return true
 		}
 	}
-	if spec.Type != v1alpha1.DNSRecordTypeSRV && observed.Content != content {
+	if spec.Type != v2alpha1.DNSRecordTypeSRV && observed.Content != content {
 		return true
 	}
 	if spec.TTL > 0 && observed.TTL != spec.TTL {
@@ -567,7 +567,7 @@ func needsUpdate(observed *cloudflare.DNSRecord, spec *v1alpha1.CloudflareDNSRec
 // as float64 (JSON-decoded) — normalize before comparing. The "name" key
 // mirrors rec.Spec.Name and is already validated by the top-level Name
 // comparison in needsUpdate; it is excluded here.
-func srvDriftDetected(observed map[string]any, spec *v1alpha1.SRVData) bool {
+func srvDriftDetected(observed map[string]any, spec *v2alpha1.SRVData) bool {
 	if observed == nil {
 		// Observed has no Data — either freshly created or missing fields.
 		// Treat as drift to force a re-PUT and converge upstream state.

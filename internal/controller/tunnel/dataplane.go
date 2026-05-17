@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // DefaultCloudflaredImage is the operator's compile-time pin. The reconciler
@@ -40,15 +40,15 @@ const DefaultCloudflaredImage = "docker.io/cloudflare/cloudflared:2026.4.1"
 // dataplaneName returns the Deployment / dataplane resource basename for a
 // given CloudflareTunnel. The 52-char cap on spec.name guarantees this stays
 // within the 63-char DNS-1123 label limit ("cloudflared-" = 11 chars).
-func dataplaneName(tn *v1alpha1.CloudflareTunnel) string {
+func dataplaneName(tn *v2alpha1.CloudflareTunnel) string {
 	return "cloudflared-" + tn.Name
 }
 
-func tokenSecretName(tn *v1alpha1.CloudflareTunnel) string {
+func tokenSecretName(tn *v2alpha1.CloudflareTunnel) string {
 	return "cloudflared-token-" + tn.Name
 }
 
-func metricsServiceName(tn *v1alpha1.CloudflareTunnel) string {
+func metricsServiceName(tn *v2alpha1.CloudflareTunnel) string {
 	return "cloudflared-" + tn.Name + "-metrics"
 }
 
@@ -73,7 +73,7 @@ func metricsServiceName(tn *v1alpha1.CloudflareTunnel) string {
 // Resources combine user Requests + Limits with defaults independently
 // per half: setting only Requests still gets the default Limits safety
 // floor.
-func BuildDeployment(tn *v1alpha1.CloudflareTunnel, defaultImage string) *appsv1.Deployment {
+func BuildDeployment(tn *v2alpha1.CloudflareTunnel, defaultImage string) *appsv1.Deployment {
 	labels := dataplaneLabels(tn)
 	image := resolveImage(tn.Spec.Connector.Image, defaultImage)
 
@@ -227,7 +227,7 @@ func BuildMetricsService(tunnelName, namespace string) *corev1.Service {
 	}
 }
 
-func dataplaneLabels(tn *v1alpha1.CloudflareTunnel) map[string]string {
+func dataplaneLabels(tn *v2alpha1.CloudflareTunnel) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":     "cloudflared",
 		"app.kubernetes.io/instance": tn.Name,
@@ -238,7 +238,7 @@ func dataplaneLabels(tn *v1alpha1.CloudflareTunnel) map[string]string {
 // resolveImage combines a partial override with the default image string
 // independently per axis (Repository / Tag). Either half left unset on the
 // override falls through to the default.
-func resolveImage(override *v1alpha1.ConnectorImage, defaultImage string) string {
+func resolveImage(override *v2alpha1.ConnectorImage, defaultImage string) string {
 	repo, tag := splitImage(defaultImage)
 	if override != nil {
 		if override.Repository != "" {

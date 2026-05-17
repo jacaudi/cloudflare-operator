@@ -23,7 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -62,18 +62,18 @@ func SetCondition(conds []metav1.Condition, condType string, status metav1.Condi
 	})
 }
 
-// DerivePhase maps (Ready.Status, Ready.Reason) to a v1alpha1.Phase enum.
-func DerivePhase(status metav1.ConditionStatus, reason string) v1alpha1.Phase {
+// DerivePhase maps (Ready.Status, Ready.Reason) to a v2alpha1.Phase enum.
+func DerivePhase(status metav1.ConditionStatus, reason string) v2alpha1.Phase {
 	switch status {
 	case metav1.ConditionTrue:
-		return v1alpha1.PhaseReady
+		return v2alpha1.PhaseReady
 	case metav1.ConditionFalse:
 		if _, ok := inProgressReasons[reason]; ok {
-			return v1alpha1.PhaseReconciling
+			return v2alpha1.PhaseReconciling
 		}
-		return v1alpha1.PhaseError
+		return v2alpha1.PhaseError
 	default:
-		return v1alpha1.PhasePending
+		return v2alpha1.PhasePending
 	}
 }
 

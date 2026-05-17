@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -39,7 +39,7 @@ import (
 func zoneTestScheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -57,7 +57,7 @@ func newZoneFixture(t *testing.T, objs ...client.Object) *zoneTestFixture {
 	c := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&v1alpha1.CloudflareZone{}).
+		WithStatusSubresource(&v2alpha1.CloudflareZone{}).
 		Build()
 	m := mock.New()
 	return &zoneTestFixture{
@@ -71,15 +71,15 @@ func newZoneFixture(t *testing.T, objs ...client.Object) *zoneTestFixture {
 }
 
 func TestZone_CreateFlow(t *testing.T) {
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "default"},
-		Spec:       v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyRetain},
+		Spec:       v2alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v2alpha1.DeletionPolicyRetain},
 	}
 	f := newZoneFixture(t, z)
 	_, err := f.reconc.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "example", Namespace: "default"}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareZone
+	var got v2alpha1.CloudflareZone
 	require.NoError(t, f.c.Get(context.Background(), types.NamespacedName{Name: "example", Namespace: "default"}, &got))
 	// First Reconcile sets the finalizer and requeues. Re-reconcile to run the
 	// create flow.
@@ -94,15 +94,15 @@ func TestZone_CreateFlow(t *testing.T) {
 
 func TestZone_ActivationCheckPokesPending(t *testing.T) {
 	m := mock.New()
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "default", Finalizers: []string{conventions.FinalizerName}},
-		Spec:       v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyRetain},
+		Spec:       v2alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v2alpha1.DeletionPolicyRetain},
 	}
 	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
 	z.Status.ZoneID = created.ID
 	z.Status.Status = "pending"
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v2alpha1.CloudflareZone{}).Build()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	r := &CloudflareZoneReconciler{Client: c, Scheme: s,
@@ -111,7 +111,7 @@ func TestZone_ActivationCheckPokesPending(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "example", Namespace: "default"}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareZone
+	var got v2alpha1.CloudflareZone
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "example", Namespace: "default"}, &got))
 	require.Equal(t, "active", got.Status.Status)
 }
@@ -120,17 +120,17 @@ func TestZone_DeleteWithRetain_KeepsZone(t *testing.T) {
 	m := mock.New()
 	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
 	now := metav1.Now()
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "example", Namespace: "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec:   v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyRetain},
-		Status: v1alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
+		Spec:   v2alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v2alpha1.DeletionPolicyRetain},
+		Status: v2alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
 	}
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v2alpha1.CloudflareZone{}).Build()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	r := &CloudflareZoneReconciler{Client: c, Scheme: s,
@@ -148,17 +148,17 @@ func TestZone_DeleteWithDelete_RemovesZone(t *testing.T) {
 	m := mock.New()
 	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
 	now := metav1.Now()
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "example", Namespace: "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec:   v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyDelete},
-		Status: v1alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
+		Spec:   v2alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v2alpha1.DeletionPolicyDelete},
+		Status: v2alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
 	}
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v2alpha1.CloudflareZone{}).Build()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 	r := &CloudflareZoneReconciler{Client: c, Scheme: s,
@@ -174,17 +174,17 @@ func TestZone_DeleteWithDelete_CallsDrainHoldFn(t *testing.T) {
 	m := mock.New()
 	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
 	now := metav1.Now()
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "example", Namespace: "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec:   v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyDelete},
-		Status: v1alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
+		Spec:   v2alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v2alpha1.DeletionPolicyDelete},
+		Status: v2alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
 	}
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v2alpha1.CloudflareZone{}).Build()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
@@ -212,7 +212,7 @@ func TestZone_DeleteWithDelete_CallsDrainHoldFn(t *testing.T) {
 	// Finalizer removed: the fake client deletes the object when the finalizer
 	// is cleared while DeletionTimestamp is set, so "not found" is the expected
 	// outcome — it confirms the finalizer was stripped.
-	var got v1alpha1.CloudflareZone
+	var got v2alpha1.CloudflareZone
 	getErr := c.Get(context.Background(), types.NamespacedName{Name: "example", Namespace: "default"}, &got)
 	if getErr == nil {
 		require.NotContains(t, got.Finalizers, conventions.FinalizerName)
@@ -225,17 +225,17 @@ func TestZone_DeleteWithDelete_DrainHoldFnErrorIsLogged(t *testing.T) {
 	m := mock.New()
 	created, _ := m.Zone.CreateZone(context.Background(), "acct-1", cloudflare.ZoneParams{Name: "example.com"})
 	now := metav1.Now()
-	z := &v1alpha1.CloudflareZone{
+	z := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "example", Namespace: "default",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec:   v1alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v1alpha1.DeletionPolicyDelete},
-		Status: v1alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
+		Spec:   v2alpha1.CloudflareZoneSpec{Name: "example.com", Type: "full", DeletionPolicy: v2alpha1.DeletionPolicyDelete},
+		Status: v2alpha1.CloudflareZoneStatus{ZoneID: created.ID, Status: "active"},
 	}
 	s := zoneTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v1alpha1.CloudflareZone{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(z).WithStatusSubresource(&v2alpha1.CloudflareZone{}).Build()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
 
@@ -259,7 +259,7 @@ func TestZone_DeleteWithDelete_DrainHoldFnErrorIsLogged(t *testing.T) {
 
 	// Finalizer still removed: the fake client deletes the object when the
 	// finalizer is cleared while DeletionTimestamp is set.
-	var got v1alpha1.CloudflareZone
+	var got v2alpha1.CloudflareZone
 	getErr := c.Get(context.Background(), types.NamespacedName{Name: "example", Namespace: "default"}, &got)
 	if getErr == nil {
 		require.NotContains(t, got.Finalizers, conventions.FinalizerName)

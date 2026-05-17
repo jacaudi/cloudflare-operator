@@ -26,17 +26,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 )
 
-// zoneScheme returns a runtime.Scheme with corev1 and v1alpha1 registered.
+// zoneScheme returns a runtime.Scheme with corev1 and v2alpha1 registered.
 func zoneScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -53,7 +53,7 @@ func TestLoadCodec_EmptyKeyName_DefaultsToKey(t *testing.T) {
 		Data:       map[string][]byte{"key": raw[:]},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(secret).Build()
-	ref := &v1alpha1.SecretReference{Name: "txt-key"} // Key intentionally empty
+	ref := &v2alpha1.SecretReference{Name: "txt-key"} // Key intentionally empty
 	codec, err := loadCodec(context.Background(), c, ref, "default")
 	require.NoError(t, err)
 	require.Equal(t, "aes-gcm", codec.Kind())
@@ -80,7 +80,7 @@ func TestLoadCodec_ValidKey_ReturnsAESGCM(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(secret).Build()
 
-	ref := &v1alpha1.SecretReference{Name: "txt-key", Key: "key"}
+	ref := &v2alpha1.SecretReference{Name: "txt-key", Key: "key"}
 	codec, err := loadCodec(ctx, c, ref, "default")
 	require.NoError(t, err)
 	require.Equal(t, "aes-gcm", codec.Kind())
@@ -90,7 +90,7 @@ func TestLoadCodec_MissingSecret_Errors(t *testing.T) {
 	ctx := context.Background()
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).Build()
 
-	ref := &v1alpha1.SecretReference{Name: "does-not-exist", Key: "key"}
+	ref := &v2alpha1.SecretReference{Name: "does-not-exist", Key: "key"}
 	_, err := loadCodec(ctx, c, ref, "default")
 	require.Error(t, err)
 	require.ErrorIs(t, err, cloudflare.ErrSecretNotFound)
@@ -104,7 +104,7 @@ func TestLoadCodec_WrongKeyLength_Errors(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(secret).Build()
 
-	ref := &v1alpha1.SecretReference{Name: "txt-key", Key: "key"}
+	ref := &v2alpha1.SecretReference{Name: "txt-key", Key: "key"}
 	_, err := loadCodec(ctx, c, ref, "default")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrTxtRegistryKeyMalformed)
@@ -118,7 +118,7 @@ func TestLoadCodec_MissingKeyInSecret_Errors(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(secret).Build()
 
-	ref := &v1alpha1.SecretReference{Name: "txt-key", Key: "key"}
+	ref := &v2alpha1.SecretReference{Name: "txt-key", Key: "key"}
 	_, err := loadCodec(ctx, c, ref, "default")
 	require.Error(t, err)
 	require.ErrorIs(t, err, cloudflare.ErrSecretKeyMissing)

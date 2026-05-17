@@ -25,13 +25,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 func zoneScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -45,13 +45,13 @@ func TestResolveZoneID_LiteralID(t *testing.T) {
 }
 
 func TestResolveZoneID_FromRef(t *testing.T) {
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "media"},
 	}
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(zone).Build()
 
 	res, err := ResolveZoneID(context.Background(), c, ZoneRefInputs{
-		ZoneRef: &v1alpha1.ZoneReference{Name: "test", Namespace: "media"},
+		ZoneRef: &v2alpha1.ZoneReference{Name: "test", Namespace: "media"},
 	}, "default")
 	require.NoError(t, err)
 	require.Equal(t, "test", res.ZoneName)
@@ -62,7 +62,7 @@ func TestResolveZoneID_BothSetRejected(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).Build()
 	_, err := ResolveZoneID(context.Background(), c, ZoneRefInputs{
 		ZoneID:  "abc",
-		ZoneRef: &v1alpha1.ZoneReference{Name: "test"},
+		ZoneRef: &v2alpha1.ZoneReference{Name: "test"},
 	}, "default")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrZoneRefXOR)
@@ -78,7 +78,7 @@ func TestResolveZoneID_NeitherSetRejected(t *testing.T) {
 func TestResolveZoneID_RefNotFound(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).Build()
 	_, err := ResolveZoneID(context.Background(), c, ZoneRefInputs{
-		ZoneRef: &v1alpha1.ZoneReference{Name: "missing"},
+		ZoneRef: &v2alpha1.ZoneReference{Name: "missing"},
 	}, "media")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrZoneRefNotFound)
@@ -86,13 +86,13 @@ func TestResolveZoneID_RefNotFound(t *testing.T) {
 
 func TestResolveZoneID_FromRef_StatusZoneID(t *testing.T) {
 	// Spec 2 contract: when status.zoneID is populated, ResolveZoneID returns it.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "media"},
-		Status:     v1alpha1.CloudflareZoneStatus{ZoneID: "abc123"},
+		Status:     v2alpha1.CloudflareZoneStatus{ZoneID: "abc123"},
 	}
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(zone).Build()
 	res, err := ResolveZoneID(context.Background(), c, ZoneRefInputs{
-		ZoneRef: &v1alpha1.ZoneReference{Name: "test", Namespace: "media"},
+		ZoneRef: &v2alpha1.ZoneReference{Name: "test", Namespace: "media"},
 	}, "default")
 	require.NoError(t, err)
 	require.Equal(t, "abc123", res.ZoneID)
@@ -102,12 +102,12 @@ func TestResolveZoneID_FromRef_StatusZoneID(t *testing.T) {
 func TestResolveZoneID_FromRef_StatusZoneIDUnset(t *testing.T) {
 	// Spec-2 reconciler not yet populated status — caller requeues.
 	// ZoneObject must be non-nil so caller distinguishes from not-found.
-	zone := &v1alpha1.CloudflareZone{
+	zone := &v2alpha1.CloudflareZone{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "media"},
 	}
 	c := fake.NewClientBuilder().WithScheme(zoneScheme(t)).WithObjects(zone).Build()
 	res, err := ResolveZoneID(context.Background(), c, ZoneRefInputs{
-		ZoneRef: &v1alpha1.ZoneReference{Name: "test", Namespace: "media"},
+		ZoneRef: &v2alpha1.ZoneReference{Name: "test", Namespace: "media"},
 	}, "default")
 	require.NoError(t, err)
 	require.Empty(t, res.ZoneID, "status.zoneID not populated yet; caller should requeue")

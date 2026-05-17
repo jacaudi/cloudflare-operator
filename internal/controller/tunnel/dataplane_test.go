@@ -23,16 +23,16 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 const testDefaultImage = "docker.io/cloudflare/cloudflared:2026.4.1"
 
-func mkTunnel(name, ns string, mut func(*v1alpha1.CloudflareTunnel)) *v1alpha1.CloudflareTunnel {
-	tn := &v1alpha1.CloudflareTunnel{
-		Spec: v1alpha1.CloudflareTunnelSpec{
+func mkTunnel(name, ns string, mut func(*v2alpha1.CloudflareTunnel)) *v2alpha1.CloudflareTunnel {
+	tn := &v2alpha1.CloudflareTunnel{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: name,
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas:           2,
 				Protocol:           "auto",
 				LogLevel:           "info",
@@ -56,7 +56,7 @@ func TestBuildDeployment_NamingTemplate(t *testing.T) {
 }
 
 func TestBuildDeployment_GracePeriodPlus15(t *testing.T) {
-	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) { c.Spec.Connector.GracePeriodSeconds = 30 })
+	tn := mkTunnel("t", "ns", func(c *v2alpha1.CloudflareTunnel) { c.Spec.Connector.GracePeriodSeconds = 30 })
 	dep := BuildDeployment(tn, testDefaultImage)
 	require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
 	require.Equal(t, int64(45), *dep.Spec.Template.Spec.TerminationGracePeriodSeconds)
@@ -96,8 +96,8 @@ func TestBuildDeployment_ReadinessProbe(t *testing.T) {
 }
 
 func TestBuildDeployment_OriginCAVolumeMounted(t *testing.T) {
-	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) {
-		c.Spec.Connector.OriginCASecretRef = &v1alpha1.SecretReference{Name: "ca", Key: "bundle.crt"}
+	tn := mkTunnel("t", "ns", func(c *v2alpha1.CloudflareTunnel) {
+		c.Spec.Connector.OriginCASecretRef = &v2alpha1.SecretReference{Name: "ca", Key: "bundle.crt"}
 	})
 	dep := BuildDeployment(tn, testDefaultImage)
 	vols := dep.Spec.Template.Spec.Volumes
@@ -112,7 +112,7 @@ func TestBuildDeployment_OriginCAVolumeMounted(t *testing.T) {
 
 func TestBuildDeployment_ResourceDefaults_Independent(t *testing.T) {
 	// Half-set: Requests only — Limits should still get safety floor (pattern #10).
-	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) {
+	tn := mkTunnel("t", "ns", func(c *v2alpha1.CloudflareTunnel) {
 		c.Spec.Connector.Resources = corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")},
 		}
@@ -126,7 +126,7 @@ func TestBuildDeployment_ResourceDefaults_Independent(t *testing.T) {
 func TestBuildDeployment_ResourceDefaults_LimitsOnly(t *testing.T) {
 	// Symmetric to TestBuildDeployment_ResourceDefaults_Independent: user sets
 	// only Limits, default Requests must apply independently (pattern #10).
-	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) {
+	tn := mkTunnel("t", "ns", func(c *v2alpha1.CloudflareTunnel) {
 		c.Spec.Connector.Resources = corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
 		}
@@ -140,8 +140,8 @@ func TestBuildDeployment_ResourceDefaults_LimitsOnly(t *testing.T) {
 
 func TestBuildDeployment_ImageDefault_HalfOverride(t *testing.T) {
 	// Repository-only override; Tag from default (pattern #9).
-	tn := mkTunnel("t", "ns", func(c *v1alpha1.CloudflareTunnel) {
-		c.Spec.Connector.Image = &v1alpha1.ConnectorImage{Repository: "private.example.com/cloudflared"}
+	tn := mkTunnel("t", "ns", func(c *v2alpha1.CloudflareTunnel) {
+		c.Spec.Connector.Image = &v2alpha1.ConnectorImage{Repository: "private.example.com/cloudflared"}
 	})
 	dep := BuildDeployment(tn, testDefaultImage)
 	img := dep.Spec.Template.Spec.Containers[0].Image

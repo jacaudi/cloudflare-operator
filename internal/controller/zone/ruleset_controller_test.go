@@ -26,7 +26,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -38,16 +38,16 @@ func boolPtr(b bool) *bool { return &b }
 
 func TestRuleset_CreatesEntrypoint(t *testing.T) {
 	s := zoneTestScheme(t)
-	rs := &v1alpha1.CloudflareRuleset{
+	rs := &v2alpha1.CloudflareRuleset{
 		ObjectMeta: metav1.ObjectMeta{Name: "waf", Namespace: "default"},
-		Spec: v1alpha1.CloudflareRulesetSpec{
+		Spec: v2alpha1.CloudflareRulesetSpec{
 			ZoneID: "z1", Name: "waf", Phase: "http_request_firewall_custom",
-			Rules: []v1alpha1.RulesetRuleSpec{
+			Rules: []v2alpha1.RulesetRuleSpec{
 				{Action: "block", Expression: `(ip.src eq 192.0.2.4)`},
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rs).WithStatusSubresource(&v1alpha1.CloudflareRuleset{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rs).WithStatusSubresource(&v2alpha1.CloudflareRuleset{}).Build()
 	m := mock.New()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
@@ -64,7 +64,7 @@ func TestRuleset_CreatesEntrypoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Rules, 1)
 
-	var stored v1alpha1.CloudflareRuleset
+	var stored v2alpha1.CloudflareRuleset
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "waf", Namespace: "default"}, &stored))
 	require.Equal(t, got.ID, stored.Status.RulesetID)
 	require.Equal(t, 1, stored.Status.RuleCount)
@@ -74,17 +74,17 @@ func TestRuleset_CreatesEntrypoint(t *testing.T) {
 
 func TestRuleset_ReplacesRulesOnSpecChange(t *testing.T) {
 	s := zoneTestScheme(t)
-	rs := &v1alpha1.CloudflareRuleset{
+	rs := &v2alpha1.CloudflareRuleset{
 		ObjectMeta: metav1.ObjectMeta{Name: "waf", Namespace: "default", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareRulesetSpec{
+		Spec: v2alpha1.CloudflareRulesetSpec{
 			ZoneID: "z1", Name: "waf", Phase: "http_request_firewall_custom",
-			Rules: []v1alpha1.RulesetRuleSpec{
+			Rules: []v2alpha1.RulesetRuleSpec{
 				{Action: "block", Expression: "a"},
 				{Action: "log", Expression: "b"},
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rs).WithStatusSubresource(&v1alpha1.CloudflareRuleset{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rs).WithStatusSubresource(&v2alpha1.CloudflareRuleset{}).Build()
 	m := mock.New()
 	// Seed pre-existing single-rule entrypoint.
 	_, _ = m.Ruleset.UpsertPhaseEntrypoint(context.Background(), "z1", "http_request_firewall_custom", cloudflare.RulesetParams{
@@ -109,19 +109,19 @@ func TestRuleset_ReplacesRulesOnSpecChange(t *testing.T) {
 func TestRuleset_NoDriftLoopOnExplicitLoggingFalse(t *testing.T) {
 	s := zoneTestScheme(t)
 	loggingDisabled := false
-	rs := &v1alpha1.CloudflareRuleset{
+	rs := &v2alpha1.CloudflareRuleset{
 		ObjectMeta: metav1.ObjectMeta{Name: "waf", Namespace: "default", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareRulesetSpec{
+		Spec: v2alpha1.CloudflareRulesetSpec{
 			ZoneID: "z1", Name: "waf", Phase: "http_request_firewall_custom",
-			Rules: []v1alpha1.RulesetRuleSpec{
+			Rules: []v2alpha1.RulesetRuleSpec{
 				{
 					Action: "block", Expression: `(ip.src eq 192.0.2.4)`,
-					Logging: &v1alpha1.RuleLogging{Enabled: &loggingDisabled},
+					Logging: &v2alpha1.RuleLogging{Enabled: &loggingDisabled},
 				},
 			},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rs).WithStatusSubresource(&v1alpha1.CloudflareRuleset{}).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(rs).WithStatusSubresource(&v2alpha1.CloudflareRuleset{}).Build()
 	m := mock.New()
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")

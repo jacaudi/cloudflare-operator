@@ -17,7 +17,7 @@ limitations under the License.
 package reconcile
 
 import (
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // ShouldMutate reports whether a reconciler should perform write operations
@@ -27,7 +27,7 @@ import (
 // String-typed for reusability across CRDs regardless of their Mode enum
 // type — the caller passes the raw string from spec.mode and the helper
 // compares it against the canonical "Observe" sentinel value (bound to
-// v1alpha1.RecordModeObserve so an enum rename breaks the build, not the
+// v2alpha1.RecordModeObserve so an enum rename breaks the build, not the
 // gate). Empty input is treated as the default mutating mode (every CRD's
 // Managed-equivalent).
 //
@@ -36,5 +36,5 @@ import (
 // value is ever needed, add a sibling ShouldMutateWith(mode, sentinel)
 // rather than overloading this function.
 func ShouldMutate(mode string) bool {
-	return mode != string(v1alpha1.RecordModeObserve)
+	return mode != string(v2alpha1.RecordModeObserve)
 }

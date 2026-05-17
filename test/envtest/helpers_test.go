@@ -24,7 +24,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 // setupSingleton ensures no leftover CloudflareOperator/cluster CR is present
@@ -38,9 +38,9 @@ import (
 func setupSingleton(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	key := types.NamespacedName{Name: v1alpha1.CloudflareOperatorSingletonName}
+	key := types.NamespacedName{Name: v2alpha1.CloudflareOperatorSingletonName}
 
-	existing := &v1alpha1.CloudflareOperator{}
+	existing := &v2alpha1.CloudflareOperator{}
 	if err := sharedClient.Get(ctx, key, existing); err == nil {
 		if derr := sharedClient.Delete(ctx, existing); derr != nil {
 			// Best-effort: a real error here will surface as the subsequent
@@ -48,7 +48,7 @@ func setupSingleton(t *testing.T) {
 			t.Logf("setupSingleton: delete existing singleton: %v", derr)
 		}
 		waitFor(t, 10*time.Second, func() bool {
-			err := sharedClient.Get(ctx, key, &v1alpha1.CloudflareOperator{})
+			err := sharedClient.Get(ctx, key, &v2alpha1.CloudflareOperator{})
 			return apierrors.IsNotFound(err)
 		})
 	}

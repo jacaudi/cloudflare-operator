@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	cloudflare "github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	mockcf "github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -51,7 +51,7 @@ func tunnelScheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(s))
 	require.NoError(t, appsv1.AddToScheme(s))
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
@@ -76,11 +76,11 @@ func newTunnelReconciler(t *testing.T, c client.Client, s *runtime.Scheme, m *mo
 
 func TestTunnelReconciler_CreatesTunnelAndDataplane(t *testing.T) {
 	setEnvCreds(t)
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns"},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name: "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{
+			Connector: v2alpha1.ConnectorSpec{
 				Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 			},
 		},
@@ -89,7 +89,7 @@ func TestTunnelReconciler_CreatesTunnelAndDataplane(t *testing.T) {
 	base := fake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).
 		Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
@@ -106,7 +106,7 @@ func TestTunnelReconciler_CreatesTunnelAndDataplane(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.NotEmpty(t, got.Status.TunnelID, "TunnelID must be set after create")
 	require.Contains(t, got.Status.TunnelCNAME, ".cfargotunnel.com")
@@ -141,20 +141,20 @@ func TestTunnelReconciler_DriftSkipsPutWhenObservedMatches(t *testing.T) {
 		cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{{Service: "http_status:404"}}})
 	require.NoError(t, err)
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID:        created.ID,
-			ObservedIngress: []v1alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
+			ObservedIngress: []v2alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
 		},
 	}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -178,21 +178,21 @@ func TestTunnelReconciler_FinalizerDrainSequence(t *testing.T) {
 	require.NoError(t, err)
 
 	now := metav1.Now()
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{TunnelID: created.ID},
+		Status: v2alpha1.CloudflareTunnelStatus{TunnelID: created.ID},
 	}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -210,7 +210,7 @@ func TestTunnelReconciler_FinalizerDrainSequence(t *testing.T) {
 		"expected ErrTunnelNotFound, got %v", gerr)
 
 	// CR removed (finalizer dropped → fake client GC).
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	gerr = c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got)
 	require.True(t, apierrors.IsNotFound(gerr), "tunnel CR must be GC'd after drain; got %v", gerr)
 }
@@ -224,22 +224,22 @@ func TestTunnelReconciler_FinalizerDrain_TolerantOf404(t *testing.T) {
 	s := tunnelScheme(t)
 	m := mockcf.New()
 	now := metav1.Now()
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns",
 			Finalizers:        []string{conventions.FinalizerName},
 			DeletionTimestamp: &now,
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
 		// TunnelID points at a tunnel that does NOT exist in the mock.
-		Status: v1alpha1.CloudflareTunnelStatus{TunnelID: "ghost-tunnel-id"},
+		Status: v2alpha1.CloudflareTunnelStatus{TunnelID: "ghost-tunnel-id"},
 	}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 
@@ -248,7 +248,7 @@ func TestTunnelReconciler_FinalizerDrain_TolerantOf404(t *testing.T) {
 	})
 	require.NoError(t, err, "WrapDeleteErr must swallow 404s on delete-path")
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	gerr := c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got)
 	require.True(t, apierrors.IsNotFound(gerr), "finalizer must be removable even on already-gone tunnel")
 }
@@ -259,15 +259,15 @@ func TestTunnelReconciler_StatusConditionsWrittenByOuterFunction(t *testing.T) {
 	// (review pattern #11) and asserting on the freshly-loaded Status.
 	setEnvCreds(t)
 	s := tunnelScheme(t)
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns"},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
@@ -281,7 +281,7 @@ func TestTunnelReconciler_StatusConditionsWrittenByOuterFunction(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 
@@ -312,15 +312,15 @@ func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
 	// Ready=False/ConnectorDeploying.
 	setEnvCreds(t)
 	s := tunnelScheme(t)
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns"},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
@@ -334,7 +334,7 @@ func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
 	// Seed connectors into the mock so ConnectionsHealthy > 0 after pass 2.
 	// Without the Deployment-Available gate, the rollup would now report
 	// Ready=True; the gate must override that and force ReasonConnectorDeploying.
-	var afterPass1 v1alpha1.CloudflareTunnel
+	var afterPass1 v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &afterPass1))
 
@@ -346,7 +346,7 @@ func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var afterPass2 v1alpha1.CloudflareTunnel
+	var afterPass2 v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &afterPass2))
 	require.NotEmpty(t, afterPass2.Status.TunnelID, "tunnel must be created by pass 2")
@@ -365,7 +365,7 @@ func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Equal(t, int32(2), got.Status.ConnectionsHealthy,
@@ -391,15 +391,15 @@ func TestTunnelReconciler_CredentialsHaltUpdatesStatus(t *testing.T) {
 	t.Setenv("CLOUDFLARE_API_TOKEN", "")
 	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
 	s := tunnelScheme(t)
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	m := mockcf.New()
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
@@ -409,7 +409,7 @@ func TestTunnelReconciler_CredentialsHaltUpdatesStatus(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	var sawCredsUnavailable bool
@@ -431,18 +431,18 @@ func TestTunnelReconciler_DuplicateHostname_EmitsEventOnLoser(t *testing.T) {
 	s := tunnelScheme(t)
 	m := mockcf.New()
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
 	}
 	winnerSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "ns"}}
 	loserSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns"}}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn, winnerSvc, loserSvc).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	cache := tunnelsynth.NewCache()
@@ -492,25 +492,25 @@ func TestApplyRemoteConfig_EmitsDriftDetectedWhenLiveDiffersFromObserved(t *test
 		}})
 	require.NoError(t, err)
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID: created.ID,
 			// Deliberately equal to the resolved catch-all snapshot (empty
 			// cache → http_status:404), so wantSnap == ObservedIngress and
 			// the existing early-return fires. This isolates the assertion to
 			// pure drift detection: no PUT mutates the mock before we check
 			// for the DriftDetected event.
-			ObservedIngress: []v1alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
+			ObservedIngress: []v2alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
 		},
 	}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	rec := record.NewFakeRecorder(16)
@@ -547,13 +547,13 @@ func TestApplyRemoteConfig_NoDriftWhenLiveMatchesObserved(t *testing.T) {
 	_, err = m.Tunnel.PutConfiguration(context.Background(), "acct-1", created.ID, liveCfg)
 	require.NoError(t, err)
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID: created.ID,
 			// Built via the same projection the production code compares against,
 			// so live and observed are byte-equal — no drift.
@@ -562,7 +562,7 @@ func TestApplyRemoteConfig_NoDriftWhenLiveMatchesObserved(t *testing.T) {
 	}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	rec := record.NewFakeRecorder(16)
@@ -602,20 +602,20 @@ func TestApplyRemoteConfig_NoDriftWhenObservedEmpty(t *testing.T) {
 		}})
 	require.NoError(t, err)
 
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID: created.ID,
 			// ObservedIngress intentionally nil — no baseline yet.
 		},
 	}
 	base := fake.NewClientBuilder().
 		WithScheme(s).WithObjects(tn).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
 	rec := record.NewFakeRecorder(16)
@@ -647,24 +647,24 @@ func TestReconcile_OwnerTransferPromotesLexSmallest(t *testing.T) {
 
 	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
 	svcC := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "c-svc", Namespace: "ns", UID: "uid-c"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{
+		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
-			Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
 		},
-		Status: v1alpha1.CloudflareTunnelStatus{
-			AttachedSources: []v1alpha1.AttachedSource{
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{
 				{Kind: "Service", Namespace: "ns", Name: "c-svc"},
 				{Kind: "Service", Namespace: "ns", Name: "b-svc"},
 			},
 		},
 	}
 	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svcB, svcC).
-		WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(10)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
@@ -673,7 +673,7 @@ func TestReconcile_OwnerTransferPromotesLexSmallest(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
 	require.NoError(t, err)
 
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Len(t, got.OwnerReferences, 1)
 	require.Equal(t, "b-svc", got.OwnerReferences[0].Name)
@@ -683,20 +683,20 @@ func TestReconcile_OrphanStateFirstObservation_StampsLastOrphanedAt(t *testing.T
 	setEnvCreds(t)
 	s := tunnelScheme(t)
 	m := mockcf.New()
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Spec:   v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
-		Status: v1alpha1.CloudflareTunnelStatus{AttachedSources: nil}, // empty -> orphan
+		Spec:   v2alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: nil}, // empty -> orphan
 	}
-	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
 	require.NoError(t, err)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.NotNil(t, got.Status.LastOrphanedAt, "first orphan observation must stamp LastOrphanedAt")
 	require.Greater(t, res.RequeueAfter, time.Duration(0), "should requeue after grace")
@@ -708,22 +708,22 @@ func TestReconcile_OrphanStateGraceElapsed_SelfDeletes(t *testing.T) {
 	s := tunnelScheme(t)
 	m := mockcf.New()
 	staleStamp := metav1.NewTime(time.Now().Add(-(pendingDeletionGrace + 5*time.Second)))
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Spec:   v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
-		Status: v1alpha1.CloudflareTunnelStatus{LastOrphanedAt: &staleStamp},
+		Spec:   v2alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{LastOrphanedAt: &staleStamp},
 	}
-	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	rec := record.NewFakeRecorder(10)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 	r.Recorder = rec
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
 	require.NoError(t, err)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	gerr := c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got)
 	if gerr == nil {
 		require.NotNil(t, got.DeletionTimestamp, "self-delete must have set DeletionTimestamp")
@@ -762,13 +762,13 @@ func TestReconcile_OrphanSelfDelete_ConflictDefersDelete(t *testing.T) {
 	// Stale orphan: same stamp as TestReconcile_OrphanStateGraceElapsed_SelfDeletes
 	// so time.Since(LastOrphanedAt) >= grace is true and the self-delete branch fires.
 	staleStamp := metav1.NewTime(time.Now().Add(-(pendingDeletionGrace + 5*time.Second)))
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 		},
-		Spec:   v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
-		Status: v1alpha1.CloudflareTunnelStatus{LastOrphanedAt: &staleStamp},
+		Spec:   v2alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{LastOrphanedAt: &staleStamp},
 	}
 
 	// Build the client stack mirroring TestReconcile_OrphanStateGraceElapsed_SelfDeletes,
@@ -786,7 +786,7 @@ func TestReconcile_OrphanSelfDelete_ConflictDefersDelete(t *testing.T) {
 	// This mirrors the pattern in attach_test.go:440 (Patch interceptor wrapping a fake base)
 	// but targets SubResourceUpdate instead of Patch, and wraps SSATranslatingClient as the
 	// inner layer so SSA patch semantics are still available for the rest of reconciliation.
-	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	ssa := reconcilelib.SSATranslatingClient(t, base)
 	conflictErr := apierrors.NewConflict(
 		schema.GroupResource{Group: "cloudflare.io", Resource: "cloudflaretunnels"},
@@ -811,7 +811,7 @@ func TestReconcile_OrphanSelfDelete_ConflictDefersDelete(t *testing.T) {
 
 	// The tunnel must still exist and must NOT have been deleted.
 	// (Current code deletes it; Phase B must prevent that.)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got),
 		"tunnel must still exist after Conflict — self-delete must not have proceeded")
 	require.Nil(t, got.DeletionTimestamp, "DeletionTimestamp must be nil — tunnel was not self-deleted")
@@ -844,24 +844,24 @@ func TestReconcile_OrphanStateClearedOnSourceReattach(t *testing.T) {
 	m := mockcf.New()
 	stamp := metav1.NewTime(time.Now())
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
-	tn := &v1alpha1.CloudflareTunnel{
+	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName},
 			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
 			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "svc", UID: "uid-svc", APIVersion: "v1", Controller: ptr.To(true)}},
 		},
-		Spec: v1alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v1alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
-		Status: v1alpha1.CloudflareTunnelStatus{
+		Spec: v2alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{
 			LastOrphanedAt:  &stamp,
-			AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Namespace: "ns", Name: "svc"}},
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Namespace: "ns", Name: "svc"}},
 		},
 	}
-	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svc).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svc).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
 	require.NoError(t, err)
-	var got v1alpha1.CloudflareTunnel
+	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Nil(t, got.Status.LastOrphanedAt, "source reattach must clear LastOrphanedAt")
 }
@@ -885,26 +885,26 @@ func TestReconcile_RequeueIsMinOfPendingAndInterval(t *testing.T) {
 		m := mockcf.New()
 		smallInterval := metav1.Duration{Duration: 90 * time.Second}
 		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
-		tn := &v1alpha1.CloudflareTunnel{
+		tn := &v2alpha1.CloudflareTunnel{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "tnl", Namespace: "ns",
 				Finalizers:      []string{conventions.FinalizerName},
 				Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
 				OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "svc", UID: "uid-svc", APIVersion: "v1", Controller: ptr.To(true)}},
 			},
-			Spec: v1alpha1.CloudflareTunnelSpec{
+			Spec: v2alpha1.CloudflareTunnelSpec{
 				Name:     "cf-ns",
 				Interval: &smallInterval,
-				Connector: v1alpha1.ConnectorSpec{
+				Connector: v2alpha1.ConnectorSpec{
 					Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 				},
 			},
-			Status: v1alpha1.CloudflareTunnelStatus{
+			Status: v2alpha1.CloudflareTunnelStatus{
 				// AttachedSources has one entry so the tunnel is NOT orphaned.
-				AttachedSources: []v1alpha1.AttachedSource{{Kind: "Service", Namespace: "ns", Name: "svc"}},
+				AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Namespace: "ns", Name: "svc"}},
 			},
 		}
-		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svc).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn, svc).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 		c := reconcilelib.SSATranslatingClient(t, base)
 		r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
@@ -921,26 +921,26 @@ func TestReconcile_RequeueIsMinOfPendingAndInterval(t *testing.T) {
 		// Spec.Interval is much larger than pendingDeletionGrace (60s) so that
 		// grace < interval and min(grace, interval) == grace.
 		largeInterval := metav1.Duration{Duration: pendingDeletionGrace * 10}
-		tn := &v1alpha1.CloudflareTunnel{
+		tn := &v2alpha1.CloudflareTunnel{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "tnl", Namespace: "ns",
 				Finalizers:  []string{conventions.FinalizerName},
 				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 			},
-			Spec: v1alpha1.CloudflareTunnelSpec{
+			Spec: v2alpha1.CloudflareTunnelSpec{
 				Name:     "cf-ns",
 				Interval: &largeInterval,
-				Connector: v1alpha1.ConnectorSpec{
+				Connector: v2alpha1.ConnectorSpec{
 					Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 				},
 			},
-			Status: v1alpha1.CloudflareTunnelStatus{
+			Status: v2alpha1.CloudflareTunnelStatus{
 				// No AttachedSources + auto-created → first orphan observation.
 				// Reconciler will stamp LastOrphanedAt and set
 				// pendingRequeueAfter = pendingDeletionGrace (60s) < largeInterval.
 			},
 		}
-		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 		c := reconcilelib.SSATranslatingClient(t, base)
 		r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
@@ -962,26 +962,26 @@ func TestReconcile_RequeueIsMinOfPendingAndInterval(t *testing.T) {
 		tinyInterval := metav1.Duration{Duration: pendingDeletionGrace / 10}
 		// Stamp LastOrphanedAt just now so the remaining window ≈ full grace (>> tinyInterval).
 		recentStamp := metav1.NewTime(time.Now())
-		tn := &v1alpha1.CloudflareTunnel{
+		tn := &v2alpha1.CloudflareTunnel{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "tnl", Namespace: "ns",
 				Finalizers:  []string{conventions.FinalizerName},
 				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
 			},
-			Spec: v1alpha1.CloudflareTunnelSpec{
+			Spec: v2alpha1.CloudflareTunnelSpec{
 				Name:     "cf-ns",
 				Interval: &tinyInterval,
-				Connector: v1alpha1.ConnectorSpec{
+				Connector: v2alpha1.ConnectorSpec{
 					Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 				},
 			},
-			Status: v1alpha1.CloudflareTunnelStatus{
+			Status: v2alpha1.CloudflareTunnelStatus{
 				// LastOrphanedAt is fresh so we land in the "within grace, requeue
 				// remaining window" branch; remaining ≈ 60s >> tinyInterval (6s).
 				LastOrphanedAt: &recentStamp,
 			},
 		}
-		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v1alpha1.CloudflareTunnel{}).Build()
+		base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
 		c := reconcilelib.SSATranslatingClient(t, base)
 		r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})

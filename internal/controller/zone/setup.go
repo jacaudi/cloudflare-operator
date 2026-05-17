@@ -22,7 +22,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
 )
@@ -79,7 +79,7 @@ func AddToManager(mgr ctrl.Manager, _ Options) error {
 		Client: c, Scheme: scheme, Recorder: rec,
 		ZoneClientFn: zoneFn, CFClientFn: cfClientFn,
 	}
-	if err := ctrl.NewControllerManagedBy(mgr).For(&v1alpha1.CloudflareZone{}).Complete(zoneR); err != nil {
+	if err := ctrl.NewControllerManagedBy(mgr).For(&v2alpha1.CloudflareZone{}).Complete(zoneR); err != nil {
 		return fmt.Errorf("setup CloudflareZone: %w", err)
 	}
 
@@ -87,7 +87,7 @@ func AddToManager(mgr ctrl.Manager, _ Options) error {
 		Client: c, Scheme: scheme, Recorder: rec,
 		ZoneConfigClientFn: zcFn,
 	}
-	if err := ctrl.NewControllerManagedBy(mgr).For(&v1alpha1.CloudflareZoneConfig{}).Complete(zcR); err != nil {
+	if err := ctrl.NewControllerManagedBy(mgr).For(&v2alpha1.CloudflareZoneConfig{}).Complete(zcR); err != nil {
 		return fmt.Errorf("setup CloudflareZoneConfig: %w", err)
 	}
 
@@ -96,7 +96,7 @@ func AddToManager(mgr ctrl.Manager, _ Options) error {
 		DNSClientFn: dnsFn,
 		IPResolver:  ipresolver.NewResolver(),
 	}
-	if err := ctrl.NewControllerManagedBy(mgr).For(&v1alpha1.CloudflareDNSRecord{}).Complete(dnsR); err != nil {
+	if err := ctrl.NewControllerManagedBy(mgr).For(&v2alpha1.CloudflareDNSRecord{}).Complete(dnsR); err != nil {
 		return fmt.Errorf("setup CloudflareDNSRecord: %w", err)
 	}
 
@@ -104,7 +104,7 @@ func AddToManager(mgr ctrl.Manager, _ Options) error {
 		Client: c, Scheme: scheme, Recorder: rec,
 		RulesetClientFn: rsFn,
 	}
-	if err := ctrl.NewControllerManagedBy(mgr).For(&v1alpha1.CloudflareRuleset{}).Complete(rsR); err != nil {
+	if err := ctrl.NewControllerManagedBy(mgr).For(&v2alpha1.CloudflareRuleset{}).Complete(rsR); err != nil {
 		return fmt.Errorf("setup CloudflareRuleset: %w", err)
 	}
 	return nil

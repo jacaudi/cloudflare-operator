@@ -22,7 +22,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
 
@@ -49,7 +49,7 @@ func pruneOrphanedDNSRecords(
 	sourceKind, sourceName, sourceNamespace string,
 	desired map[string]struct{},
 ) ([]string, error) {
-	var existing v1alpha1.CloudflareDNSRecordList
+	var existing v2alpha1.CloudflareDNSRecordList
 	if err := c.List(ctx, &existing,
 		client.InNamespace(sourceNamespace),
 		client.MatchingLabels{

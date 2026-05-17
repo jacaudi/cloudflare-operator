@@ -19,7 +19,7 @@ package reconcile_test
 import (
 	"testing"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	reconcilelib "github.com/jacaudi/cloudflare-operator/internal/reconcile"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +43,7 @@ func TestShouldMutate_UnknownModeMutates(t *testing.T) {
 }
 
 func TestShouldMutate_BoundToObserveConstant(t *testing.T) {
-	require.False(t, reconcilelib.ShouldMutate(string(v1alpha1.RecordModeObserve)))
-	require.True(t, reconcilelib.ShouldMutate(string(v1alpha1.RecordModeManaged)))
+	require.False(t, reconcilelib.ShouldMutate(string(v2alpha1.RecordModeObserve)))
+	require.True(t, reconcilelib.ShouldMutate(string(v2alpha1.RecordModeManaged)))
 	require.True(t, reconcilelib.ShouldMutate(""))
 }

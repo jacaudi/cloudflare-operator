@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	v1alpha1 "github.com/jacaudi/cloudflare-operator/api/v1alpha1"
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,11 +35,11 @@ import (
 func pruneScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
-	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, v2alpha1.AddToScheme(s))
 	return s
 }
 
-func makeEmittedRecord(svcName, hostname string) *v1alpha1.CloudflareDNSRecord {
+func makeEmittedRecord(svcName, hostname string) *v2alpha1.CloudflareDNSRecord {
 	return makeEmittedRecordInSourceNS(svcName, hostname, "ns")
 }
 
@@ -47,8 +47,8 @@ func makeEmittedRecord(svcName, hostname string) *v1alpha1.CloudflareDNSRecord {
 // always "ns" (so client.InNamespace("ns") never filters it) but whose
 // conventions.LabelSourceNamespace label is sourceNS. This isolates the
 // label-key behaviour of the prune selector from the InNamespace behaviour.
-func makeEmittedRecordInSourceNS(svcName, hostname, sourceNS string) *v1alpha1.CloudflareDNSRecord {
-	return &v1alpha1.CloudflareDNSRecord{
+func makeEmittedRecordInSourceNS(svcName, hostname, sourceNS string) *v2alpha1.CloudflareDNSRecord {
+	return &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      emittedDNSRecordName(svcName, hostname),
 			Namespace: "ns",
@@ -58,7 +58,7 @@ func makeEmittedRecordInSourceNS(svcName, hostname, sourceNS string) *v1alpha1.C
 				conventions.LabelSourceNamespace: sourceNS,
 			},
 		},
-		Spec: v1alpha1.CloudflareDNSRecordSpec{
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
 			Type: "CNAME",
 			Name: hostname,
 		},
@@ -78,11 +78,11 @@ func TestPruneOrphanedDNSRecords_DeletesNonDesired(t *testing.T) {
 	require.ElementsMatch(t, []string{"drop.example.com"}, deleted)
 
 	// keep.example.com CR must still exist.
-	var got v1alpha1.CloudflareDNSRecord
+	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(keep), &got))
 
 	// drop.example.com CR must be gone.
-	var gone v1alpha1.CloudflareDNSRecord
+	var gone v2alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(drop), &gone)
 	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)
 }
@@ -102,7 +102,7 @@ func TestPruneOrphanedDNSRecords_RespectsLabelScope(t *testing.T) {
 	require.ElementsMatch(t, []string{"mine.example.com"}, deleted)
 
 	// theirs.example.com must still exist — it belongs to a different source.
-	var surviving v1alpha1.CloudflareDNSRecord
+	var surviving v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(theirs), &surviving))
 }
 
@@ -129,11 +129,11 @@ func TestPruneOrphanedDNSRecords_RespectsNamespaceLabelScope(t *testing.T) {
 	require.ElementsMatch(t, []string{"in-scope.example.com"}, deleted)
 
 	// The cross-namespace-labelled CR must survive.
-	var surviving v1alpha1.CloudflareDNSRecord
+	var surviving v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(crossNS), &surviving))
 
 	// The in-scope CR must be gone.
-	var gone v1alpha1.CloudflareDNSRecord
+	var gone v2alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(inScope), &gone)
 	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)
 }
@@ -179,12 +179,12 @@ func TestPruneOrphanedDNSRecords_IgnoresRecordDeletedBetweenListAndDelete(t *tes
 	require.NoError(t, err, "a deletion racing between List and Delete must be swallowed")
 
 	// The desired record was untouched by the prune and is still Gettable.
-	var surviving v1alpha1.CloudflareDNSRecord
+	var surviving v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(keep), &surviving))
 
 	// The racing record is gone (the concurrent actor removed it; the helper
 	// did not resurrect it).
-	var gone v1alpha1.CloudflareDNSRecord
+	var gone v2alpha1.CloudflareDNSRecord
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(racing), &gone)
 	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)
 }
