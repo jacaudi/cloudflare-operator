@@ -81,10 +81,35 @@ spec:
                   inherited or overridden as a unit; CEL rejects mixing.
                 properties:
                   accountID:
-                    description: AccountID is the Cloudflare account ID this credential
-                      scopes to.
+                    description: |-
+                      AccountID is the Cloudflare account ID this credential scopes to.
+                      Exactly one of accountID or accountIDSecretRef must be set.
                     minLength: 1
                     type: string
+                  accountIDSecretRef:
+                    description: |-
+                      AccountIDSecretRef resolves the Cloudflare account ID from a Secret
+                      instead of the inline accountID (exactly one of the two must be set).
+                      NOTE: SecretReference.Key defaults to "token"; set key: accountID
+                      explicitly (the account ID is typically a distinct key in the same
+                      Secret as the API token).
+                    properties:
+                      key:
+                        default: token
+                        description: Key inside the Secret holding the Cloudflare
+                          API token. Defaults to "token".
+                        type: string
+                      name:
+                        description: Name of the Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the Secret. Defaults to the referencing
+                          CR's namespace.
+                        type: string
+                    required:
+                    - name
+                    type: object
                   tokenSecretRef:
                     description: TokenSecretRef points at the Secret carrying the
                       Cloudflare API token.
@@ -132,9 +157,13 @@ spec:
                     - name
                     type: object
                 required:
-                - accountID
                 - tokenSecretRef
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one of accountID or accountIDSecretRef must be
+                    set
+                  rule: '(has(self.accountID) && self.accountID.size() > 0) ? !has(self.accountIDSecretRef)
+                    : has(self.accountIDSecretRef)'
               content:
                 description: Content is the record content (IP, hostname, etc.). XOR
                   with DynamicIP.

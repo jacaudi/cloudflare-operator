@@ -71,6 +71,11 @@ func (in *BotManagementSettings) DeepCopy() *BotManagementSettings {
 func (in *CloudflareCredentialRef) DeepCopyInto(out *CloudflareCredentialRef) {
 	*out = *in
 	out.TokenSecretRef = in.TokenSecretRef
+	if in.AccountIDSecretRef != nil {
+		in, out := &in.AccountIDSecretRef, &out.AccountIDSecretRef
+		*out = new(SecretReference)
+		**out = **in
+	}
 	if in.TxtRegistryKeySecretRef != nil {
 		in, out := &in.TxtRegistryKeySecretRef, &out.TxtRegistryKeySecretRef
 		*out = new(SecretReference)

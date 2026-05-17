@@ -109,3 +109,47 @@ func TestResolveCredentials_MissingAccountID(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrAccountIDUnset)
 }
+
+func TestResolveCredentials_AccountIDFromSecret(t *testing.T) {
+	tokenSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("tok"), "accountID": []byte("  acct-from-secret\n")},
+	}
+	c := newFakeClient(t, tokenSec).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef:     v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "token"},
+		AccountIDSecretRef: &v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "accountID"},
+	}
+	creds, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.NoError(t, err)
+	require.Equal(t, Secret("tok"), creds.Token)
+	require.Equal(t, "acct-from-secret", creds.AccountID) // whitespace-trimmed
+}
+
+func TestResolveCredentials_AccountIDSecretMissing(t *testing.T) {
+	tokenSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("tok")},
+	}
+	c := newFakeClient(t, tokenSec).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef:     v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "token"},
+		AccountIDSecretRef: &v2alpha1.SecretReference{Name: "absent", Namespace: "default", Key: "accountID"},
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.ErrorIs(t, err, ErrSecretNotFound)
+}
+
+func TestResolveCredentials_AccountIDSecretKeyMissing(t *testing.T) {
+	tokenSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("tok"), "accountID": []byte("   ")},
+	}
+	c := newFakeClient(t, tokenSec).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef:     v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "token"},
+		AccountIDSecretRef: &v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "accountID"},
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.ErrorIs(t, err, ErrSecretKeyMissing) // whitespace-only treated as empty
+}

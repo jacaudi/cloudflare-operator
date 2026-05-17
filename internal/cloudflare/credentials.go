@@ -19,6 +19,7 @@ package cloudflare
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,9 +51,6 @@ func ResolveCredentials(
 	if ref.TokenSecretRef.IsEmpty() {
 		return Credentials{}, fmt.Errorf("%w: tokenSecretRef.name unset", ErrSecretNotFound)
 	}
-	if ref.AccountID == "" {
-		return Credentials{}, fmt.Errorf("%w", ErrAccountIDUnset)
-	}
 
 	ns := ref.TokenSecretRef.Namespace
 	if ns == "" {
@@ -77,5 +75,32 @@ func ResolveCredentials(
 		return Credentials{}, fmt.Errorf("%w: %s/%s missing key %q", ErrSecretKeyMissing, ns, ref.TokenSecretRef.Name, key)
 	}
 
-	return Credentials{Token: Secret(tokenBytes), AccountID: ref.AccountID}, nil
+	accountID := ref.AccountID
+	if ref.AccountIDSecretRef != nil && ref.AccountIDSecretRef.Name != "" {
+		ans := ref.AccountIDSecretRef.Namespace
+		if ans == "" {
+			ans = defaultNamespace
+		}
+		akey := ref.AccountIDSecretRef.Key
+		if akey == "" {
+			akey = "token"
+		}
+		var asec corev1.Secret
+		if aerr := c.Get(ctx, types.NamespacedName{Namespace: ans, Name: ref.AccountIDSecretRef.Name}, &asec); aerr != nil {
+			if client.IgnoreNotFound(aerr) == nil {
+				return Credentials{}, fmt.Errorf("%w: %s/%s", ErrSecretNotFound, ans, ref.AccountIDSecretRef.Name)
+			}
+			return Credentials{}, fmt.Errorf("get Secret %s/%s: %w", ans, ref.AccountIDSecretRef.Name, aerr)
+		}
+		ab, aok := asec.Data[akey]
+		if !aok || len(strings.TrimSpace(string(ab))) == 0 {
+			return Credentials{}, fmt.Errorf("%w: %s/%s missing key %q", ErrSecretKeyMissing, ans, ref.AccountIDSecretRef.Name, akey)
+		}
+		accountID = strings.TrimSpace(string(ab))
+	}
+	if accountID == "" {
+		return Credentials{}, ErrAccountIDUnset
+	}
+
+	return Credentials{Token: Secret(tokenBytes), AccountID: accountID}, nil
 }

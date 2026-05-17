@@ -42,14 +42,24 @@ func (r SecretReference) IsEmpty() bool {
 
 // CloudflareCredentialRef bundles the credential Secret and account ID.
 // Per Foundation §5 these are inherited or overridden as a unit.
+// +kubebuilder:validation:XValidation:rule="(has(self.accountID) && self.accountID.size() > 0) ? !has(self.accountIDSecretRef) : has(self.accountIDSecretRef)",message="exactly one of accountID or accountIDSecretRef must be set"
 type CloudflareCredentialRef struct {
 	// TokenSecretRef points at the Secret carrying the Cloudflare API token.
 	TokenSecretRef SecretReference `json:"tokenSecretRef"`
 
 	// AccountID is the Cloudflare account ID this credential scopes to.
-	// +kubebuilder:validation:Required
+	// Exactly one of accountID or accountIDSecretRef must be set.
+	// +optional
 	// +kubebuilder:validation:MinLength=1
-	AccountID string `json:"accountID"`
+	AccountID string `json:"accountID,omitempty"`
+
+	// AccountIDSecretRef resolves the Cloudflare account ID from a Secret
+	// instead of the inline accountID (exactly one of the two must be set).
+	// NOTE: SecretReference.Key defaults to "token"; set key: accountID
+	// explicitly (the account ID is typically a distinct key in the same
+	// Secret as the API token).
+	// +optional
+	AccountIDSecretRef *SecretReference `json:"accountIDSecretRef,omitempty"`
 
 	// TxtRegistryKeySecretRef references a Secret holding an AES-256 key
 	// (exactly 32 bytes, under the SecretReference.Key entry, default "key").
