@@ -5,7 +5,14 @@ image:
   tag: ""          # empty → .Chart.AppVersion
   pullPolicy: IfNotPresent
 
-namespace: cloudflare-system
+# Override-only / informational. bjw-s common renders the ServiceAccount and
+# Deployment in .Release.Namespace, so that is the single source of truth for
+# the operator's namespace. Leave this empty (the intended path) and install
+# into the target namespace via `helm --namespace` / Flux HelmRelease
+# targetNamespace. If set non-empty it MUST equal the release namespace — a
+# divergent value fails the install fast (templates/common.yaml guard) rather
+# than silently binding RBAC to a non-existent ServiceAccount.
+namespace: ""
 
 # CRD lifecycle. install: render the 5 bundle CRDs as chart templates at all.
 # keep: stamp helm.sh/resource-policy: keep so they survive `helm uninstall`

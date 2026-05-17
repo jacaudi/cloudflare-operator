@@ -11,4 +11,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: cloudflare-operator
-    namespace: {{ .Values.namespace }}
+    namespace: {{ .Release.Namespace }}
