@@ -26,6 +26,7 @@
   "global" (dict "nameOverride" "cloudflare-operator")
   "serviceAccount" (dict "cloudflare-operator" (dict "enabled" true "forceRename" "cloudflare-operator"))
   "defaultPodOptions" (dict
+    "automountServiceAccountToken" true
     "securityContext" (dict "runAsNonRoot" true "runAsUser" 65532 "runAsGroup" 65532 "fsGroup" 65532 "seccompProfile" (dict "type" "RuntimeDefault")))
   "controllers" (dict "main" (dict
     "forceRename" "cloudflare-operator"
