@@ -85,15 +85,10 @@ func tlsRouteSupported(rm meta.RESTMapper) (bool, error) {
 	return false, err
 }
 
-// AddToManager registers all five tunnel-bundle reconcilers with mgr.
-// Caller is responsible for leader-election and signal-handling — the
-// controller-runtime manager wires those.
-func AddToManager(mgr ctrl.Manager, opts Options) error {
-	scheme := mgr.GetScheme()
-	c := mgr.GetClient()
-	rec := mgr.GetEventRecorderFor("cloudflare-operator-tunnel")
-
-	// Defaults.
+// applyOptionDefaults fills in zero-value fields of opts with production
+// defaults. It is called at the top of AddToManager and is a separate function
+// to make the defaulting logic unit-testable without a controller-runtime manager.
+func applyOptionDefaults(opts *Options) {
 	if opts.DefaultImage == "" {
 		opts.DefaultImage = DefaultCloudflaredImage
 	}
@@ -118,6 +113,17 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	if opts.DefaultConnector.GracePeriodSeconds == 0 {
 		opts.DefaultConnector.GracePeriodSeconds = 30
 	}
+}
+
+// AddToManager registers all five tunnel-bundle reconcilers with mgr.
+// Caller is responsible for leader-election and signal-handling — the
+// controller-runtime manager wires those.
+func AddToManager(mgr ctrl.Manager, opts Options) error {
+	scheme := mgr.GetScheme()
+	c := mgr.GetClient()
+	rec := mgr.GetEventRecorderFor("cloudflare-operator-tunnel")
+
+	applyOptionDefaults(&opts)
 
 	tlsOK, err := tlsRouteSupported(mgr.GetRESTMapper())
 	if err != nil {

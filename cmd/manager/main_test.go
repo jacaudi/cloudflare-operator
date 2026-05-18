@@ -122,6 +122,21 @@ func TestParseFlags_TunnelConnectorResources(t *testing.T) {
 	require.Equal(t, "", opts2.TunnelConnectorResources) // default empty
 }
 
+func TestParseConnectorResources(t *testing.T) {
+	rr, err := parseConnectorResources("")
+	require.NoError(t, err)
+	require.Empty(t, rr.Requests)
+	require.Empty(t, rr.Limits)
+
+	rr2, err := parseConnectorResources(`{"requests":{"cpu":"10m","memory":"128Mi"},"limits":{"memory":"256Mi"}}`)
+	require.NoError(t, err)
+	require.Equal(t, "10m", rr2.Requests.Cpu().String())
+	require.Equal(t, "256Mi", rr2.Limits.Memory().String())
+
+	_, err = parseConnectorResources(`{not-json`)
+	require.Error(t, err)
+}
+
 func TestParseFlags_ControllerToggles(t *testing.T) {
 	opts, err := parseFlags([]string{
 		"--mode=meta", "--controllers-zone-enabled=true", "--zone-replicas=3",

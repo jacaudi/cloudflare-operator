@@ -21,6 +21,7 @@ limitations under the License.
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,6 +30,7 @@ import (
 	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -321,12 +323,33 @@ func runTunnel(opts Options, scheme *runtime.Scheme) {
 		log.Error(errMissingCloudflareEnv, "preflight failed")
 		os.Exit(1)
 	}
+	connRes, perr := parseConnectorResources(os.Getenv("CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES"))
+	if perr != nil {
+		log.Error(perr, "invalid tunnel connector resources")
+		os.Exit(1)
+	}
 	if err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
-		return tunnel.AddToManager(mgr, tunnel.Options{})
+		return tunnel.AddToManager(mgr, tunnel.Options{
+			DefaultConnector: v2alpha1.ConnectorSpec{Resources: connRes},
+		})
 	}); err != nil {
 		log.Error(err, "fatal")
 		os.Exit(1)
 	}
+}
+
+// parseConnectorResources unmarshals the opaque JSON corev1.ResourceRequirements
+// the meta-operator injects via CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES. Empty
+// input → zero ResourceRequirements (unset, current behavior).
+func parseConnectorResources(raw string) (corev1.ResourceRequirements, error) {
+	var rr corev1.ResourceRequirements
+	if raw == "" {
+		return rr, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &rr); err != nil {
+		return corev1.ResourceRequirements{}, fmt.Errorf("parse CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES: %w", err)
+	}
+	return rr, nil
 }
 
 func newProductionLogger(level string) (*zap.Logger, error) {
