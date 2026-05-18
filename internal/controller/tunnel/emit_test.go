@@ -121,3 +121,43 @@ func TestEmitDNSRecord_NoAnnotationsAreNoOpFields(t *testing.T) {
 	require.Nil(t, got.Spec.ZoneRef, "no zoneRef annotation → no ZoneRef")
 	require.False(t, got.Spec.Adopt, "no adopt annotation → Adopt=false")
 }
+
+func TestEmitDNSRecord_ZoneRefNamespace(t *testing.T) {
+	s := emitTestScheme(t)
+	svc := &corev1.Service{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
+	}
+
+	// (a) zone-ref-namespace set → emitted zoneRef.Namespace = annotation value
+	// (zone-ns is intentionally distinct from the owner namespace "ns" so this
+	// case fails if emit.go's namespace-override logic is reverted).
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	require.NoError(t, EmitDNSRecord(context.Background(), c, s, EmitOpts{
+		Owner: svc, OwnerKind: "Service", Hostname: "foo.example.com",
+		Content: "tunnel.cfargotunnel.com", Annotations: map[string]string{
+			conventions.AnnotationZoneRef:          "example-com",
+			conventions.AnnotationZoneRefNamespace: "zone-ns",
+		}}))
+	var got v2alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{
+		Namespace: "ns", Name: emittedDNSRecordName("svc", "foo.example.com")}, &got))
+	require.NotNil(t, got.Spec.ZoneRef)
+	require.Equal(t, "example-com", got.Spec.ZoneRef.Name)
+	require.Equal(t, "zone-ns", got.Spec.ZoneRef.Namespace)
+
+	// (b) zone-ref-namespace ABSENT → falls back to owner namespace
+	base2 := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
+	c2 := reconcilelib.SSATranslatingClient(t, base2)
+	require.NoError(t, EmitDNSRecord(context.Background(), c2, s, EmitOpts{
+		Owner: svc, OwnerKind: "Service", Hostname: "foo.example.com",
+		Content: "tunnel.cfargotunnel.com", Annotations: map[string]string{
+			conventions.AnnotationZoneRef: "example-com",
+		}}))
+	var got2 v2alpha1.CloudflareDNSRecord
+	require.NoError(t, c2.Get(context.Background(), client.ObjectKey{
+		Namespace: "ns", Name: emittedDNSRecordName("svc", "foo.example.com")}, &got2))
+	require.NotNil(t, got2.Spec.ZoneRef)
+	require.Equal(t, "ns", got2.Spec.ZoneRef.Namespace)
+}

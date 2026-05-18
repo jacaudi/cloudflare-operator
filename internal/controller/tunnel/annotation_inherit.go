@@ -48,6 +48,7 @@ func inheritAnnotation(routeAnnotations map[string]string, gw *gwv1.Gateway, key
 func inheritedAnnotations(routeAnnotations map[string]string, gw *gwv1.Gateway) map[string]string {
 	keys := []string{
 		conventions.AnnotationZoneRef,
+		conventions.AnnotationZoneRefNamespace,
 		conventions.AnnotationAdopt,
 		conventions.AnnotationProxied,
 		conventions.AnnotationTTL,

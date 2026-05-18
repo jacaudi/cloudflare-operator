@@ -65,9 +65,14 @@ const (
 // Shared (applied to emitted CloudflareDNSRecord CRs).
 const (
 	AnnotationZoneRef = "cloudflare.io/zone-ref"
-	AnnotationProxied = "cloudflare.io/proxied"
-	AnnotationTTL     = "cloudflare.io/ttl"
-	AnnotationAdopt   = "cloudflare.io/adopt"
+	// AnnotationZoneRefNamespace overrides the namespace the emitted
+	// DNSRecord's spec.zoneRef resolves in. Unset → the source object's
+	// namespace (back-compatible). Enables a source in namespace A to
+	// resolve a CloudflareZone in namespace B.
+	AnnotationZoneRefNamespace = "cloudflare.io/zone-ref-namespace"
+	AnnotationProxied          = "cloudflare.io/proxied"
+	AnnotationTTL              = "cloudflare.io/ttl"
+	AnnotationAdopt            = "cloudflare.io/adopt"
 )
 
 // Tunnel auto-management family. Applied to CloudflareTunnel CRs themselves.

@@ -45,7 +45,7 @@ type EmitOpts struct {
 	// hostname (the intermediate stabilizer in the per-design §4.2 CNAME chain).
 	Content string
 	// Annotations carries optional source-object annotations that thread into
-	// the emitted CR. Recognized keys: AnnotationZoneRef, AnnotationAdopt.
+	// the emitted CR. Recognized keys: AnnotationZoneRef, AnnotationZoneRefNamespace, AnnotationAdopt.
 	// Unrecognized keys are ignored.
 	Annotations map[string]string
 }
@@ -65,7 +65,7 @@ type EmitOpts struct {
 // Foundation's SSA convention for owned children. A user `kubectl edit` of
 // an emitted CR will be reverted on the next reconcile — including Spec.Adopt and
 // Spec.ZoneRef, which are re-asserted from the SOURCE object's annotations
-// (cloudflare.io/adopt, cloudflare.io/zone-ref). Toggle these on the
+// (cloudflare.io/adopt, cloudflare.io/zone-ref, cloudflare.io/zone-ref-namespace). Toggle these on the
 // source, not on the emitted CR.
 func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme, opts EmitOpts) error {
 	content := opts.Content // local copy so we can take its address; Spec.Content is *string
@@ -89,7 +89,11 @@ func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		return err
 	}
 	if zr := opts.Annotations[conventions.AnnotationZoneRef]; zr != "" {
-		dr.Spec.ZoneRef = &v2alpha1.ZoneReference{Name: zr, Namespace: opts.Owner.GetNamespace()}
+		zoneNS := opts.Annotations[conventions.AnnotationZoneRefNamespace]
+		if zoneNS == "" {
+			zoneNS = opts.Owner.GetNamespace()
+		}
+		dr.Spec.ZoneRef = &v2alpha1.ZoneReference{Name: zr, Namespace: zoneNS}
 	}
 	if adopt, _ := conventions.ParseTruthy(opts.Annotations[conventions.AnnotationAdopt]); adopt {
 		dr.Spec.Adopt = true

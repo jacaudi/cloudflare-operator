@@ -41,6 +41,7 @@ func TestAnnotation_DNSOnlyFamily(t *testing.T) {
 
 func TestAnnotation_Shared(t *testing.T) {
 	require.Equal(t, "cloudflare.io/zone-ref", AnnotationZoneRef)
+	require.Equal(t, "cloudflare.io/zone-ref-namespace", AnnotationZoneRefNamespace)
 	require.Equal(t, "cloudflare.io/proxied", AnnotationProxied)
 	require.Equal(t, "cloudflare.io/ttl", AnnotationTTL)
 	require.Equal(t, "cloudflare.io/adopt", AnnotationAdopt)
