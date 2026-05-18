@@ -31,6 +31,12 @@ controllers:
     enabled: false
     replicas: 1
     logLevel: info
+    # cloudflared connector resources seeded into every CloudflareTunnel this
+    # operator auto-creates from a Gateway annotation (standard k8s
+    # ResourceRequirements). Empty {} (default) = no requests/limits — exact
+    # current behavior. Manually-declared CloudflareTunnel CRs are unaffected.
+    connector:
+      resources: {}
 
 # Operator-level default credentials — meta-operator env (CLOUDFLARE_API_TOKEN
 # / CLOUDFLARE_ACCOUNT_ID) and the coordinates it propagates to spawned
