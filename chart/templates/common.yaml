@@ -29,7 +29,7 @@
     "securityContext" (dict "runAsNonRoot" true "runAsUser" 65532 "runAsGroup" 65532 "fsGroup" 65532 "seccompProfile" (dict "type" "RuntimeDefault")))
   "controllers" (dict "main" (dict
     "forceRename" "cloudflare-operator"
-    "replicas" 1
+    "replicas" (int .Values.replicas)
     "containers" (dict "main" (dict
       "image" (dict "repository" .Values.image.repository "tag" (.Values.image.tag | default .Chart.AppVersion) "pullPolicy" .Values.image.pullPolicy)
       "args" $args

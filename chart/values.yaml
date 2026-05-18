@@ -46,6 +46,11 @@ credentials:
   tokenKey: token
   accountIDKey: accountID
 
+# Meta-operator Deployment replica count. Default 1. >1 requires
+# leaderElection.enabled (the chart wires --leader-election) so only one
+# replica actively reconciles; the others are warm standby (HA).
+replicas: 1
+
 # Controller-manager leader election (controller-runtime Lease-based HA).
 leaderElection:
   enabled: true
