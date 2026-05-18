@@ -40,9 +40,11 @@ credentials:
   tokenKey: token
   accountIDKey: accountID
 
+# Controller-manager leader election (controller-runtime Lease-based HA).
+leaderElection:
+  enabled: true
+
 observability:
-  leaderElection:
-    enabled: true
   metrics:
     serviceMonitor:
       enabled: false

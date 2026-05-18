@@ -12,7 +12,7 @@
     (printf "--controllers-tunnel-enabled=%t" .Values.controllers.tunnel.enabled)
     (printf "--tunnel-replicas=%d" (int .Values.controllers.tunnel.replicas))
     (printf "--tunnel-log-level=%s" .Values.controllers.tunnel.logLevel)
-    (printf "--leader-election=%t" .Values.observability.leaderElection.enabled)
+    (printf "--leader-election=%t" .Values.leaderElection.enabled)
     (printf "--credentials-secret=%s" $credSecret)
     (printf "--credentials-token-key=%s" .Values.credentials.tokenKey)
     (printf "--credentials-account-id-key=%s" .Values.credentials.accountIDKey) -}}
