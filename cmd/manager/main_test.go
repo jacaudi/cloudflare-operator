@@ -111,6 +111,17 @@ func TestParseFlags_VersionFlag(t *testing.T) {
 	require.True(t, opts.Version)
 }
 
+func TestParseFlags_TunnelConnectorResources(t *testing.T) {
+	opts, err := parseFlags([]string{"--mode=meta",
+		`--tunnel-connector-resources={"requests":{"cpu":"10m"}}`})
+	require.NoError(t, err)
+	require.Equal(t, `{"requests":{"cpu":"10m"}}`, opts.TunnelConnectorResources)
+
+	opts2, err := parseFlags([]string{"--mode=meta"})
+	require.NoError(t, err)
+	require.Equal(t, "", opts2.TunnelConnectorResources) // default empty
+}
+
 func TestParseFlags_ControllerToggles(t *testing.T) {
 	opts, err := parseFlags([]string{
 		"--mode=meta", "--controllers-zone-enabled=true", "--zone-replicas=3",

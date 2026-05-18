@@ -94,6 +94,8 @@ type Options struct {
 	CredentialsSecret       string
 	CredentialsTokenKey     string
 	CredentialsAccountIDKey string
+
+	TunnelConnectorResources string
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -112,6 +114,9 @@ func parseFlags(args []string) (Options, error) {
 	tunnelEnabled := fs.Bool("controllers-tunnel-enabled", false, "run the tunnel controller bundle")
 	tunnelReplicas := fs.Int("tunnel-replicas", 1, "tunnel controller Deployment replicas")
 	tunnelLogLevel := fs.String("tunnel-log-level", "info", "tunnel controller log level")
+	tunnelConnRes := fs.String("tunnel-connector-resources",
+		envOr("CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES", ""),
+		"JSON corev1.ResourceRequirements applied as DefaultConnector.Resources on auto-created tunnels")
 	credsSecret := fs.String("credentials-secret", envOr("CLOUDFLARE_CREDENTIALS_SECRET", ""), "credential Secret propagated to spawned controllers")
 	credsTokenKey := fs.String("credentials-token-key", envOr("CLOUDFLARE_CREDENTIALS_TOKEN_KEY", "token"), "key in the credential Secret holding the API token")
 	credsAccountIDKey := fs.String("credentials-account-id-key", envOr("CLOUDFLARE_CREDENTIALS_ACCOUNT_ID_KEY", "accountID"), "key in the credential Secret holding the account ID")
@@ -147,9 +152,10 @@ func parseFlags(args []string) (Options, error) {
 		TunnelReplicas: *tunnelReplicas,
 		TunnelLogLevel: *tunnelLogLevel,
 
-		CredentialsSecret:       *credsSecret,
-		CredentialsTokenKey:     *credsTokenKey,
-		CredentialsAccountIDKey: *credsAccountIDKey,
+		CredentialsSecret:        *credsSecret,
+		CredentialsTokenKey:      *credsTokenKey,
+		CredentialsAccountIDKey:  *credsAccountIDKey,
+		TunnelConnectorResources: *tunnelConnRes,
 	}, nil
 }
 
@@ -252,20 +258,21 @@ func startManager(opts Options, scheme *runtime.Scheme, cfg *rest.Config, regist
 func runMeta(opts Options, scheme *runtime.Scheme) {
 	log := ctrl.Log.WithName(string(opts.Mode))
 	cfg := bootstrap.Config{
-		OperatorNamespace:       opts.OperatorNamespace,
-		OperatorImage:           opts.OperatorImage,
-		MetricsAddress:          opts.MetricsAddress,
-		HealthAddress:           opts.HealthAddress,
-		LeaderElection:          opts.LeaderElection,
-		ZoneEnabled:             opts.ZoneEnabled,
-		ZoneReplicas:            int32(opts.ZoneReplicas), //nolint:gosec // G115: replica count is a small non-negative-after-clamp value; int32 overflow is not a practical concern
-		ZoneLogLevel:            opts.ZoneLogLevel,
-		TunnelEnabled:           opts.TunnelEnabled,
-		TunnelReplicas:          int32(opts.TunnelReplicas), //nolint:gosec // G115: replica count is a small non-negative-after-clamp value; int32 overflow is not a practical concern
-		TunnelLogLevel:          opts.TunnelLogLevel,
-		CredentialsSecretName:   opts.CredentialsSecret,
-		CredentialsTokenKey:     opts.CredentialsTokenKey,
-		CredentialsAccountIDKey: opts.CredentialsAccountIDKey,
+		OperatorNamespace:            opts.OperatorNamespace,
+		OperatorImage:                opts.OperatorImage,
+		MetricsAddress:               opts.MetricsAddress,
+		HealthAddress:                opts.HealthAddress,
+		LeaderElection:               opts.LeaderElection,
+		ZoneEnabled:                  opts.ZoneEnabled,
+		ZoneReplicas:                 int32(opts.ZoneReplicas), //nolint:gosec // G115: replica count is a small non-negative-after-clamp value; int32 overflow is not a practical concern
+		ZoneLogLevel:                 opts.ZoneLogLevel,
+		TunnelEnabled:                opts.TunnelEnabled,
+		TunnelReplicas:               int32(opts.TunnelReplicas), //nolint:gosec // G115: replica count is a small non-negative-after-clamp value; int32 overflow is not a practical concern
+		TunnelLogLevel:               opts.TunnelLogLevel,
+		CredentialsSecretName:        opts.CredentialsSecret,
+		CredentialsTokenKey:          opts.CredentialsTokenKey,
+		CredentialsAccountIDKey:      opts.CredentialsAccountIDKey,
+		TunnelConnectorResourcesJSON: opts.TunnelConnectorResources,
 	}
 	if verr := cfg.Validate(); verr != nil {
 		log.Error(verr, "invalid meta configuration")

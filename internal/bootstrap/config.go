@@ -42,6 +42,13 @@ type Config struct {
 	CredentialsSecretName   string
 	CredentialsTokenKey     string
 	CredentialsAccountIDKey string
+
+	// TunnelConnectorResourcesJSON is an opaque JSON-encoded
+	// corev1.ResourceRequirements seeded as DefaultConnector.Resources on
+	// auto-created CloudflareTunnel CRs spawned by the tunnel controller.
+	// Empty = unset (no requests/limits — unchanged behavior). Kept opaque
+	// here; parsed/validated in cmd/manager (fail-loud).
+	TunnelConnectorResourcesJSON string
 }
 
 // Validate enforces the tunnel-requires-zone invariant that was previously a
