@@ -40,6 +40,11 @@ import (
 // sharedClient is set up once in TestMain and shared across all tests in the package.
 var sharedClient client.Client
 
+// sharedScheme is the *runtime.Scheme registered in TestMain and shared across
+// all tests in the package. Tests that call tunnel.EmitDNSRecord directly (which
+// requires a scheme for SetControllerOwner) use this instead of building their own.
+var sharedScheme *runtime.Scheme
+
 // sharedConfig is the envtest *rest.Config, exported so per-test files can
 // build their own managers (e.g. zone bundle wiring with mock-backed clients).
 var sharedConfig *rest.Config
@@ -149,6 +154,7 @@ func TestMain(m *testing.M) {
 		panic("client.New: " + err.Error())
 	}
 	sharedClient = k8sClient
+	sharedScheme = scheme
 
 	code := m.Run()
 
