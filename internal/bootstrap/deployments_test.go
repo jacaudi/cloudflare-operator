@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -122,4 +123,42 @@ func TestBuildControllerDeployment_LeaderElectionArg(t *testing.T) {
 		LeaderElection: false,
 	})
 	require.Contains(t, disabled.Spec.Template.Spec.Containers[0].Args, "--leader-election=false")
+}
+
+func TestBuildControllerDeployment_TunnelConnectorResourcesEnv(t *testing.T) {
+	js := `{"requests":{"cpu":"10m"}}`
+	// tunnel bundle + value set → env present
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorResourcesJSON: js})
+	require.True(t, hasEnv(dep, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES", js))
+
+	// zone bundle + value set → env ABSENT (tunnel-only)
+	depZ := BuildControllerDeployment(BuildArgs{
+		Bundle: "zone", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorResourcesJSON: js})
+	require.False(t, hasEnvName(depZ, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES"))
+
+	// tunnel bundle + unset → env ABSENT
+	depU := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1})
+	require.False(t, hasEnvName(depU, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES"))
+}
+
+func hasEnvName(d *appsv1.Deployment, name string) bool {
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(d *appsv1.Deployment, name, val string) bool {
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == name && e.Value == val {
+			return true
+		}
+	}
+	return false
 }

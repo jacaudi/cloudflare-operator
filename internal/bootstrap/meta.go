@@ -97,17 +97,18 @@ func (r *MetaReconciler) ensure(ctx context.Context) error {
 			level = "info"
 		}
 		dep := BuildControllerDeployment(BuildArgs{
-			Bundle:                  p.bundle,
-			Namespace:               r.Config.OperatorNamespace,
-			Image:                   r.Config.OperatorImage,
-			Replicas:                reps,
-			LogLevel:                level,
-			MetricsAddress:          r.Config.MetricsAddress,
-			HealthAddress:           r.Config.HealthAddress,
-			LeaderElection:          r.Config.LeaderElection,
-			CredentialsSecretName:   r.Config.CredentialsSecretName,
-			CredentialsTokenKey:     r.Config.CredentialsTokenKey,
-			CredentialsAccountIDKey: r.Config.CredentialsAccountIDKey,
+			Bundle:                       p.bundle,
+			Namespace:                    r.Config.OperatorNamespace,
+			Image:                        r.Config.OperatorImage,
+			Replicas:                     reps,
+			LogLevel:                     level,
+			MetricsAddress:               r.Config.MetricsAddress,
+			HealthAddress:                r.Config.HealthAddress,
+			LeaderElection:               r.Config.LeaderElection,
+			CredentialsSecretName:        r.Config.CredentialsSecretName,
+			CredentialsTokenKey:          r.Config.CredentialsTokenKey,
+			CredentialsAccountIDKey:      r.Config.CredentialsAccountIDKey,
+			TunnelConnectorResourcesJSON: r.Config.TunnelConnectorResourcesJSON,
 		})
 		if err := reconcile.Apply(ctx, r.Client, dep); err != nil {
 			return fmt.Errorf("apply Deployment %s: %w", name, err)

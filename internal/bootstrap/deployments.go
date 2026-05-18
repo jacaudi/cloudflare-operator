@@ -49,6 +49,10 @@ type BuildArgs struct {
 	CredentialsSecretName   string
 	CredentialsTokenKey     string
 	CredentialsAccountIDKey string
+	// TunnelConnectorResourcesJSON, when non-empty AND Bundle=="tunnel", is
+	// injected as the CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES env var so the
+	// tunnel controller seeds it into DefaultConnector.Resources.
+	TunnelConnectorResourcesJSON string
 }
 
 // BuildControllerDeployment renders a Deployment for the given bundle.
@@ -98,6 +102,12 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 					Key:                  accountKey,
 				}}},
 		}
+	}
+	if a.Bundle == "tunnel" && a.TunnelConnectorResourcesJSON != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES",
+			Value: a.TunnelConnectorResourcesJSON,
+		})
 	}
 
 	return &appsv1.Deployment{
