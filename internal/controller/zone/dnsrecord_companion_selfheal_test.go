@@ -121,3 +121,58 @@ func TestReconcileTXTCompanion_ForeignRefusesNoWrite(t *testing.T) {
 	after := m.Calls("DNS.UpdateRecord") + m.Calls("DNS.CreateRecord")
 	require.Equal(t, before, after, "MUST NOT write over a foreign companion (anti-hijack)")
 }
+
+func TestGCLegacyCompanion_DeletesProvablyOwnOnly(t *testing.T) {
+	m := mock.New()
+	enc := cloudflare.NewPlaintextCodec()
+	const zoneID, zoneDomain, host = "z1", "jacaudi.dev", "external.jacaudi.dev"
+
+	// Seed a legacy-named companion (old AffixName scheme) as Cloudflare
+	// would store a non-zone-suffixed POST: "<oldname>.<zone>".
+	oldName := legacyAffixName(txtAffix, host) + "." + zoneDomain
+	ours, err := enc.Encode(cloudflare.RegistryPayload{
+		V: 1, K: "CloudflareDNSRecord", NS: "network", N: "rec1", H: "sha256:abc",
+	})
+	require.NoError(t, err)
+	_, cerr := m.DNS.CreateRecord(context.Background(), zoneID, cloudflare.DNSRecordParams{
+		Name: oldName, Type: "TXT", Content: ours, TTL: 1,
+	})
+	require.NoError(t, cerr)
+
+	gcLegacyCompanion(context.Background(), m.DNS, zoneID, zoneDomain, host,
+		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
+
+	got, _ := m.DNS.ListRecordsByNameAndType(context.Background(), zoneID, oldName, "TXT")
+	require.Empty(t, got, "provably-own legacy companion must be deleted")
+}
+
+func TestGCLegacyCompanion_LeavesForeignAndUndecodable(t *testing.T) {
+	m := mock.New()
+	enc := cloudflare.NewPlaintextCodec()
+	const zoneID, zoneDomain, host = "z1", "jacaudi.dev", "external.jacaudi.dev"
+	oldName := legacyAffixName(txtAffix, host) + "." + zoneDomain
+
+	foreign, err := enc.Encode(cloudflare.RegistryPayload{
+		V: 1, K: "CloudflareDNSRecord", NS: "other", N: "notus", H: "x",
+	})
+	require.NoError(t, err)
+	_, cerr := m.DNS.CreateRecord(context.Background(), zoneID, cloudflare.DNSRecordParams{
+		Name: oldName, Type: "TXT", Content: foreign, TTL: 1,
+	})
+	require.NoError(t, cerr)
+
+	gcLegacyCompanion(context.Background(), m.DNS, zoneID, zoneDomain, host,
+		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
+
+	got, _ := m.DNS.ListRecordsByNameAndType(context.Background(), zoneID, oldName, "TXT")
+	require.Len(t, got, 1, "foreign legacy companion must NOT be deleted")
+}
+
+func TestGCLegacyCompanion_NoopWhenZoneDomainEmpty(t *testing.T) {
+	m := mock.New()
+	enc := cloudflare.NewPlaintextCodec()
+	// zoneDomain "" models the literal-Spec.ZoneID path: must skip silently.
+	gcLegacyCompanion(context.Background(), m.DNS, "z1", "", "external.jacaudi.dev",
+		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
+	require.Equal(t, 0, m.Calls("DNS.DeleteRecord"), "must not call DeleteRecord with empty zone domain")
+}

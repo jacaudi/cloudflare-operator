@@ -337,3 +337,70 @@ func isAlreadyExistsErr(err error) bool {
 	s := err.Error()
 	return strings.Contains(s, "81058") || strings.Contains(s, "81053")
 }
+
+// legacyAffixName reproduces the PRE-S1 AffixName scheme exactly: prefix +
+// "." for apex, prefix + "-" + dash-joined-all-but-last-label + "." + last-
+// label for subdomains; per-label wildcard sanitize. This is FROZEN — used
+// ONLY to locate and best-effort GC the operator's own stale legacy-named
+// companions written by older builds. Do NOT "fix" or simplify; its purpose
+// is to reproduce historical output byte-for-byte. The current scheme is
+// cloudflare.AffixName (T1, prefix-as-leftmost-label).
+func legacyAffixName(prefix, name string) string {
+	// sanitize maps "*" → "_wildcard", mirroring the pre-S1 sanitizeLabel
+	// (unexported in the cloudflare package; inlined here to stay self-contained).
+	sanitize := func(label string) string {
+		if label == "*" {
+			return "_wildcard"
+		}
+		return label
+	}
+	if !strings.ContainsRune(name, '.') {
+		return prefix + "." + sanitize(name)
+	}
+	segs := strings.Split(name, ".")
+	for i, s := range segs {
+		segs[i] = sanitize(s)
+	}
+	head := strings.Join(segs[:len(segs)-1], "-")
+	return prefix + "-" + head + "." + segs[len(segs)-1]
+}
+
+// gcLegacyCompanion best-effort deletes a stale legacy-named TXT companion
+// IFF its decoded payload proves it is THIS record's own (kind / namespace /
+// name match — design §4.4). The caller is responsible for ensuring the
+// correctly-named replacement is already present before invoking this.
+//
+// zoneDomain "" models the literal-Spec.ZoneID path (no CloudflareZone CR
+// available to resolve the domain) — in that case we cannot construct the
+// zone-appended FQDN that Cloudflare stored under, so we skip silently. This
+// is the documented "literal-Spec.ZoneID legacy orphan stays" trade-off.
+//
+// Never deletes foreign / undecodable records; never returns an error (GC is
+// best-effort and must not block the reconcile). DeleteRecord failures are
+// swallowed (the next reconcile retries; an undeleted orphan is harmless).
+func gcLegacyCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID, zoneDomain, recordName, ourNS, ourName string, readCodec cloudflare.Codec) {
+	if zoneDomain == "" {
+		return
+	}
+	newName := cloudflare.AffixName(txtAffix, recordName)
+	legacy := legacyAffixName(txtAffix, recordName)
+
+	// Cloudflare stores a non-zone-suffixed POST zone-appended; we try both
+	// the bare legacy name (idempotent when it happens to already end in the
+	// zone) and the zone-appended FQDN (the prod-incident case).
+	candidates := []string{legacy, legacy + "." + zoneDomain}
+	for _, cand := range candidates {
+		if cand == newName {
+			continue // never touch the current-scheme companion
+		}
+		recs, err := dc.ListRecordsByNameAndType(ctx, zoneID, cand, "TXT")
+		if err != nil {
+			continue // best-effort
+		}
+		for _, r := range recs {
+			if verifyTXTOwnership(r.Content, readCodec, "CloudflareDNSRecord", ourNS, ourName) == TxtOwnershipMatch {
+				_ = dc.DeleteRecord(ctx, zoneID, r.ID) // best-effort
+			}
+		}
+	}
+}
