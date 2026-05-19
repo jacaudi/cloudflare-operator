@@ -203,9 +203,10 @@ func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T)
 }
 
 func TestNeedsOwnerTransfer_OwnerGoneSourcesExist(t *testing.T) {
-	// Auto-created marker present: needsOwnerTransfer is isAutoCreated-gated,
-	// so the TRUE path requires the annotation in addition to no owner +
-	// attaching sources (a direct-create CR is never owner-transferred —
+	// Auto-created marker present: needsOwnerTransfer is cascadeGCEligible-gated,
+	// so the TRUE path requires the tunnel to be cascade-GC-eligible (auto-created
+	// annotation OR operator source labels) in addition to no owner + attaching
+	// sources (a direct-create CR is never owner-transferred —
 	// see TestNeedsOwnerTransfer_DirectCreateNeverTransfers).
 	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
@@ -232,9 +233,9 @@ func TestNeedsOwnerTransfer_DirectCreateNeverTransfers(t *testing.T) {
 }
 
 func TestNeedsOwnerTransfer_OwnerExists(t *testing.T) {
-	// Auto-created marker present so the isAutoCreated gate is satisfied —
+	// Auto-created marker present so the cascadeGCEligible gate is satisfied —
 	// the discriminating clause under test is "owner present blocks transfer",
-	// not the auto-created gate.
+	// not the cascadeGCEligible gate.
 	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
@@ -248,9 +249,9 @@ func TestNeedsOwnerTransfer_OwnerExists(t *testing.T) {
 }
 
 func TestNeedsOwnerTransfer_OwnerGoneNoSources(t *testing.T) {
-	// Auto-created marker present so the isAutoCreated gate is satisfied —
+	// Auto-created marker present so the cascadeGCEligible gate is satisfied —
 	// the discriminating clause under test is "no sources → delegated to
-	// isOrphaned", not the auto-created gate.
+	// isOrphaned", not the cascadeGCEligible gate.
 	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
@@ -306,9 +307,10 @@ func TestPredicates_MutuallyExclusive(t *testing.T) {
 		// vacuously false here), and the only state where a regression dropping
 		// isOrphaned's AttachedSources==0 clause would make both predicates
 		// return true simultaneously. Cases 1-3 yield needsOwnerTransfer=false
-		// (case 1 lacks the auto-created marker; cases 2-3 have no sources), so
-		// nt&&io is trivially false for them — keep this 4th case so the test
-		// stays non-vacuous now that needsOwnerTransfer is isAutoCreated-gated.
+		// (case 1 lacks any cascade-GC-eligible marker — no annotation and no
+		// source labels; cases 2-3 have no sources), so nt&&io is trivially
+		// false for them — keep this 4th case so the test stays non-vacuous now
+		// that needsOwnerTransfer is cascadeGCEligible-gated.
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
@@ -525,6 +527,40 @@ func TestTransferOwnership_NotFoundSkipsToNextLive(t *testing.T) {
 	var got v2alpha1.CloudflareTunnel
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
 	require.Equal(t, "b-svc", got.OwnerReferences[0].Name, "NotFound on a-svc skips to live b-svc")
+}
+
+func tnWith(ann map[string]string, lbl map[string]string) *v2alpha1.CloudflareTunnel {
+	tn := &v2alpha1.CloudflareTunnel{}
+	tn.SetAnnotations(ann)
+	tn.SetLabels(lbl)
+	return tn
+}
+
+func TestCascadeGCEligible(t *testing.T) {
+	srcL := map[string]string{
+		conventions.LabelSourceKind: "Gateway", conventions.LabelSourceName: "g",
+		conventions.LabelSourceNamespace: "n",
+	}
+	annT := map[string]string{conventions.AnnotationAutoCreated: "true"}
+
+	require.True(t, cascadeGCEligible(tnWith(annT, nil)), "annotation-only")
+	require.True(t, cascadeGCEligible(tnWith(nil, srcL)), "source-labels-only (pre-P4)")
+	require.True(t, cascadeGCEligible(tnWith(annT, srcL)), "both")
+	require.False(t, cascadeGCEligible(tnWith(nil, nil)), "neither (user-authored)")
+	require.False(t, cascadeGCEligible(tnWith(nil,
+		map[string]string{conventions.LabelSourceKind: "Gateway"})), "partial labels")
+}
+
+func TestIsOrphaned_LabelsOnly(t *testing.T) {
+	srcL := map[string]string{
+		conventions.LabelSourceKind: "Gateway", conventions.LabelSourceName: "g",
+		conventions.LabelSourceNamespace: "n",
+	}
+	tn := tnWith(nil, srcL) // no ownerRefs, no AttachedSources
+	require.True(t, isOrphaned(tn), "pre-P4 labels-only orphan must now be GC-eligible")
+
+	plain := tnWith(nil, nil)
+	require.False(t, isOrphaned(plain), "user-authored (no labels/annotation) never orphaned")
 }
 
 // TestFindTunnelTargetedParentRef exercises the to-be-extracted shared helper

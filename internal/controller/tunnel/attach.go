@@ -163,37 +163,49 @@ func isAutoCreated(tn *v2alpha1.CloudflareTunnel) bool {
 	return tn.Annotations[conventions.AnnotationAutoCreated] == "true"
 }
 
-// needsOwnerTransfer reports whether an auto-created tunnel CR has lost its
-// OwnerReferences but still has attaching sources tracked in
+// cascadeGCEligible reports whether a tunnel is subject to cascade-GC
+// (owner-transfer + self-delete). True iff it carries the auto-created
+// annotation OR the durable operator source labels (which survive the
+// orphan state — orphaning clears ownerRefs/AttachedSources but not
+// metadata.labels). Source labels are the same trust tier as the annotation
+// (a user could hand-set either); broadening adds no new attack surface.
+// isAutoCreated is intentionally NOT changed — it remains annotation-only
+// for true-provenance use.
+func cascadeGCEligible(tn *v2alpha1.CloudflareTunnel) bool {
+	return isAutoCreated(tn) || reconcilelib.HasSourceLabels(tn)
+}
+
+// needsOwnerTransfer reports whether a cascade-GC-eligible tunnel CR has
+// lost its OwnerReferences but still has attaching sources tracked in
 // Status.AttachedSources. When true, the reconciler should attempt to
 // promote one of the remaining attachers to owner. See design §4.2 for
 // the algorithm.
 //
-// isAutoCreated-gated, symmetric with isOrphaned: this predicate applies
-// ONLY to CRs the operator created itself. Direct-create (user-authored)
-// CRs are user-managed — the operator never takes controller-ownership of
-// them, so a Service annotation-attaching to a user's CR never makes that
-// Service the CR's k8s-controller-owner, and Kubernetes GC therefore never
-// cascade-deletes the user's CR when the Service is removed (design §7).
-// With both cascade-GC predicates isAutoCreated-gated, the entire
-// cascade-GC machinery (owner-transfer rebalancing AND self-delete) is
-// inert for direct-create CRs.
+// cascadeGCEligible-gated, symmetric with isOrphaned: this predicate applies
+// ONLY to CRs the operator created itself (auto-created annotation OR operator
+// source labels). Direct-create (user-authored) CRs are user-managed — the
+// operator never takes controller-ownership of them, so a Service
+// annotation-attaching to a user's CR never makes that Service the CR's
+// k8s-controller-owner, and Kubernetes GC therefore never cascade-deletes the
+// user's CR when the Service is removed (design §7). With both cascade-GC
+// predicates cascadeGCEligible-gated, the entire cascade-GC machinery
+// (owner-transfer rebalancing AND self-delete) is inert for direct-create CRs.
 func needsOwnerTransfer(tn *v2alpha1.CloudflareTunnel) bool {
-	return isAutoCreated(tn) &&
+	return cascadeGCEligible(tn) &&
 		len(tn.OwnerReferences) == 0 &&
 		len(tn.Status.AttachedSources) > 0
 }
 
-// isOrphaned reports whether the tunnel CR is an auto-created CR with no
+// isOrphaned reports whether the tunnel CR is a cascade-GC-eligible CR with no
 // remaining attaching sources and no owner. The cascade-GC self-delete
 // path uses this predicate (subject to the two-tick grace window on
 // Status.LastOrphanedAt). Mutually exclusive with needsOwnerTransfer.
 //
-// Direct-create CRs (no AnnotationAutoCreated marker) are NEVER orphaned
-// regardless of OwnerReferences / AttachedSources state — they survive
-// indefinitely without operator-driven removal.
+// CRs that carry neither the AnnotationAutoCreated marker nor operator source
+// labels are NEVER orphaned regardless of OwnerReferences / AttachedSources
+// state — they survive indefinitely without operator-driven removal.
 func isOrphaned(tn *v2alpha1.CloudflareTunnel) bool {
-	return isAutoCreated(tn) &&
+	return cascadeGCEligible(tn) &&
 		len(tn.OwnerReferences) == 0 &&
 		len(tn.Status.AttachedSources) == 0
 }
