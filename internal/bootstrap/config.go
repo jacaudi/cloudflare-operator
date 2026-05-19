@@ -49,6 +49,12 @@ type Config struct {
 	// Empty = unset (no requests/limits — unchanged behavior). Kept opaque
 	// here; parsed/validated in cmd/manager (fail-loud).
 	TunnelConnectorResourcesJSON string
+
+	// TunnelConnectorImageJSON is an opaque JSON-encoded v2alpha1.ConnectorImage
+	// ({repository?,tag?}) layered over the compile-time cloudflared pin
+	// (per-axis, via tunnel.ResolveImage) to form Options.DefaultImage. Empty
+	// = unset (use the compile-time const). Parsed/validated in cmd/manager.
+	TunnelConnectorImageJSON string
 }
 
 // Validate enforces the tunnel-requires-zone invariant that was previously a

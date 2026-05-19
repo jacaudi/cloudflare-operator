@@ -98,6 +98,7 @@ type Options struct {
 	CredentialsAccountIDKey string
 
 	TunnelConnectorResources string
+	TunnelConnectorImage     string
 }
 
 func parseFlags(args []string) (Options, error) {
@@ -119,6 +120,9 @@ func parseFlags(args []string) (Options, error) {
 	tunnelConnRes := fs.String("tunnel-connector-resources",
 		envOr("CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES", ""),
 		"JSON corev1.ResourceRequirements applied as DefaultConnector.Resources on auto-created tunnels")
+	tunnelConnImg := fs.String("tunnel-connector-image",
+		envOr("CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE", ""),
+		"opaque JSON {repository?,tag?} layered over the cloudflared pin for auto-tunnels")
 	credsSecret := fs.String("credentials-secret", envOr("CLOUDFLARE_CREDENTIALS_SECRET", ""), "credential Secret propagated to spawned controllers")
 	credsTokenKey := fs.String("credentials-token-key", envOr("CLOUDFLARE_CREDENTIALS_TOKEN_KEY", "token"), "key in the credential Secret holding the API token")
 	credsAccountIDKey := fs.String("credentials-account-id-key", envOr("CLOUDFLARE_CREDENTIALS_ACCOUNT_ID_KEY", "accountID"), "key in the credential Secret holding the account ID")
@@ -158,6 +162,7 @@ func parseFlags(args []string) (Options, error) {
 		CredentialsTokenKey:      *credsTokenKey,
 		CredentialsAccountIDKey:  *credsAccountIDKey,
 		TunnelConnectorResources: *tunnelConnRes,
+		TunnelConnectorImage:     *tunnelConnImg,
 	}, nil
 }
 
@@ -275,6 +280,7 @@ func runMeta(opts Options, scheme *runtime.Scheme) {
 		CredentialsTokenKey:          opts.CredentialsTokenKey,
 		CredentialsAccountIDKey:      opts.CredentialsAccountIDKey,
 		TunnelConnectorResourcesJSON: opts.TunnelConnectorResources,
+		TunnelConnectorImageJSON:     opts.TunnelConnectorImage,
 	}
 	if verr := cfg.Validate(); verr != nil {
 		log.Error(verr, "invalid meta configuration")
@@ -350,6 +356,20 @@ func parseConnectorResources(raw string) (corev1.ResourceRequirements, error) {
 		return corev1.ResourceRequirements{}, fmt.Errorf("parse CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES: %w", err)
 	}
 	return rr, nil
+}
+
+// parseConnectorImage unmarshals the opaque JSON v2alpha1.ConnectorImage the
+// meta-operator injects via CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE. Empty → nil
+// (use the compile-time pin). Fail-loud on malformed JSON.
+func parseConnectorImage(raw string) (*v2alpha1.ConnectorImage, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var ci v2alpha1.ConnectorImage
+	if err := json.Unmarshal([]byte(raw), &ci); err != nil {
+		return nil, fmt.Errorf("parse CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE: %w", err)
+	}
+	return &ci, nil
 }
 
 func newProductionLogger(level string) (*zap.Logger, error) {

@@ -122,6 +122,17 @@ func TestParseFlags_TunnelConnectorResources(t *testing.T) {
 	require.Equal(t, "", opts2.TunnelConnectorResources) // default empty
 }
 
+func TestParseFlags_TunnelConnectorImage(t *testing.T) {
+	opts, err := parseFlags([]string{"--mode=meta",
+		`--tunnel-connector-image={"tag":"2026.6.0"}`})
+	require.NoError(t, err)
+	require.Equal(t, `{"tag":"2026.6.0"}`, opts.TunnelConnectorImage)
+
+	opts2, err := parseFlags([]string{"--mode=meta"})
+	require.NoError(t, err)
+	require.Equal(t, "", opts2.TunnelConnectorImage) // default empty
+}
+
 func TestParseConnectorResources(t *testing.T) {
 	rr, err := parseConnectorResources("")
 	require.NoError(t, err)
@@ -134,6 +145,25 @@ func TestParseConnectorResources(t *testing.T) {
 	require.Equal(t, "256Mi", rr2.Limits.Memory().String())
 
 	_, err = parseConnectorResources(`{not-json`)
+	require.Error(t, err)
+}
+
+func TestParseConnectorImage(t *testing.T) {
+	ci, err := parseConnectorImage("")
+	require.NoError(t, err)
+	require.Nil(t, ci)
+
+	ci, err = parseConnectorImage(`{"repository":"mirror.example/cf/cloudflared"}`)
+	require.NoError(t, err)
+	require.Equal(t, "mirror.example/cf/cloudflared", ci.Repository)
+	require.Empty(t, ci.Tag)
+
+	ci, err = parseConnectorImage(`{"tag":"2026.6.0"}`)
+	require.NoError(t, err)
+	require.Equal(t, "2026.6.0", ci.Tag)
+	require.Empty(t, ci.Repository)
+
+	_, err = parseConnectorImage(`{not-json`)
 	require.Error(t, err)
 }
 
