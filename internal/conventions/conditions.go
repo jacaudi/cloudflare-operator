@@ -119,6 +119,14 @@ const (
 	// reconcile does NOT fail (DNS is correct); the TXT write retries on
 	// the next reconcile. Surfaced as a Warning Event.
 	ReasonTxtRegistryWriteFailed = "TxtRegistryWriteFailed"
+
+	// ReasonOwnershipCompanionFailed marks a CR whose primary Cloudflare
+	// record is healthy but whose TXT ownership companion could not be
+	// brought to the desired state this reconcile (name-miss, foreign
+	// owner, undecodable content, or a Cloudflare write error). S1 gates
+	// Ready=False on this so a broken anti-hijack companion is never
+	// masked behind "DNS record synced".
+	ReasonOwnershipCompanionFailed = "OwnershipCompanionFailed"
 )
 
 // ZoneReasons returns the reason vocabulary appended by spec 2.
@@ -140,6 +148,7 @@ func ZoneReasons() []string {
 		ReasonTxtRegistryKeyUnavailable,
 		ReasonObserving,
 		ReasonTxtRegistryWriteFailed,
+		ReasonOwnershipCompanionFailed,
 	}
 }
 
