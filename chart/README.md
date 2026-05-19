@@ -62,6 +62,79 @@ cloudflared is published exclusively to Docker Hub — there is no official
 
 ---
 
+## Tunnel Gateway apex (`cloudflare.io/gateway-apex`)
+
+`cloudflare.io/gateway-apex` is an annotation set on a tunnel-targeted `Gateway`. It explicitly sets
+the public apex hostname that per-route (`HTTPRoute`/`TLSRoute`) chain DNS records CNAME to, and
+which the gateway-source publishes as `<apex> CNAME → tunnel CNAME`. The value must be a concrete,
+non-wildcard DNS hostname (e.g. `external.example.com`).
+
+### When it is REQUIRED
+
+If a Gateway's listener hostnames are **wildcard-only** (e.g. only `*.example.com`) and
+`cloudflare.io/gateway-apex` is not set, the operator **will not publish** per-route chain records.
+A wildcard is an invalid CNAME target — Cloudflare rejects it with error 9007 — so a wildcard-only
+Gateway cannot back a route chain without an explicit concrete apex.
+
+When this condition is detected:
+
+- The route's status condition is set to **not-ready** with reason **`GatewayApexRequired`**.
+- A **Warning Event** is emitted on the route object.
+- The operator does not hot-loop; it waits for the annotation to be added.
+
+**Resolution:** add `cloudflare.io/gateway-apex` to the Gateway with a concrete hostname.
+
+### When it is optional
+
+If the Gateway has at least one **concrete (non-wildcard) listener hostname**, the annotation is
+optional:
+
+- **Without it:** per-route chain records CNAME **directly to the tunnel CNAME**
+  (`<uuid>.cfargotunnel.com`).
+- **With it:** per-route chain records CNAME to the override apex instead of to the tunnel CNAME
+  directly.
+
+### Behavior change note
+
+> **Breaking change for wildcard-only Gateways**
+
+Previously, per-route chain records CNAMEd to the parent Gateway's *first listener hostname*.
+
+Now:
+
+- **Concrete listener, no override:** per-route chain records CNAME directly to the tunnel CNAME
+  (`<uuid>.cfargotunnel.com`), not to the Gateway's first listener hostname.
+- **Wildcard-only Gateway, no override:** routes that previously emitted a (broken,
+  Cloudflare-9007-rejected) wildcard-targeted record are now **Blocked** with reason
+  `GatewayApexRequired` until the annotation is set.
+
+**Action required if you have wildcard-only Gateways:** add `cloudflare.io/gateway-apex` to each
+such Gateway or routes will stop publishing chain records.
+
+Operators using concrete-listener Gateways that relied on the old first-hostname behavior should
+verify their DNS chain is still correct — CNAMEs now target the tunnel directly rather than the
+Gateway listener hostname.
+
+### Invalid value
+
+If `cloudflare.io/gateway-apex` is set but is not a valid, non-wildcard DNS hostname, the value is
+ignored:
+
+- A **Warning Event** with reason **`GatewayApexInvalid`** is emitted on the Gateway.
+- Behavior falls back as if the annotation were unset (CNAME direct to tunnel for concrete-listener
+  Gateways; Blocked with `GatewayApexRequired` for wildcard-only Gateways).
+
+### Example
+
+```yaml
+metadata:
+  annotations:
+    cloudflare.io/tunnel: "true"
+    cloudflare.io/gateway-apex: external.example.com
+```
+
+---
+
 ## Renovate tracking
 
 cloudflared image bumps are Renovate-tracked and land as `fix(cloudflared)` conventional commits.
