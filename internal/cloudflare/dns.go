@@ -150,6 +150,17 @@ func (c *dnsClient) DeleteRecord(ctx context.Context, zoneID, recordID string) e
 // priority-0 records — notably RFC 7505 null MX (`. MX 0 "."`) — which
 // would otherwise round-trip as nil and cause spurious drift in the
 // reconciler. SRV's priority lives inside Data, not at the top level.
+//
+// TXT canonicalization: the Cloudflare API returns TXT record content in
+// RFC 1035 presentation form — whitespace-separated double-quoted
+// character-strings (e.g. `"foo" "bar"`), with values longer than 255 bytes
+// split automatically. mapRecordResponse is the single read chokepoint for
+// all DNS API responses, so CanonicalizeTXT is applied here (TXT only).
+// Every downstream consumer — drift comparison, codec decode,
+// verifyTXTOwnership, and status — therefore receives logical content and
+// need not repeat the transformation. Callers extending the switch must
+// preserve this invariant: rec.Content for TXT is already canonical before
+// the switch body executes.
 func mapRecordResponse(r *dns.RecordResponse) *DNSRecord {
 	rec := &DNSRecord{
 		ID:      r.ID,
@@ -158,6 +169,9 @@ func mapRecordResponse(r *dns.RecordResponse) *DNSRecord {
 		Content: r.Content,
 		Proxied: r.Proxied,
 		TTL:     int(r.TTL),
+	}
+	if r.Type == dns.RecordResponseTypeTXT {
+		rec.Content = CanonicalizeTXT(r.Content)
 	}
 	switch r.Type {
 	case dns.RecordResponseTypeMX, dns.RecordResponseTypeURI:

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
+	"github.com/cloudflare/cloudflare-go/v6/dns"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,6 +61,62 @@ func TestClassifyDNSAPIErr(t *testing.T) {
 			} else {
 				require.NotErrorIs(t, got, ErrRecordNotFound)
 			}
+		})
+	}
+}
+
+func TestMapRecordResponse_TXTCanonicalized(t *testing.T) {
+	r := &dns.RecordResponse{
+		ID:      "r1",
+		Name:    "cf-txt.test",
+		Type:    dns.RecordResponseTypeTXT,
+		Content: `"foo" "bar"`,
+		TTL:     1,
+	}
+	got := mapRecordResponse(r)
+	require.Equal(t, "foobar", got.Content, "TXT content must be canonicalized at the SDK boundary")
+}
+
+func TestMapRecordResponse_NonTXTUntouched(t *testing.T) {
+	r := &dns.RecordResponse{
+		ID:      "r2",
+		Name:    "a.test",
+		Type:    dns.RecordResponseTypeCNAME,
+		Content: `"weird"`,
+		TTL:     1,
+	}
+	got := mapRecordResponse(r)
+	require.Equal(t, `"weird"`, got.Content, "non-TXT content must NOT be canonicalized")
+}
+
+// TestMapRecordResponse_TXTAlreadyLogicalPassthrough anchors the steady-state
+// no-churn property at the mapRecordResponse boundary: TXT content that is
+// already in logical form (no RFC 1035 quoting) must pass through unchanged.
+func TestMapRecordResponse_TXTAlreadyLogicalPassthrough(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "SPF value",
+			content: "v=spf1 include:_spf.example.com ~all",
+		},
+		{
+			name:    "registry JSON",
+			content: `{"v":1,"k":"CloudflareDNSRecord"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &dns.RecordResponse{
+				ID:      "r3",
+				Name:    "txt.test",
+				Type:    dns.RecordResponseTypeTXT,
+				Content: tc.content,
+				TTL:     1,
+			}
+			got := mapRecordResponse(r)
+			require.Equal(t, tc.content, got.Content, "already-logical TXT content must be byte-identical at mapRecordResponse boundary")
 		})
 	}
 }
