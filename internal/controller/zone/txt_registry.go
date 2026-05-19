@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -192,4 +193,147 @@ func deleteTXTCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID, tx
 		return fmt.Errorf("deleteTXTCompanion: %w", err)
 	}
 	return nil
+}
+
+// companionInputs is the parameter bag for reconcileTXTCompanion.
+type companionInputs struct {
+	recordName  string // rec.Spec.Name (the public hostname)
+	contentHash string // sha256Hex(content)
+	ourNS       string // rec.Namespace
+	ourName     string // rec.Name
+	storedTxtID string // rec.Status.TxtRecordID (may be stale/empty)
+	encoder     cloudflare.Codec
+	readCodec   cloudflare.Codec
+}
+
+// companionOutcome is the result of one companion reconcile pass.
+type companionOutcome struct {
+	txtRecordID string // set when the companion is ours and present
+	ownershipOK bool   // true ⇒ companion is in the desired state
+	failClass   string // "" | "name-miss" | "foreign" | "undecodable" | "cf-create" | "cf-update"
+}
+
+// reconcileTXTCompanion converges the TXT ownership companion against ACTUAL
+// Cloudflare state every reconcile (S1 design §4.2, composed strategy):
+//
+//  1. ID-first: if in.storedTxtID is set, GetRecord(ID). ErrRecordNotFound ⇒
+//     treat as absent (out-of-band delete — sub-bug a). Other errors propagate
+//     (transient).
+//  2. Fallback: ID empty / 404 ⇒ ListRecordsByNameAndType(zoneCorrectName,TXT)
+//     using the post-T1 AffixName scheme (cf-txt.<host>). Returns the first
+//     match or nil.
+//  3. Classify via verifyTXTOwnership:
+//     absent      → CreateRecord; on CF 81058 ⇒ re-list + re-classify
+//     (never a hard error — sub-bug b).
+//     Match       → if payload-hash drift: UpdateRecord; set TxtRecordID.
+//     Foreign     → REFUSE (no write); ownershipOK=false, failClass="foreign".
+//     Unrecognized→ REFUSE (no write); ownershipOK=false, failClass="undecodable".
+//
+// Anti-hijack invariant (P5 design Q2): NEVER writes a TXT companion for a
+// record this CR cannot prove it owns.
+func reconcileTXTCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID string, in companionInputs) (companionOutcome, error) {
+	txtName := cloudflare.AffixName(txtAffix, in.recordName)
+
+	// Step 1+2: resolve the live companion (ID-first, name-list fallback).
+	found, err := resolveCompanion(ctx, dc, zoneID, in.storedTxtID, txtName)
+	if err != nil {
+		return companionOutcome{}, err
+	}
+
+	desired := cloudflare.RegistryPayload{
+		V: 1, K: "CloudflareDNSRecord", NS: in.ourNS, N: in.ourName, H: in.contentHash,
+	}
+	content, eerr := in.encoder.Encode(desired)
+	if eerr != nil {
+		return companionOutcome{}, fmt.Errorf("reconcileTXTCompanion encode: %w", eerr)
+	}
+
+	// Step 3: classify + converge.
+	if found != nil {
+		switch verifyTXTOwnership(found.Content, in.readCodec, "CloudflareDNSRecord", in.ourNS, in.ourName) {
+		case TxtOwnershipMatch:
+			if p, derr := in.readCodec.Decode(found.Content); derr != nil || p.H != in.contentHash {
+				upd, uerr := dc.UpdateRecord(ctx, zoneID, found.ID, cloudflare.DNSRecordParams{
+					Type: "TXT", Name: txtName, Content: content, TTL: 1,
+				})
+				if uerr != nil {
+					return companionOutcome{failClass: "cf-update"}, fmt.Errorf("companion update: %w", uerr)
+				}
+				return companionOutcome{txtRecordID: upd.ID, ownershipOK: true}, nil
+			}
+			return companionOutcome{txtRecordID: found.ID, ownershipOK: true}, nil
+		case TxtOwnershipForeign:
+			return companionOutcome{ownershipOK: false, failClass: "foreign"}, nil
+		default: // TxtOwnershipUnrecognized
+			return companionOutcome{ownershipOK: false, failClass: "undecodable"}, nil
+		}
+	}
+
+	// Absent → create. CF 81058 ⇒ re-list + re-classify (never a hard error).
+	created, cerr := dc.CreateRecord(ctx, zoneID, cloudflare.DNSRecordParams{
+		Type: "TXT", Name: txtName, Content: content, TTL: 1,
+	})
+	if cerr != nil {
+		if !isAlreadyExistsErr(cerr) {
+			return companionOutcome{failClass: "cf-create"}, fmt.Errorf("companion create: %w", cerr)
+		}
+		// "Already exists" on create ⇒ another reconcile / external party
+		// just created it; re-list + re-classify rather than erroring.
+		list, lerr := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
+		if lerr != nil {
+			return companionOutcome{}, fmt.Errorf("companion relist after exists: %w", lerr)
+		}
+		if len(list) == 0 {
+			// CF claims the record exists but our exact-name list can't see it
+			// (the original external-jacaudi failure mode pre-T1, now a name-miss
+			// rather than an infinite loop).
+			return companionOutcome{ownershipOK: false, failClass: "name-miss"}, nil
+		}
+		switch verifyTXTOwnership(list[0].Content, in.readCodec, "CloudflareDNSRecord", in.ourNS, in.ourName) {
+		case TxtOwnershipMatch:
+			return companionOutcome{txtRecordID: list[0].ID, ownershipOK: true}, nil
+		case TxtOwnershipForeign:
+			return companionOutcome{ownershipOK: false, failClass: "foreign"}, nil
+		default:
+			return companionOutcome{ownershipOK: false, failClass: "undecodable"}, nil
+		}
+	}
+	return companionOutcome{txtRecordID: created.ID, ownershipOK: true}, nil
+}
+
+// resolveCompanion returns the live companion record from Cloudflare (or nil
+// if absent). ID-first: if storedTxtID is set, GetRecord(ID); ErrRecordNotFound
+// ⇒ fall back to name-list. Other errors propagate (transient).
+func resolveCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID, storedTxtID, txtName string) (*cloudflare.DNSRecord, error) {
+	if storedTxtID != "" {
+		rec, err := dc.GetRecord(ctx, zoneID, storedTxtID)
+		if err == nil {
+			return rec, nil
+		}
+		if !errors.Is(err, cloudflare.ErrRecordNotFound) {
+			return nil, err // transient
+		}
+		// Stale ID; fall through to name-list.
+	}
+	list, err := dc.ListRecordsByNameAndType(ctx, zoneID, txtName, "TXT")
+	if err != nil {
+		return nil, err
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	r := list[0]
+	return &r, nil
+}
+
+// isAlreadyExistsErr reports whether err is a Cloudflare "record already
+// exists" error (81058 for TXT, 81053 for A/AAAA/CNAME). Matched on the
+// documented numeric codes embedded in the wrapped error string; robust to
+// error wrapping.
+func isAlreadyExistsErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "81058") || strings.Contains(s, "81053")
 }
