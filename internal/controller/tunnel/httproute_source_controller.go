@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -149,13 +150,29 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 	// — emitting a wildcard CNAME would cause Cloudflare error 9007.
 	chainContent, apexBlocked, _ := chainContentFor(gw, tn)
 
+	// Merge route + Gateway annotations once: used for scheme derivation, the
+	// translator's Defaults, and the per-hostname DNSRecord emit below
+	// (passed into emitChainDNSRecord to avoid re-computing inheritance).
+	mergedAnns := inheritedAnnotations(rt.GetAnnotations(), gw)
+
+	// Collect the route's hostnames once for the listener-match algorithm.
+	routeHostnames := make([]string, 0, len(rt.Spec.Hostnames))
+	for _, h := range rt.Spec.Hostnames {
+		routeHostnames = append(routeHostnames, string(h))
+	}
+
+	// Bug 2: derive the origin scheme from the parent listener (or annotation
+	// override). The previous hardcoded "http://" caused cloudflared to dial
+	// a TLS-only Envoy listener with plain HTTP -> connection reset.
+	scheme := schemeForParent(gw, *parent, routeHostnames, mergedAnns)
+
 	gwOrigin := tunnelsynth.GatewayOrigin{
 		// Hostname is informational only — not consumed by the translator
 		// (routing is driven by .Service). Stored for diagnostics/logging.
 		Hostname: chainContent,
-		Service:  fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", gwSvc.Name, gwSvc.Namespace, port),
+		Service:  fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, gwSvc.Name, gwSvc.Namespace, port),
 	}
-	contribs, warns := tunnelsynth.TranslateHTTPRoute(&rt, gwOrigin, tunnelsynth.Defaults{})
+	contribs, warns := tunnelsynth.TranslateHTTPRoute(&rt, gwOrigin, defaultsFromAnnotations(mergedAnns))
 
 	tunnelKey := tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name}
 
@@ -216,7 +233,7 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 	desired := make(map[string]struct{}, len(rt.Spec.Hostnames))
 	for _, h := range rt.Spec.Hostnames {
 		desired[string(h)] = struct{}{}
-		if err := r.emitChainDNSRecord(ctx, &rt, string(h), chainContent, gw); err != nil {
+		if err := r.emitChainDNSRecord(ctx, &rt, string(h), chainContent, mergedAnns); err != nil {
 			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", h, err)
 		}
 	}
@@ -299,18 +316,127 @@ func firstListenerHostname(gw *gwv1.Gateway) string {
 // cloudflare.io/* annotations are merged via inheritedAnnotations: the
 // route's own value wins when set; missing values fall through to the
 // parent Gateway. This implements the per-route override / per-gateway
-// default pattern from design §5.
+// default pattern from design §5. The merged map is precomputed once in
+// Reconcile and passed through to avoid duplicating the inheritance walk.
 //
 // Operator-edits-win: a user `kubectl edit` on the emitted CR will be
 // reverted on the next reconcile.
-func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, chainContent string, gw *gwv1.Gateway) error {
+func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, chainContent string, mergedAnns map[string]string) error {
 	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
 		Owner:       rt,
 		OwnerKind:   "HTTPRoute",
 		Hostname:    hostname,
 		Content:     chainContent,
-		Annotations: inheritedAnnotations(rt.GetAnnotations(), gw),
+		Annotations: mergedAnns,
 	})
+}
+
+// schemeForParent resolves the cloudflared origin scheme ("http" or "https")
+// for an HTTPRoute attached to gw via the given parentRef. Bug 2 fix: previously
+// the scheme was hardcoded "http", which caused cloudflared to dial a TLS-only
+// Envoy listener and hit a connection reset.
+//
+// Resolution order (matches design §A.2):
+//  1. cloudflare.io/scheme annotation (route value wins, then Gateway) if set
+//     to "http" or "https" — explicit user override.
+//  2. parentRef.SectionName points at a named listener: HTTPS protocol → "https",
+//     HTTP → "http". Unknown section or non-HTTP(S) protocol falls through.
+//  3. Among the Gateway's listeners that match one of the route's hostnames per
+//     Gateway-API matching (nil/empty listener hostname matches any; "*.suffix"
+//     matches single-label-prefix subdomains; otherwise exact): HTTPS-preferred,
+//     then HTTP.
+//  4. Default "http" — the legacy behavior, preserved as a fallback so a Gateway
+//     with no HTTP/HTTPS listeners doesn't crash the reconcile.
+func schemeForParent(gw *gwv1.Gateway, parent gwv1.ParentReference, routeHostnames []string, mergedAnns map[string]string) string {
+	if v := mergedAnns[conventions.AnnotationScheme]; v == "http" || v == "https" {
+		return v
+	}
+
+	if parent.SectionName != nil {
+		want := string(*parent.SectionName)
+		for _, l := range gw.Spec.Listeners {
+			if string(l.Name) != want {
+				continue
+			}
+			switch l.Protocol {
+			case gwv1.HTTPSProtocolType:
+				return "https"
+			case gwv1.HTTPProtocolType:
+				return "http"
+			}
+			// Named listener exists but is not HTTP(S) — fall through to the
+			// hostname-match pass rather than silently defaulting.
+			break
+		}
+	}
+
+	// HTTPS-preferred among hostname-matching listeners.
+	var sawHTTP bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Protocol != gwv1.HTTPProtocolType && l.Protocol != gwv1.HTTPSProtocolType {
+			continue
+		}
+		lh := ""
+		if l.Hostname != nil {
+			lh = string(*l.Hostname)
+		}
+		if !listenerMatchesAnyRouteHost(lh, routeHostnames) {
+			continue
+		}
+		if l.Protocol == gwv1.HTTPSProtocolType {
+			return "https"
+		}
+		sawHTTP = true
+	}
+	if sawHTTP {
+		return "http"
+	}
+
+	return "http"
+}
+
+// listenerMatchesAnyRouteHost reports whether listenerHost matches at least one
+// host in routeHosts per Gateway-API hostname-match rules. An empty routeHosts
+// list is treated as "match the listener regardless" — an HTTPRoute with no
+// Spec.Hostnames is bound to all the parent's listeners.
+func listenerMatchesAnyRouteHost(listenerHost string, routeHosts []string) bool {
+	if len(routeHosts) == 0 {
+		return true
+	}
+	for _, rh := range routeHosts {
+		if hostnameMatchesListener(listenerHost, rh) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostnameMatchesListener implements Gateway-API listener vs. route hostname
+// matching:
+//   - empty (nil) listener hostname matches any route host;
+//   - "*.example.com" matches a single-label subdomain ("foo.example.com" yes,
+//     "foo.bar.example.com" no) per Gateway-API spec;
+//   - otherwise the comparison is exact.
+//
+// The caller is expected to pass listenerHost="" for nil-Hostname listeners.
+func hostnameMatchesListener(listenerHost, routeHost string) bool {
+	if listenerHost == "" {
+		return true
+	}
+	if strings.HasPrefix(listenerHost, "*.") {
+		suffix := listenerHost[1:] // ".example.com"
+		if !strings.HasSuffix(routeHost, suffix) {
+			return false
+		}
+		head := routeHost[:len(routeHost)-len(suffix)]
+		if head == "" {
+			// "*.example.com" must NOT match the apex "example.com".
+			return false
+		}
+		// Single-label only: the head must contain no dots.
+		return !strings.Contains(head, ".")
+	}
+	return listenerHost == routeHost
 }
 
 // writeParentStatus is the parent-only status write. Touches ONLY the

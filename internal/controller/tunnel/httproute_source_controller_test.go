@@ -1137,6 +1137,257 @@ func TestDogfooding_EmittedChainCRsNeverWildcard(t *testing.T) {
 	})
 }
 
+// mkTunnelGwWithListeners builds a tunnel-targeted Gateway whose listeners are
+// caller-supplied. Mirrors mkParentGw's annotation block (tunnel + tunnel-name
+// + gateway-service) so findTunnelTargetedParentRef qualifies the parent;
+// listener shape is the variable under test.
+func mkTunnelGwWithListeners(name, ns string, listeners []gwv1.Listener, extraAnns map[string]string) *gwv1.Gateway {
+	ann := map[string]string{
+		conventions.AnnotationTunnel:         "true",
+		conventions.AnnotationTunnelName:     "edge",
+		conventions.AnnotationGatewayService: ns + "/gw-svc",
+	}
+	for k, v := range extraAnns {
+		ann[k] = v
+	}
+	return &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Annotations: ann},
+		Spec:       gwv1.GatewaySpec{Listeners: listeners},
+	}
+}
+
+func hostnamePtr(s string) *gwv1.Hostname {
+	h := gwv1.Hostname(s)
+	return &h
+}
+
+func sectionNamePtr(s string) *gwv1.SectionName {
+	n := gwv1.SectionName(s)
+	return &n
+}
+
+// reconcileHTTPRouteAndGetContrib runs the reconciler with the given fixture
+// objects and returns the single IngressContribution written to the cache.
+// Tests asserting Service / NoTLSVerify / OriginServerName use this helper to
+// keep the per-test boilerplate small.
+func reconcileHTTPRouteAndGetContrib(t *testing.T, gw *gwv1.Gateway, rt *gwv1.HTTPRoute) tunnelsynth.ContributionWithSource {
+	t.Helper()
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: gw.Namespace},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+	}
+	gwSvc := mkGwSvc("gw-svc", gw.Namespace)
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	cache := tunnelsynth.NewCache()
+	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: cache}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name}})
+	require.NoError(t, err)
+
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-gw-ns-edge"})
+	require.Len(t, snap, 1, "expected exactly one contribution")
+	return snap[0]
+}
+
+// T1.1 — HTTPRoute pins a parentRef with SectionName pointing at the HTTPS
+// listener; the contribution Service URL must use the https:// scheme.
+func TestHTTPRouteSource_SchemeFromSectionName_HTTPS(t *testing.T) {
+	// Underlying Service exposes both 80 and 443 so resolveGatewayService can
+	// match the listener port. The Gateway annotation cf-gateway-service points
+	// at it; port selection lives in resolveGatewayService.
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "http", Hostname: hostnamePtr("notes.example.com"), Port: 80, Protocol: gwv1.HTTPProtocolType},
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{
+				Name:        "gw",
+				Namespace:   ptrNs("gw-ns"),
+				SectionName: sectionNamePtr("https"),
+			}}},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "https://"),
+		"sectionName-pinned HTTPS listener must yield https:// service, got %q", got.Service)
+}
+
+// T1.2 — Mixed HTTP+HTTPS listeners on the parent, NO sectionName, route
+// hostname matches both. HTTPS must win the preference.
+func TestHTTPRouteSource_SchemeMixedListeners_HTTPSWins(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "http", Hostname: hostnamePtr("notes.example.com"), Port: 80, Protocol: gwv1.HTTPProtocolType},
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{
+				Name: "gw", Namespace: ptrNs("gw-ns"),
+			}}},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "https://"),
+		"HTTPS listener must win over sibling HTTP on the same hostname, got %q", got.Service)
+}
+
+// T1.3 — Only an HTTP listener matches the route hostname; scheme must be http.
+func TestHTTPRouteSource_SchemeHTTPOnly(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "http", Hostname: hostnamePtr("notes.example.com"), Port: 80, Protocol: gwv1.HTTPProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "http://") && !strings.HasPrefix(got.Service, "https://"),
+		"HTTP-only listener must yield http:// service, got %q", got.Service)
+}
+
+// T1.4 — Route's cloudflare.io/scheme=http overrides an HTTPS listener.
+func TestHTTPRouteSource_SchemeRouteAnnotationOverridesHTTPS(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: "app",
+			Annotations: map[string]string{conventions.AnnotationScheme: "http"},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "http://") && !strings.HasPrefix(got.Service, "https://"),
+		"route cloudflare.io/scheme=http must override the HTTPS listener, got %q", got.Service)
+}
+
+// T1.5 — Gateway-level cloudflare.io/scheme=https, only HTTP listener present.
+// The override on the Gateway must inherit into the route's effective scheme.
+func TestHTTPRouteSource_SchemeGatewayAnnotationOverridesHTTP(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "http", Hostname: hostnamePtr("notes.example.com"), Port: 80, Protocol: gwv1.HTTPProtocolType},
+	}, map[string]string{conventions.AnnotationScheme: "https"})
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "https://"),
+		"Gateway cloudflare.io/scheme=https must override the HTTP-only listener, got %q", got.Service)
+}
+
+// T1.6 — cloudflare.io/no-tls-verify=true on the route must surface as
+// NoTLSVerify=ptr(true) on the contribution (defaults flow through to
+// TranslateHTTPRoute via defaultsFromAnnotations).
+func TestHTTPRouteSource_NoTLSVerifyFromRoute(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: "app",
+			Annotations: map[string]string{conventions.AnnotationNoTLSVerify: "true"},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.NotNil(t, got.NoTLSVerify, "NoTLSVerify must be populated from defaults")
+	require.True(t, *got.NoTLSVerify, "NoTLSVerify must reflect the annotation value")
+}
+
+// T1.7 — cloudflare.io/origin-server-name on the Gateway flows into the route's
+// contribution (inheritance via inheritedAnnotations + defaultsFromAnnotations).
+func TestHTTPRouteSource_OriginServerNameInheritedFromGateway(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, map[string]string{conventions.AnnotationOriginServerName: "external.x.com"})
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.NotNil(t, got.OriginServerName, "OriginServerName must inherit from the Gateway annotation")
+	require.Equal(t, "external.x.com", *got.OriginServerName)
+}
+
+// T1.8 — Route's origin-server-name overrides Gateway's.
+func TestHTTPRouteSource_OriginServerNameRouteOverridesGateway(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, map[string]string{conventions.AnnotationOriginServerName: "gw-val"})
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: "app",
+			Annotations: map[string]string{conventions.AnnotationOriginServerName: "route-val"},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.NotNil(t, got.OriginServerName)
+	require.Equal(t, "route-val", *got.OriginServerName, "route annotation must override Gateway value")
+}
+
+// T1.9 — origin-server-name flows unconditionally; no dependency on
+// no-tls-verify being set. Regression guard for an easy mistake where one
+// annotation gates the other.
+func TestHTTPRouteSource_OriginServerNameUnconditional(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: "app",
+			Annotations: map[string]string{
+				conventions.AnnotationOriginServerName: "san.example.com",
+				// no-tls-verify intentionally omitted.
+			},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.Nil(t, got.NoTLSVerify, "no-tls-verify unset -> NoTLSVerify stays nil")
+	require.NotNil(t, got.OriginServerName, "origin-server-name must surface regardless of no-tls-verify")
+	require.Equal(t, "san.example.com", *got.OriginServerName)
+}
+
 func TestFirstListenerHostname_IsLexicographicallyStable(t *testing.T) {
 	h := func(s string) *gwv1.Hostname {
 		v := gwv1.Hostname(s)
