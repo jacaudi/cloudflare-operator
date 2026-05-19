@@ -35,7 +35,7 @@ import (
 // DefaultCloudflaredImage is the operator's compile-time pin. The reconciler
 // passes its configured DefaultImage through to BuildDeployment; this constant
 // is exported so the manager setup wires the same value.
-const DefaultCloudflaredImage = "docker.io/cloudflare/cloudflared:2026.4.1"
+const DefaultCloudflaredImage = "docker.io/cloudflare/cloudflared:2026.5.0"
 
 // dataplaneName returns the Deployment / dataplane resource basename for a
 // given CloudflareTunnel. The 52-char cap on spec.name guarantees this stays
@@ -68,14 +68,14 @@ func metricsServiceName(tn *v2alpha1.CloudflareTunnel) string {
 // Image resolution combines a partial user override with defaults
 // independently per axis (Repository / Tag): a user can override just the
 // repository (private mirror) without losing the operator's pinned tag.
-// See resolveImage.
+// See ResolveImage.
 //
 // Resources combine user Requests + Limits with defaults independently
 // per half: setting only Requests still gets the default Limits safety
 // floor.
 func BuildDeployment(tn *v2alpha1.CloudflareTunnel, defaultImage string) *appsv1.Deployment {
 	labels := dataplaneLabels(tn)
-	image := resolveImage(tn.Spec.Connector.Image, defaultImage)
+	image := ResolveImage(tn.Spec.Connector.Image, defaultImage)
 
 	replicas := tn.Spec.Connector.Replicas
 	grace := tn.Spec.Connector.GracePeriodSeconds
@@ -235,10 +235,10 @@ func dataplaneLabels(tn *v2alpha1.CloudflareTunnel) map[string]string {
 	}
 }
 
-// resolveImage combines a partial override with the default image string
+// ResolveImage combines a partial override with the default image string
 // independently per axis (Repository / Tag). Either half left unset on the
 // override falls through to the default.
-func resolveImage(override *v2alpha1.ConnectorImage, defaultImage string) string {
+func ResolveImage(override *v2alpha1.ConnectorImage, defaultImage string) string {
 	repo, tag := splitImage(defaultImage)
 	if override != nil {
 		if override.Repository != "" {

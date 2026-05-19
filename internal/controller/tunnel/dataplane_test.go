@@ -192,6 +192,21 @@ func TestBuildMetricsService_Naming(t *testing.T) {
 	require.Equal(t, int32(2000), svc.Spec.Ports[0].Port)
 }
 
+func TestDefaultCloudflaredImage_IsValidPin(t *testing.T) {
+	require.Equal(t, "docker.io/cloudflare/cloudflared:2026.5.0", DefaultCloudflaredImage)
+}
+
+func TestResolveImage_PerAxis(t *testing.T) {
+	const def = "docker.io/cloudflare/cloudflared:2026.5.0"
+	require.Equal(t, def, ResolveImage(nil, def))
+	require.Equal(t, "docker.io/cloudflare/cloudflared:2026.5.0",
+		ResolveImage(&v2alpha1.ConnectorImage{}, def))
+	require.Equal(t, "mirror.example/cf/cloudflared:2026.5.0",
+		ResolveImage(&v2alpha1.ConnectorImage{Repository: "mirror.example/cf/cloudflared"}, def))
+	require.Equal(t, "docker.io/cloudflare/cloudflared:2026.6.0",
+		ResolveImage(&v2alpha1.ConnectorImage{Tag: "2026.6.0"}, def))
+}
+
 func TestSplitImage(t *testing.T) {
 	cases := []struct{ in, wantRepo, wantTag string }{
 		{"cloudflared", "cloudflared", "latest"},
