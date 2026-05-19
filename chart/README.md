@@ -363,6 +363,17 @@ reconciled (foreign owner, undecodable, or a Cloudflare write error) now
 reports `Ready=False` with reason `OwnershipCompanionFailed` and a Warning
 event, instead of misreporting `Ready=True "DNS record synced"`.
 
+### Out-of-band emitted-CR self-heal (S2, 2026-05)
+
+If you delete an operator-emitted `CloudflareDNSRecord` CR out-of-band
+(e.g. `kubectl delete`), the owning tunnel source controller now notices
+the deletion (via a child watch on `CloudflareDNSRecord`) and re-emits the
+CR on the next reconcile. Previously this required either editing the
+source object or restarting the controller. There is a brief window during
+the delete cycle where the underlying Cloudflare record is also removed by
+the DNSRecord controller's finalizer path; self-heal restores both within
+one reconcile.
+
 ---
 
 ## Renovate tracking
