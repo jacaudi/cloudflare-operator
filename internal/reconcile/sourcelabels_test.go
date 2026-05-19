@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
 )
@@ -66,4 +67,21 @@ func TestVerifySourceLabels_PartialIsHardFail(t *testing.T) {
 	err := VerifySourceLabels(obj)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrPartialSourceLabels)
+}
+
+func TestHasSourceLabels(t *testing.T) {
+	all := &unstructured.Unstructured{}
+	all.SetLabels(map[string]string{
+		conventions.LabelSourceKind:      "Gateway",
+		conventions.LabelSourceName:      "gw",
+		conventions.LabelSourceNamespace: "net",
+	})
+	require.True(t, HasSourceLabels(all))
+
+	none := &unstructured.Unstructured{}
+	require.False(t, HasSourceLabels(none))
+
+	partial := &unstructured.Unstructured{}
+	partial.SetLabels(map[string]string{conventions.LabelSourceKind: "Gateway"})
+	require.False(t, HasSourceLabels(partial), "partial source labels must NOT count as managed")
 }

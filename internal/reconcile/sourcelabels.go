@@ -41,6 +41,21 @@ func StampSourceLabels(obj client.Object, kind, name, namespace string) {
 	obj.SetLabels(labels)
 }
 
+// HasSourceLabels reports whether the object carries ALL THREE operator
+// source labels (kind, name, namespace). Partial labelling → false (a
+// half-labelled object is never treated as operator-managed; the all-or-none
+// invariant is enforced on the write path by VerifySourceLabels). Used as the
+// durable, orphan-state-surviving proof of operator authorship for
+// cascade-GC eligibility (metadata.labels persist when ownerRefs /
+// Status.AttachedSources are cleared by orphaning).
+func HasSourceLabels(obj client.Object) bool {
+	labels := obj.GetLabels()
+	_, hasKind := labels[conventions.LabelSourceKind]
+	_, hasName := labels[conventions.LabelSourceName]
+	_, hasNs := labels[conventions.LabelSourceNamespace]
+	return hasKind && hasName && hasNs
+}
+
 // VerifySourceLabels enforces the Foundation §7 hard-fail policy: an object
 // either has all three source-* labels, or none. Partial labelling is rejected.
 func VerifySourceLabels(obj client.Object) error {
