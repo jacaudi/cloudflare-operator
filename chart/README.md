@@ -137,6 +137,52 @@ metadata:
 
 ---
 
+## Tunnel cascade-GC (orphaned tunnels)
+
+The operator cascade-deletes a `CloudflareTunnel` it owns once its last source detaches: after a
+two-tick grace window it removes the `CloudflareTunnel`, its cloudflared `Deployment`, the chain
+`CloudflareDNSRecord`s it emitted, and the Cloudflare-side tunnel.
+
+### Behavior change note
+
+> **Pre-P4 / attached tunnels are now cascade-GC-eligible**
+
+Previously, cascade-GC fired **only** for tunnels carrying the `cloudflare.io/auto-created`
+annotation. That annotation is stamped only when the operator *creates* a tunnel — so tunnels
+created by **pre-P4 operator builds**, or pre-existing tunnels a source **attached to** (rather than
+the operator creating), were invisible to cascade-GC and **leaked silently** (orphaned
+`CloudflareTunnel` + cloudflared Deployment + DNS records + live Cloudflare tunnel, with no Event,
+condition, or cleanup) when their last source was removed.
+
+Now a tunnel is cascade-GC-eligible if it carries the `cloudflare.io/auto-created` annotation
+**or** the operator source labels (`cloudflare.io/source-kind`, `cloudflare.io/source-name`,
+`cloudflare.io/source-namespace`). The source labels predate the annotation and survive into the
+orphan state, so operator-authored tunnels are reliably identified. On its next reconcile such a
+tunnel is **self-healed** — the `cloudflare.io/auto-created` annotation is stamped (idempotent) —
+and from then on it is greppable and behaves identically to a natively auto-created tunnel.
+
+**Action required if you intentionally retain orphan tunnels:** a `CloudflareTunnel` that carries
+operator source labels but that you want to keep after detaching all of its sources will now be
+cascade-deleted after the grace window. Remove the `cloudflare.io/source-*` labels (and the
+`cloudflare.io/auto-created` annotation, if present) to opt it out of cascade-GC.
+
+### Orphaned but unmanaged
+
+A tunnel that is orphan-shaped (no owner references, no attached sources) but carries **neither**
+the `cloudflare.io/auto-created` annotation **nor** operator source labels is treated as
+**user-authored**. It is **never** auto-deleted. Instead it is surfaced so the state is not silent:
+
+- A **Warning Event** with reason **`OrphanedUnmanaged`** is emitted (once, on the transition into
+  this state — it is not re-emitted on subsequent reconciles).
+- The `Ready` condition is set to **`False`** with reason **`OrphanedUnmanaged`** and message
+  `orphaned but not operator-managed; operator will not auto-GC it — adopt/label it or delete it
+  manually`.
+
+**Resolution:** adopt the tunnel by adding the operator source labels (so it becomes
+cascade-GC-managed), or delete it manually.
+
+---
+
 ## Renovate tracking
 
 cloudflared image bumps are Renovate-tracked and land as `fix(cloudflared)` conventional commits.
