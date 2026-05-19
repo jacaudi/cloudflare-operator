@@ -1096,6 +1096,132 @@ drain:
 	require.True(t, foundTerminal, "expected TerminalNoSources event before self-delete")
 }
 
+// TestReconcile_PreP4Tunnel_StampPatchFails_StillCascadeGCd is a fault-injection
+// regression guard for the best-effort self-heal stamp path in Reconcile.
+//
+// A pre-P4-shaped tunnel (operator source labels, no cloudflare.io/auto-created
+// annotation, no OwnerReferences, empty Status.AttachedSources) must cascade-GC
+// even when the metadata MergeFrom Patch that stamps the auto-created annotation
+// fails. The stamp is explicitly best-effort: a failed Patch is logged at V(1)
+// and the reconciler falls through — cascadeGCEligible still admits the tunnel
+// via its source labels, so cascade-GC proceeds regardless.
+//
+// Non-vacuity: if someone adds a bare `return ... err` after the patch in the
+// self-heal block, Reconcile #1 returns a non-nil error and assertion 1 (NoError)
+// fails immediately, or the status update for LastOrphanedAt is never persisted
+// and assertion 3 (cascade-GC terminal) fails on the second tick.
+func TestReconcile_PreP4Tunnel_StampPatchFails_StillCascadeGCd(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	// Pre-P4 orphan shape: source labels prove operator authorship, but no
+	// auto-created annotation, no ownerRefs, no AttachedSources.
+	// Mirrors TestReconcile_PreP4Tunnel_StampedThenGCd exactly — only the
+	// client wrapping differs.
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tnl",
+			Namespace: "ns",
+			Finalizers: []string{conventions.FinalizerName},
+			Labels: map[string]string{
+				conventions.LabelSourceKind:      "Service",
+				conventions.LabelSourceName:      "my-svc",
+				conventions.LabelSourceNamespace: "ns",
+			},
+			// No AnnotationAutoCreated — this is the pre-P4 shape.
+		},
+		Spec:   v2alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: nil}, // orphan: no sources
+	}
+
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
+	ssa := reconcilelib.SSATranslatingClient(t, base)
+
+	// Wrap with a Patch interceptor that fails ONLY when the self-heal block
+	// stamps cloudflare.io/auto-created on a CloudflareTunnel. The self-heal
+	// block calls tn.SetAnnotations(anns) BEFORE invoking r.Client.Patch, so
+	// obj.GetAnnotations()[conventions.AnnotationAutoCreated] == "true" is the
+	// precise discriminator. All other Patch calls (different types, or tunnels
+	// without the annotation) delegate to the wrapped client unchanged.
+	stampErr := errors.New("injected: stamp patch failure")
+	c := interceptor.NewClient(ssa, interceptor.Funcs{
+		Patch: func(ctx context.Context, wc client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if tun, ok := obj.(*v2alpha1.CloudflareTunnel); ok {
+				if tun.GetAnnotations()[conventions.AnnotationAutoCreated] == "true" {
+					return stampErr
+				}
+			}
+			return wc.Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	rec := record.NewFakeRecorder(10)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	// Reconcile #1: stamp-on-detect fires but the Patch fails (injected).
+	// The reconciler must NOT abort — it logs at V(1) and falls through to the
+	// cascadeGCEligible / orphan-state block which stamps LastOrphanedAt.
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	// Assertion 1: failed stamp Patch must NOT abort reconcile.
+	require.NoError(t, err, "a failed auto-created stamp Patch must not abort reconcile (best-effort path)")
+
+	// Assertion 2: the annotation was NOT persisted (Patch failed).
+	// Guard for NotFound: if cascade-GC already deleted the CR on this pass
+	// (edge case: grace = 0), treat deletion as stronger proof GC proceeded.
+	var afterPass1 v2alpha1.CloudflareTunnel
+	getErr := c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &afterPass1)
+	if apierrors.IsNotFound(getErr) {
+		// Tunnel already GC'd — this is even stronger evidence cascade-GC
+		// proceeded. The test is done; assertions 1 and 3 are both satisfied.
+		return
+	}
+	require.NoError(t, getErr)
+	require.Empty(t, afterPass1.Annotations[conventions.AnnotationAutoCreated],
+		"stamp Patch failed: cloudflare.io/auto-created must NOT be persisted on the CR")
+
+	// Assertion 3: cascade-GC still proceeded despite the failed stamp.
+	// The cascadeGCEligible gate admits the tunnel via source labels alone, so
+	// LastOrphanedAt must be stamped on the first orphan observation.
+	require.NotNil(t, afterPass1.Status.LastOrphanedAt,
+		"cascadeGCEligible must admit pre-P4 tunnel via source labels even when stamp Patch fails; LastOrphanedAt must be set")
+	require.Greater(t, res.RequeueAfter, time.Duration(0), "should requeue after grace")
+
+	// Second tick: advance the grace stamp to simulate the confirmation window
+	// elapsed, then re-reconcile. Mirrors TestReconcile_PreP4Tunnel_StampedThenGCd.
+	staleStamp := metav1.NewTime(time.Now().Add(-(pendingDeletionGrace + 5*time.Second)))
+	afterPass1.Status.LastOrphanedAt = &staleStamp
+	require.NoError(t, c.Status().Update(context.Background(), &afterPass1))
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	// Terminal post-condition: the tunnel must be deleted (cascade-GC completed).
+	var got v2alpha1.CloudflareTunnel
+	gerr := c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got)
+	if gerr == nil {
+		require.NotNil(t, got.DeletionTimestamp, "self-delete must have set DeletionTimestamp")
+	} else {
+		require.True(t, apierrors.IsNotFound(gerr), "CR may already be deleted: %v", gerr)
+	}
+
+	foundTerminal := false
+drain:
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, conventions.ReasonTerminalNoSources) {
+				foundTerminal = true
+			}
+		default:
+			break drain
+		}
+	}
+	require.True(t, foundTerminal, "expected TerminalNoSources event before self-delete")
+}
+
 // TestReconcile_OrphanedUserAuthored_SurfacedNotDeleted asserts that a tunnel
 // with no operator source labels, no cloudflare.io/auto-created annotation, no
 // OwnerReferences, and empty Status.AttachedSources (genuinely user-authored,
