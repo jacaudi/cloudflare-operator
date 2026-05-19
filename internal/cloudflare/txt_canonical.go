@@ -92,3 +92,48 @@ func CanonicalizeTXT(raw string) string {
 }
 
 func isASCIIDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// EncodeTXT renders a logical TXT value into RFC 1035 presentation form: the
+// logical bytes are split into <=255-byte character-strings, each with '\'
+// escaped as \\ and '"' escaped as \", wrapped in double quotes, joined by a
+// single space. The empty value yields one empty character-string ("").
+//
+// It is the exact inverse of CanonicalizeTXT for any input:
+// CanonicalizeTXT(EncodeTXT(x)) == x. Cloudflare requires this form for the
+// TXT content field; sending content that contains '"' raw is rejected
+// (API error 9207) or stored lossily. The 255 boundary is on LOGICAL bytes
+// (RFC 1035 §3.3: each character-string is length-prefixed by one octet on
+// the wire, so its content is limited to 255 octets). Presentation escapes
+// expand the character count but not the logical-byte count: \\ and \" each
+// encode one logical byte regardless of their two-character presentation width.
+// Apply ONLY to logical content, never to content
+// already in presentation form (see CanonicalizeTXT's documented ambiguity).
+func EncodeTXT(logical string) string {
+	const maxChunk = 255 // RFC 1035 §3.3: character-string content limit, in logical bytes
+	var b strings.Builder
+	for i := 0; i < len(logical); i += maxChunk {
+		end := i + maxChunk
+		if end > len(logical) {
+			end = len(logical)
+		}
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteByte('"')
+		for j := i; j < end; j++ {
+			switch logical[j] {
+			case '\\':
+				b.WriteString(`\\`)
+			case '"':
+				b.WriteString(`\"`)
+			default:
+				b.WriteByte(logical[j])
+			}
+		}
+		b.WriteByte('"')
+	}
+	if b.Len() == 0 {
+		return `""`
+	}
+	return b.String()
+}
