@@ -993,6 +993,98 @@ func TestReconcile_RequeueIsMinOfPendingAndInterval(t *testing.T) {
 	})
 }
 
+// TestReconcile_PreP4Tunnel_StampedThenGCd verifies the stamp-on-detect
+// self-heal path and the cascadeGCEligible gate for pre-P4 tunnels.
+//
+// A tunnel that carries operator source labels (cloudflare.io/source-kind/name/namespace)
+// but NO cloudflare.io/auto-created annotation, no OwnerReferences, and an
+// empty Status.AttachedSources (the pre-P4 orphan shape) must:
+//
+//  1. Reconcile #1 (first-orphan tick): the reconciler stamps
+//     cloudflare.io/auto-created="true" (self-heal) AND sets
+//     Status.LastOrphanedAt (proves cascadeGCEligible admitted it).
+//
+//  2. Second tick (grace elapsed): driving the same grace-advancement
+//     mechanism as TestReconcile_OrphanStateGraceElapsed_SelfDeletes, the
+//     reconciler self-deletes the CR (cascade-GC proceeds).
+func TestReconcile_PreP4Tunnel_StampedThenGCd(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	// Pre-P4 orphan shape: source labels prove operator authorship, but no
+	// auto-created annotation, no ownerRefs, no AttachedSources.
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tnl", Namespace: "ns",
+			Finalizers: []string{conventions.FinalizerName},
+			Labels: map[string]string{
+				"cloudflare.io/source-kind":      "Service",
+				"cloudflare.io/source-name":      "my-svc",
+				"cloudflare.io/source-namespace": "ns",
+			},
+			// No AnnotationAutoCreated — this is the pre-P4 shape.
+		},
+		Spec:   v2alpha1.CloudflareTunnelSpec{Name: "cf-ns", Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: nil}, // orphan: no sources
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(10)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	// Reconcile #1: stamp-on-detect fires (HasSourceLabels && !isAutoCreated)
+	// AND the cascadeGCEligible gate admits the tunnel into the orphan-state
+	// block (sets LastOrphanedAt, requeues after grace).
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	var afterPass1 v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &afterPass1))
+
+	// The auto-created annotation must have been stamped (self-heal).
+	require.Equal(t, "true", afterPass1.Annotations[conventions.AnnotationAutoCreated],
+		"stamp-on-detect must set cloudflare.io/auto-created=true for pre-P4 source-labelled tunnel")
+
+	// LastOrphanedAt must be set (proves the cascadeGCEligible gate admitted it).
+	require.NotNil(t, afterPass1.Status.LastOrphanedAt,
+		"cascadeGCEligible gate must admit pre-P4 tunnel into orphan-state block; LastOrphanedAt must be set")
+	require.Greater(t, res.RequeueAfter, time.Duration(0), "should requeue after grace")
+
+	// Second tick: drive the grace-advancement mechanism exactly as
+	// TestReconcile_OrphanStateGraceElapsed_SelfDeletes does — update
+	// Status.LastOrphanedAt to a stale time so time.Since >= grace.
+	staleStamp := metav1.NewTime(time.Now().Add(-(pendingDeletionGrace + 5*time.Second)))
+	afterPass1.Status.LastOrphanedAt = &staleStamp
+	require.NoError(t, c.Status().Update(context.Background(), &afterPass1))
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	var got v2alpha1.CloudflareTunnel
+	gerr := c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got)
+	if gerr == nil {
+		require.NotNil(t, got.DeletionTimestamp, "self-delete must have set DeletionTimestamp")
+	} else {
+		require.True(t, apierrors.IsNotFound(gerr), "CR may already be deleted: %v", gerr)
+	}
+
+	foundTerminal := false
+drain:
+	for {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, conventions.ReasonTerminalNoSources) {
+				foundTerminal = true
+			}
+		default:
+			break drain
+		}
+	}
+	require.True(t, foundTerminal, "expected TerminalNoSources event before self-delete")
+}
+
 // containsAll returns true when s contains every substring.
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {

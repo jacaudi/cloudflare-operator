@@ -205,9 +205,35 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// shortens the next requeue but never lengthens it past the interval.
 	var pendingRequeueAfter time.Duration
 
-	// Orphan-state management (design §4.1 step 10). Only auto-created CRs are
-	// eligible for cascade-GC; direct-create CRs are never auto-removed.
-	if isAutoCreated(&tn) {
+	// Self-heal: a tunnel the operator authored (proven by durable source
+	// labels) but missing the auto-created annotation (pre-P4 build, or
+	// attached via EnsureTunnelCR's Get branch) — retro-stamp the annotation
+	// so provenance/audit is consistent and isAutoCreated callers converge.
+	// Idempotent; best-effort (a stamp failure does NOT block reconcile —
+	// cascadeGCEligible already admits it this pass via the source labels).
+	// A persistent patch failure is logged at V(1) only by design: it does
+	// NOT block cascade-GC (source labels are the correctness gate; the
+	// annotation is provenance-convergence/audit consistency) and would
+	// otherwise spam every reconcile. The self-heal retries on the next
+	// reconcile; once stamped, !isAutoCreated is false and this block no-ops.
+	if reconcilelib.HasSourceLabels(&tn) && !isAutoCreated(&tn) {
+		base := tn.DeepCopy()
+		anns := tn.GetAnnotations()
+		if anns == nil {
+			anns = map[string]string{}
+		}
+		anns[conventions.AnnotationAutoCreated] = "true"
+		tn.SetAnnotations(anns)
+		if err := r.Client.Patch(ctx, &tn, client.MergeFrom(base)); err != nil {
+			logger.V(1).Info("auto-created self-heal stamp failed (best-effort; continuing)", "err", err)
+		}
+	}
+
+	// Orphan-state management (design §4.1 step 10). Only operator-authored
+	// CRs — proven by the auto-created annotation OR operator source labels —
+	// are subject to cascade-GC; user-authored CRs (neither marker) are never
+	// auto-removed.
+	if cascadeGCEligible(&tn) {
 		grace := r.gracePeriod()
 		if isOrphaned(&tn) {
 			switch {
