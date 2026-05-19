@@ -54,6 +54,13 @@ const (
 	AnnotationOriginServerName = "cloudflare.io/origin-server-name"
 	AnnotationPort             = "cloudflare.io/port"
 	AnnotationScheme           = "cloudflare.io/scheme"
+	// AnnotationGatewayApex (on a tunnel Gateway) sets the public apex
+	// hostname per-route chain records CNAME to (and which the gateway-source
+	// publishes as <apex> CNAME -> tunnel CNAME). Required for wildcard-only
+	// Gateways; optional otherwise (concrete Gateways chain directly to the
+	// tunnel CNAME). Empty/invalid -> Warning + listener-derived fallback or
+	// (wildcard-only) blocked.
+	AnnotationGatewayApex = "cloudflare.io/gateway-apex"
 )
 
 // DNS-only family. Zone-controller-side; no tunnel involvement.

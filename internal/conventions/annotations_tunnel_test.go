@@ -32,6 +32,7 @@ func TestAnnotation_TunnelAttachmentFamily(t *testing.T) {
 	require.Equal(t, "cloudflare.io/origin-server-name", AnnotationOriginServerName)
 	require.Equal(t, "cloudflare.io/port", AnnotationPort)
 	require.Equal(t, "cloudflare.io/scheme", AnnotationScheme)
+	require.Equal(t, "cloudflare.io/gateway-apex", AnnotationGatewayApex)
 }
 
 func TestAnnotation_DNSOnlyFamily(t *testing.T) {

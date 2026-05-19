@@ -191,6 +191,14 @@ const (
 	ReasonGatewayServiceUnresolved = "GatewayServiceUnresolved" // annotation present but Service Get/parse failed
 	ReasonUnsupportedProtocol      = "UnsupportedProtocol"      // listener protocol cloudflared cannot serve
 	ReasonOrphanedDNSRecordPruned  = "OrphanedDNSRecordPruned"  // emitted DNSRecord CR pruned: its hostname left the source's desired set
+
+	// ReasonGatewayApexRequired: a wildcard-only Gateway has no
+	// cloudflare.io/gateway-apex; the route chain cannot be published (a
+	// wildcard is an invalid CNAME target — Cloudflare 9007).
+	ReasonGatewayApexRequired = "GatewayApexRequired"
+	// ReasonGatewayApexInvalid: cloudflare.io/gateway-apex is set but not a
+	// valid non-wildcard DNS1123 hostname; it is ignored.
+	ReasonGatewayApexInvalid = "GatewayApexInvalid"
 )
 
 // TunnelReasons returns the reason vocabulary appended by spec 3 for the
@@ -219,5 +227,7 @@ func TunnelReasons() []string {
 		ReasonGatewayServiceUnresolved,
 		ReasonUnsupportedProtocol,
 		ReasonOrphanedDNSRecordPruned,
+		ReasonGatewayApexRequired,
+		ReasonGatewayApexInvalid,
 	}
 }
