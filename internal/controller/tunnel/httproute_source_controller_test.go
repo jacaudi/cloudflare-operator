@@ -18,6 +18,7 @@ package tunnel
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -943,6 +944,197 @@ func TestHTTPRouteChain_WildcardOnly_NoOverride_BlockedNoEmit(t *testing.T) {
 	default:
 		t.Fatal("expected a Warning event with reason GatewayApexRequired")
 	}
+}
+
+// TestDogfooding_EmittedChainCRsNeverWildcard is a consolidated invariant guard
+// for the §6 dogfooding-validity invariant: every chain CloudflareDNSRecord
+// emitted by the HTTPRoute source controller must have a non-nil, non-empty,
+// non-wildcard Spec.Content. A wildcard CNAME target causes Cloudflare error
+// 9007 on the zone controller's push; this test ensures no such CR is ever
+// dogfooded into the operator's own reconciliation loop.
+//
+// Three scenarios are verified:
+//  1. Valid gateway-apex override with wildcard listener → override host used as
+//     chain content (non-wildcard).
+//  2. Concrete listener + no override → tunnel CNAME used as chain content
+//     (non-wildcard).
+//  3. Wildcard-only listeners + no override → ZERO chain CRs emitted (nothing
+//     invalid is dogfooded).
+//
+// Non-vacuity: the test fetches emitted CRs and would FAIL if any chain CR had
+// wildcard or empty content (the strings.HasPrefix("*") and empty-string checks
+// are real assertions), and would FAIL if the blocked scenario emitted even one
+// CR (require.Empty on the list). The Task-2/3 tests prove the behavior is
+// correct on HEAD; this test is the standing invariant guard.
+func TestDogfooding_EmittedChainCRsNeverWildcard(t *testing.T) {
+	t.Run("override_wildcard_listener", func(t *testing.T) {
+		// Scenario 1: Gateway has a wildcard listener AND a valid gateway-apex
+		// override annotation. The chain CR content must be the override host
+		// (non-wildcard), not the listener wildcard pattern.
+		wild := gwv1.Hostname("*.example.com")
+		gw := &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gw", Namespace: "gw-ns",
+				Annotations: map[string]string{
+					conventions.AnnotationTunnel:         "true",
+					conventions.AnnotationTunnelName:     "edge",
+					conventions.AnnotationGatewayService: "gw-ns/gw-svc",
+					conventions.AnnotationGatewayApex:    "external.example.com",
+				},
+			},
+			Spec: gwv1.GatewaySpec{
+				Listeners: []gwv1.Listener{{
+					Name: "http", Hostname: &wild, Port: 80, Protocol: gwv1.HTTPProtocolType,
+				}},
+			},
+		}
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+			Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		}
+		gwSvc := mkGwSvc("gw-svc", "gw-ns")
+		rt := &gwv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+			Spec: gwv1.HTTPRouteSpec{
+				Hostnames: []gwv1.Hostname{"jellyfin.example.com"},
+				CommonRouteSpec: gwv1.CommonRouteSpec{
+					ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}},
+				},
+				Rules: []gwv1.HTTPRouteRule{{}},
+			},
+		}
+		base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+			WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+		c := reconcilelib.SSATranslatingClient(t, base)
+
+		rec := record.NewFakeRecorder(8)
+		r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec}
+		_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+		require.NoError(t, err)
+
+		var list v2alpha1.CloudflareDNSRecordList
+		require.NoError(t, c.List(context.Background(), &list))
+		require.NotEmpty(t, list.Items, "override case must emit at least one chain CR")
+
+		// Invariant: every emitted chain CR has non-nil, non-empty, non-wildcard content.
+		for i, cr := range list.Items {
+			require.NotNil(t, cr.Spec.Content, "chain CR[%d] Spec.Content must not be nil", i)
+			require.NotEmpty(t, *cr.Spec.Content, "chain CR[%d] Spec.Content must not be empty", i)
+			require.False(t, strings.HasPrefix(*cr.Spec.Content, "*"),
+				"chain CR[%d] Spec.Content %q must not be a wildcard (would cause Cloudflare error 9007)", i, *cr.Spec.Content)
+		}
+	})
+
+	t.Run("concrete_listener_no_override", func(t *testing.T) {
+		// Scenario 2: Gateway has a concrete (non-wildcard) listener and no
+		// gateway-apex annotation. The chain CR content must be the tunnel CNAME
+		// (non-wildcard), not the listener hostname acting as a double-hop.
+		concrete := gwv1.Hostname("app.example.com")
+		gw := &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gw", Namespace: "gw-ns",
+				Annotations: map[string]string{
+					conventions.AnnotationTunnel:         "true",
+					conventions.AnnotationTunnelName:     "edge",
+					conventions.AnnotationGatewayService: "gw-ns/gw-svc",
+					// No gateway-apex annotation.
+				},
+			},
+			Spec: gwv1.GatewaySpec{
+				Listeners: []gwv1.Listener{{
+					Name: "http", Hostname: &concrete, Port: 80, Protocol: gwv1.HTTPProtocolType,
+				}},
+			},
+		}
+		const tunnelCNAME = "tnl-2.cfargotunnel.com"
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+			Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: tunnelCNAME},
+		}
+		gwSvc := mkGwSvc("gw-svc", "gw-ns")
+		rt := &gwv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+			Spec: gwv1.HTTPRouteSpec{
+				Hostnames: []gwv1.Hostname{"app.example.com"},
+				CommonRouteSpec: gwv1.CommonRouteSpec{
+					ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}},
+				},
+				Rules: []gwv1.HTTPRouteRule{{}},
+			},
+		}
+		base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+			WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+		c := reconcilelib.SSATranslatingClient(t, base)
+
+		r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
+		_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+		require.NoError(t, err)
+
+		var list v2alpha1.CloudflareDNSRecordList
+		require.NoError(t, c.List(context.Background(), &list))
+		require.NotEmpty(t, list.Items, "concrete-listener no-override case must emit at least one chain CR")
+
+		// Invariant: every emitted chain CR has non-nil, non-empty, non-wildcard content.
+		for i, cr := range list.Items {
+			require.NotNil(t, cr.Spec.Content, "chain CR[%d] Spec.Content must not be nil", i)
+			require.NotEmpty(t, *cr.Spec.Content, "chain CR[%d] Spec.Content must not be empty", i)
+			require.False(t, strings.HasPrefix(*cr.Spec.Content, "*"),
+				"chain CR[%d] Spec.Content %q must not be a wildcard (would cause Cloudflare error 9007)", i, *cr.Spec.Content)
+		}
+	})
+
+	t.Run("wildcard_only_no_override_blocked", func(t *testing.T) {
+		// Scenario 3: Gateway has ONLY wildcard listeners and no gateway-apex
+		// annotation. The route is blocked — ZERO chain CRs must be emitted.
+		// Nothing invalid is dogfooded into the zone reconciler.
+		wild := gwv1.Hostname("*.example.com")
+		gw := &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "gw", Namespace: "gw-ns",
+				Annotations: map[string]string{
+					conventions.AnnotationTunnel:         "true",
+					conventions.AnnotationTunnelName:     "edge",
+					conventions.AnnotationGatewayService: "gw-ns/gw-svc",
+					// No gateway-apex annotation — wildcard-only, blocked.
+				},
+			},
+			Spec: gwv1.GatewaySpec{
+				Listeners: []gwv1.Listener{{
+					Name: "http", Hostname: &wild, Port: 80, Protocol: gwv1.HTTPProtocolType,
+				}},
+			},
+		}
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+			Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+		}
+		gwSvc := mkGwSvc("gw-svc", "gw-ns")
+		rt := &gwv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+			Spec: gwv1.HTTPRouteSpec{
+				Hostnames: []gwv1.Hostname{"jellyfin.example.com"},
+				CommonRouteSpec: gwv1.CommonRouteSpec{
+					ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}},
+				},
+				Rules: []gwv1.HTTPRouteRule{{}},
+			},
+		}
+		base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+			WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+		c := reconcilelib.SSATranslatingClient(t, base)
+
+		rec := record.NewFakeRecorder(8)
+		r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec}
+		_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+		require.NoError(t, err, "blocked path must not return an error")
+
+		// Invariant: ZERO chain CRs emitted — nothing invalid is dogfooded.
+		var list v2alpha1.CloudflareDNSRecordList
+		require.NoError(t, c.List(context.Background(), &list))
+		require.Empty(t, list.Items,
+			"wildcard-only gateway without apex annotation must emit ZERO chain DNSRecord CRs — "+
+				"a non-empty list would mean a wildcard CNAME target was dogfooded to the zone reconciler")
+	})
 }
 
 func TestFirstListenerHostname_IsLexicographicallyStable(t *testing.T) {
