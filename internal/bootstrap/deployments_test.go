@@ -145,6 +145,26 @@ func TestBuildControllerDeployment_TunnelConnectorResourcesEnv(t *testing.T) {
 	require.False(t, hasEnvName(depU, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES"))
 }
 
+func TestBuildControllerDeployment_TunnelConnectorImageEnv(t *testing.T) {
+	js := `{"tag":"2026.6.0"}`
+	// tunnel bundle + value set → env present
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorImageJSON: js})
+	require.True(t, hasEnv(dep, "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE", js))
+
+	// tunnel bundle + unset → env ABSENT
+	depU := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1})
+	require.False(t, hasEnvName(depU, "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE"))
+
+	// zone bundle + value set → env ABSENT (tunnel-only)
+	depZ := BuildControllerDeployment(BuildArgs{
+		Bundle: "zone", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorImageJSON: `{"tag":"x"}`})
+	require.False(t, hasEnvName(depZ, "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE"))
+}
+
 func hasEnvName(d *appsv1.Deployment, name string) bool {
 	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
 		if e.Name == name {

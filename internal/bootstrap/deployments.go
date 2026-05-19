@@ -53,6 +53,10 @@ type BuildArgs struct {
 	// injected as the CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES env var so the
 	// tunnel controller seeds it into DefaultConnector.Resources.
 	TunnelConnectorResourcesJSON string
+	// TunnelConnectorImageJSON, when non-empty AND Bundle=="tunnel", is
+	// injected as the CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE env var so the
+	// tunnel controller seeds it into DefaultConnector.Image.
+	TunnelConnectorImageJSON string
 }
 
 // BuildControllerDeployment renders a Deployment for the given bundle.
@@ -107,6 +111,12 @@ func BuildControllerDeployment(a BuildArgs) *appsv1.Deployment {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES",
 			Value: a.TunnelConnectorResourcesJSON,
+		})
+	}
+	if a.Bundle == "tunnel" && a.TunnelConnectorImageJSON != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE",
+			Value: a.TunnelConnectorImageJSON,
 		})
 	}
 

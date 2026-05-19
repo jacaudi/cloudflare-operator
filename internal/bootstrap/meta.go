@@ -109,6 +109,7 @@ func (r *MetaReconciler) ensure(ctx context.Context) error {
 			CredentialsTokenKey:          r.Config.CredentialsTokenKey,
 			CredentialsAccountIDKey:      r.Config.CredentialsAccountIDKey,
 			TunnelConnectorResourcesJSON: r.Config.TunnelConnectorResourcesJSON,
+			TunnelConnectorImageJSON:     r.Config.TunnelConnectorImageJSON,
 		})
 		if err := reconcile.Apply(ctx, r.Client, dep); err != nil {
 			return fmt.Errorf("apply Deployment %s: %w", name, err)
