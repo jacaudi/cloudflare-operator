@@ -183,6 +183,68 @@ cascade-GC-managed), or delete it manually.
 
 ---
 
+## TXT registry (Bug A + Bug C)
+
+The operator's TXT-ownership registry writes a companion `TXT` record (default prefix
+`cf-txt`) alongside each managed record to track ownership. Two correctness fixes:
+
+### Quoted / multi-string TXT content (Bug A)
+
+Cloudflare stores and returns TXT record content in RFC 1035 *presentation form* — one or
+more whitespace-separated double-quoted character-strings (e.g. `"foo" "bar"`), with values
+longer than 255 bytes automatically split into multiple ≤255-byte strings and embedded
+`"`/`\` escaped. Previously the operator compared this wire form directly against the
+logical desired content, so every reconcile saw spurious drift: managed TXT records (and the
+ownership registry) churned indefinitely (an `UpdateRecord` every pass), and AES-GCM
+ownership envelopes exceeding 255 bytes failed to reassemble — breaking ownership
+classification.
+
+The operator now canonicalizes TXT content at the single Cloudflare SDK read boundary:
+quotes are stripped, multi-string values concatenated, RFC 1035 escapes decoded, and
+Cloudflare's >255-byte auto-split transparently reassembled. All downstream logic (drift
+comparison, codec decode, ownership verification, status) sees logical content.
+
+#### Behavior change note
+
+> **`Status` now reports logical TXT content**
+
+`CloudflareDNSRecord` status fields that surface TXT content (e.g. `Status.CurrentContent` /
+observed TXT) now show the **logical** value, not Cloudflare's quoted/split wire form. This
+is intentional and back-compatible — a display/comparison change only: **no CRD spec change,
+no data migration**. Pre-fix AES>255 ownership records that previously failed to classify
+self-heal on the next reconcile once their content reassembles. The write path is unchanged:
+Cloudflare auto-splits >255-byte content server-side (verified against the Cloudflare API
+spec), so the operator sends logical content exactly as before.
+
+### Wildcard companion naming (Bug C)
+
+`AffixName` derives the ownership-companion record name from the managed record's name. For a
+wildcard record (a `*` label, e.g. `*.example.com`) it previously produced a companion
+containing a literal asterisk (`cf-txt-*-example.com`) — a malformed name Cloudflare warns
+about. The `*` label is now mapped to the asterisk-free sentinel `_wildcard`, so
+`*.example.com` yields `cf-txt-_wildcard-example.com` and a bare `*` yields
+`cf-txt._wildcard`. Non-wildcard names are byte-identical to before.
+
+#### Migration
+
+The companion name changes **only for wildcard records**; non-wildcard records are
+unaffected (identical companion name — no migration).
+
+- **`Managed` wildcard records:** on the next reconcile the operator creates the new
+  `cf-txt-_wildcard-…` companion. Any pre-existing legacy literal-`*` companion
+  (`cf-txt-*-…`) written by an older operator is **orphaned** — the operator does not touch
+  it. Delete it manually once the new companion exists.
+- **`Adopt` wildcard records:** follow the existing TXT-registry adopt/migration procedure
+  for the new `_wildcard` companion name.
+
+**Accepted limitation:** the `_wildcard` sentinel collides with a record literally named
+`_wildcard.<zone>`. This is a documented, accepted limitation: no legitimate hostname has a
+label equal to `*`, and a real `_wildcard` label is rare. Avoid managing a literal
+`_wildcard.<zone>` record alongside a `*.<zone>` wildcard in the same zone with the same
+companion prefix.
+
+---
+
 ## Renovate tracking
 
 cloudflared image bumps are Renovate-tracked and land as `fix(cloudflared)` conventional commits.
