@@ -884,8 +884,12 @@ func TestReconcile_UpdateRefreshesTxtHash(t *testing.T) {
 // TestReconcile_TxtWriteFailsAfterDnsCreate_Partial verifies the partial-failure
 // contract: when the main A record create succeeds but the TXT companion create
 // fails, the reconcile must NOT return an error, must leave Status.TxtRecordID
-// unset, must emit a Warning Event with reason TxtRegistryWriteFailed, and must
-// return a non-zero RequeueAfter (so a later reconcile retries the TXT write).
+// unset, must emit a Warning Event, and must return a non-zero RequeueAfter
+// (so a later reconcile retries the TXT write).
+//
+// S1 deliberate behavior change: the old scattered writeTXTCompanion sites
+// emitted ReasonTxtRegistryWriteFailed; the new single reconcileTXTCompanion
+// call unifies all companion failures under ReasonOwnershipCompanionFailed.
 func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
 	s := zoneTestScheme(t)
 	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
@@ -937,13 +941,15 @@ func TestReconcile_TxtWriteFailsAfterDnsCreate_Partial(t *testing.T) {
 	// TXT companion was NOT persisted (partial failure).
 	require.Empty(t, got.Status.TxtRecordID, "TxtRecordID must be empty when TXT companion write failed")
 
-	// A Warning Event with reason TxtRegistryWriteFailed must have been emitted.
+	// A Warning Event must have been emitted. S1: reason is now
+	// OwnershipCompanionFailed (not TxtRegistryWriteFailed — deliberate
+	// S1 behavior change; see test comment above).
 	select {
 	case event := <-fakeRecorder.Events:
-		require.Contains(t, event, conventions.ReasonTxtRegistryWriteFailed,
-			"Warning Event must contain TxtRegistryWriteFailed reason")
+		require.Contains(t, event, conventions.ReasonOwnershipCompanionFailed,
+			"Warning Event must contain OwnershipCompanionFailed reason (S1 unified companion path)")
 	default:
-		t.Fatal("expected a Warning Event for TxtRegistryWriteFailed but none was emitted")
+		t.Fatal("expected a Warning Event for OwnershipCompanionFailed but none was emitted")
 	}
 }
 

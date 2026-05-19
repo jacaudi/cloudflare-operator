@@ -37,9 +37,16 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare/mock"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	"github.com/jacaudi/cloudflare-operator/internal/ipresolver"
 )
 
 func TestReconcileTXTCompanion_CreatesWhenAbsent(t *testing.T) {
@@ -175,4 +182,106 @@ func TestGCLegacyCompanion_NoopWhenZoneDomainEmpty(t *testing.T) {
 	gcLegacyCompanion(context.Background(), m.DNS, "z1", "", "external.jacaudi.dev",
 		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
 	require.Equal(t, 0, m.Calls("DNS.DeleteRecord"), "must not call DeleteRecord with empty zone domain")
+}
+
+// TestReconcile_CompanionSelfHealsAndGatesReady — steady-state Managed record
+// whose companion was deleted out-of-band while status.TxtRecordID stayed
+// populated, no primary drift. Pre-S1 this looped forever (sub-bug a). Post-
+// S1 the composed companion reconcile re-validates the stored ID, sees 404,
+// falls through to a name-list (empty), and creates a fresh companion.
+func TestReconcile_CompanionSelfHealsAndGatesReady(t *testing.T) {
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	const zoneID, host = "z1", "external.jacaudi.dev"
+	s := zoneTestScheme(t)
+	m := mock.New()
+
+	primaryID := seedARecord(t, m, zoneID, host, "1.2.3.4")
+	content := "1.2.3.4"
+	rec := &v2alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ext", Namespace: "network",
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
+			Name: host, Type: "A", Content: &content, ZoneID: zoneID,
+		},
+	}
+	fc := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
+	rec.Status.RecordID = primaryID
+	rec.Status.CurrentContent = content
+	rec.Status.TxtRecordID = "dead-companion-id" // populated but stale
+	require.NoError(t, fc.Status().Update(context.Background(), rec))
+
+	r := &CloudflareDNSRecordReconciler{
+		Client: fc, Scheme: s,
+		DNSClientFn: func(_ cloudflare.Credentials) (cloudflare.DNSClient, error) { return m.DNS, nil },
+		IPResolver:  ipresolver.NewResolver(),
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ext", Namespace: "network"}}
+	for i := 0; i < 3; i++ {
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err, "reconcile %d", i)
+	}
+
+	var got v2alpha1.CloudflareDNSRecord
+	require.NoError(t, fc.Get(context.Background(), req.NamespacedName, &got))
+	require.NotEmpty(t, got.Status.TxtRecordID, "companion must be (re)created")
+	require.NotEqual(t, "dead-companion-id", got.Status.TxtRecordID, "stale ID must be replaced")
+	comp, _ := m.DNS.ListRecordsByNameAndType(context.Background(), zoneID,
+		cloudflare.AffixName(txtAffix, host), "TXT")
+	require.Len(t, comp, 1, "exactly one zone-correct companion; no 81058 loop")
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status, "Ready must be True once companion healthy")
+}
+
+// TestReconcile_ForeignCompanionGatesReadyFalse — foreign-owner companion
+// pre-exists at the zone-correct name. The reconciler must REFUSE (no write
+// over the foreign), leave the primary record intact, and set Ready=False
+// with reason ReasonOwnershipCompanionFailed (sub-bug c).
+func TestReconcile_ForeignCompanionGatesReadyFalse(t *testing.T) {
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	const zoneID, host = "z1", "external.jacaudi.dev"
+	s := zoneTestScheme(t)
+	m := mock.New()
+	primaryID := seedARecord(t, m, zoneID, host, "1.2.3.4")
+	enc := cloudflare.NewPlaintextCodec()
+	foreign, err := enc.Encode(cloudflare.RegistryPayload{
+		V: 1, K: "CloudflareDNSRecord", NS: "other", N: "notus", H: "x",
+	})
+	require.NoError(t, err)
+	_, cerr := m.DNS.CreateRecord(context.Background(), zoneID, cloudflare.DNSRecordParams{
+		Name: cloudflare.AffixName(txtAffix, host), Type: "TXT", Content: foreign, TTL: 1,
+	})
+	require.NoError(t, cerr)
+	content := "1.2.3.4"
+	rec := &v2alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{Name: "ext", Namespace: "network",
+			Finalizers: []string{conventions.FinalizerName}},
+		Spec: v2alpha1.CloudflareDNSRecordSpec{Name: host, Type: "A", Content: &content, ZoneID: zoneID},
+	}
+	fc := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
+	rec.Status.RecordID = primaryID
+	rec.Status.CurrentContent = content
+	require.NoError(t, fc.Status().Update(context.Background(), rec))
+	r := &CloudflareDNSRecordReconciler{
+		Client: fc, Scheme: s,
+		DNSClientFn: func(_ cloudflare.Credentials) (cloudflare.DNSClient, error) { return m.DNS, nil },
+		IPResolver:  ipresolver.NewResolver(),
+	}
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "ext", Namespace: "network"}})
+	require.NoError(t, err)
+	var got v2alpha1.CloudflareDNSRecord
+	require.NoError(t, fc.Get(context.Background(),
+		types.NamespacedName{Name: "ext", Namespace: "network"}, &got))
+	require.Equal(t, primaryID, got.Status.RecordID, "primary record untouched")
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionFalse, cond.Status, "Ready must be False on foreign companion")
+	require.Equal(t, conventions.ReasonOwnershipCompanionFailed, cond.Reason)
 }

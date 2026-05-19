@@ -133,6 +133,14 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	}
 	zoneID := zres.ZoneID
 
+	// Zone domain for best-effort legacy-companion GC (design §4.4). Only
+	// the ZoneRef path resolves a CloudflareZone CR; literal Spec.ZoneID
+	// yields "" → legacy GC is skipped (documented; harmless orphan).
+	zoneDomain := ""
+	if zres.ZoneObject != nil {
+		zoneDomain = zres.ZoneObject.Spec.Name
+	}
+
 	// Observe-mode early-exit: read CF state, populate Status, return without
 	// any mutating calls. Spec.Adopt is a no-op in this mode. Direct
 	// Status().Update + return — does NOT route through the terminal DeepEqual
@@ -266,37 +274,28 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	params := buildParams(&rec, content)
 
 	if rec.Status.RecordID == "" {
-		// Create path.
 		created, cerr := dc.CreateRecord(ctx, zoneID, params)
 		if cerr != nil {
+			if isAlreadyExistsErr(cerr) {
+				// Primary twin of 81058 (jellyfin 81053): the record exists
+				// (e.g. rename overlap). Look it up and continue via the
+				// update path next reconcile rather than hard-erroring.
+				list, lerr := dc.ListRecordsByNameAndType(ctx, zoneID, rec.Spec.Name, rec.Spec.Type)
+				if lerr == nil && len(list) > 0 {
+					rec.Status.RecordID = list[0].ID
+					rec.Status.CurrentContent = list[0].Content
+					if uerr := r.Status().Update(ctx, &rec); uerr != nil {
+						return ctrl.Result{}, uerr
+					}
+					return ctrl.Result{Requeue: true}, nil
+				}
+			}
 			return ctrl.Result{}, fmt.Errorf("create record: %w", cerr)
 		}
 		rec.Status.RecordID = created.ID
 		rec.Status.CurrentContent = created.Content
 		logger.Info("created DNS record", "recordID", created.ID)
-
-		// Pair: write TXT companion for the newly created record.
-		contentHash := sha256Hex(content)
-		txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
-		if terr != nil {
-			// Partial failure: DNS record created successfully, but TXT companion
-			// write failed. Emit a Warning Event and continue so the terminal
-			// status path still runs. The next reconcile re-enters the update
-			// path (RecordID is now set) and the TxtRecordID-empty guard there
-			// retries the companion write even without content drift.
-			logger.Error(terr, "TXT companion write failed after DNS create; will retry next reconcile")
-			if r.Recorder != nil {
-				r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
-					"DNS record created but TXT companion write failed: %s", terr.Error())
-			}
-			// Do NOT set rec.Status.TxtRecordID — the update-path retry guard
-			// (TxtRecordID == "") will call writeTXTCompanion on the next reconcile.
-		} else {
-			rec.Status.TxtRecordID = txtID
-			rec.Status.TxtAffix = txtAffix
-		}
 	} else {
-		// Update path: confirm existence, then converge drift.
 		existing, gerr := dc.GetRecord(ctx, zoneID, rec.Status.RecordID)
 		if gerr != nil {
 			if stderrors.Is(gerr, cloudflare.ErrRecordNotFound) {
@@ -320,52 +319,55 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
 					"corrected drift on %s record %s", rec.Spec.Type, rec.Spec.Name)
 			}
-
-			// Pair: refresh TXT companion hash to match the newly written content.
-			contentHash := sha256Hex(content)
-			txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
-			if terr != nil {
-				// Partial failure: DNS record updated successfully, but TXT
-				// companion refresh failed. Emit a Warning Event and continue.
-				logger.Error(terr, "TXT companion refresh failed after DNS update; will retry next reconcile")
-				if r.Recorder != nil {
-					r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
-						"DNS record updated but TXT companion refresh failed: %s", terr.Error())
-				}
-			} else {
-				rec.Status.TxtRecordID = txtID
-				rec.Status.TxtAffix = txtAffix
-			}
 		} else {
 			rec.Status.CurrentContent = existing.Content
-			// Retry guard: the main record is in sync (no content drift) but
-			// TxtRecordID is empty — this means a prior create or update wrote
-			// the main record successfully but the TXT companion write failed.
-			// This arm is only reachable for a record THIS operator created or
-			// adopt-matched (adopt-refused outcomes return before reaching here;
-			// observe mode early-exits before the create/update block). Write
-			// the missing companion now. Same partial-failure handling: emit a
-			// Warning Event and continue; the next reconcile will retry again.
-			if rec.Status.TxtRecordID == "" {
-				contentHash := sha256Hex(content)
-				txtID, terr := writeTXTCompanion(ctx, dc, zoneID, rec.Spec.Name, contentHash, rec.Namespace, rec.Name, encoder)
-				if terr != nil {
-					logger.Error(terr, "TXT companion retry failed (no-drift path); will retry next reconcile")
-					if r.Recorder != nil {
-						r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonTxtRegistryWriteFailed,
-							"TXT companion retry failed (no content drift): %s", terr.Error())
-					}
-				} else {
-					rec.Status.TxtRecordID = txtID
-					rec.Status.TxtAffix = txtAffix
-				}
-			}
 		}
 	}
 
-	rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionTrue,
-		conventions.ReasonReady, "DNS record synced")
-	rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonReady)
+	// Companion: reconcile against ACTUAL Cloudflare state every reconcile
+	// (design §4.2). Independent of primary drift and of TxtRecordID being
+	// empty — closes sub-bug (a). Gates Ready — closes sub-bug (c).
+	cout, companionErr := reconcileTXTCompanion(ctx, dc, zoneID, companionInputs{
+		recordName:  rec.Spec.Name,
+		contentHash: sha256Hex(content),
+		ourNS:       rec.Namespace,
+		ourName:     rec.Name,
+		storedTxtID: rec.Status.TxtRecordID,
+		encoder:     encoder,
+		readCodec:   readCodec,
+	})
+	companionOK := companionErr == nil && cout.ownershipOK
+	switch {
+	case companionErr != nil:
+		logger.Error(companionErr, "companion reconcile failed; surfacing via Ready=False")
+		if r.Recorder != nil {
+			r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
+				"TXT ownership companion failed (%s): %s", cout.failClass, companionErr.Error())
+		}
+	case cout.ownershipOK:
+		rec.Status.TxtRecordID = cout.txtRecordID
+		rec.Status.TxtAffix = txtAffix
+		gcLegacyCompanion(ctx, dc, zoneID, zoneDomain, rec.Spec.Name, rec.Namespace, rec.Name, readCodec)
+	default:
+		if r.Recorder != nil {
+			r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
+				"TXT ownership companion not in desired state: %s", cout.failClass)
+		}
+	}
+
+	if companionOK {
+		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionTrue,
+			conventions.ReasonReady, "DNS record synced")
+		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonReady)
+	} else {
+		msg := "primary record synced but TXT ownership companion failed"
+		if cout.failClass != "" {
+			msg = msg + " (" + cout.failClass + ")"
+		}
+		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
+			conventions.ReasonOwnershipCompanionFailed, msg)
+		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonOwnershipCompanionFailed)
+	}
 
 	candidate := rec.Status.DeepCopy()
 	candidate.LastSyncedAt = originalStatus.LastSyncedAt
