@@ -35,11 +35,11 @@ func TestAffixName_Apex(t *testing.T) {
 }
 
 func TestAffixName_Subdomain(t *testing.T) {
-	require.Equal(t, "cf-txt-foo.test", AffixName("cf-txt", "foo.test"))
+	require.Equal(t, "cf-txt.foo.test", AffixName("cf-txt", "foo.test"))
 }
 
 func TestAffixName_DeepSubdomain(t *testing.T) {
-	require.Equal(t, "cf-txt-foo-bar.test", AffixName("cf-txt", "foo.bar.test"))
+	require.Equal(t, "cf-txt.foo.bar.test", AffixName("cf-txt", "foo.bar.test"))
 }
 
 func TestRegistryPayload_JSONTags(t *testing.T) {
@@ -191,18 +191,30 @@ func TestCodecKindFor(t *testing.T) {
 }
 
 func TestAffixName_WildcardLeadingLabel(t *testing.T) {
-	require.Equal(t, "cf-txt-_wildcard-example.com", AffixName("cf-txt", "*.example.com"))
-	require.Equal(t, "cf-txt-_wildcard-foo-bar.test", AffixName("cf-txt", "*.foo.bar.test"))
+	require.Equal(t, "cf-txt._wildcard.example.com", AffixName("cf-txt", "*.example.com"))
+	require.Equal(t, "cf-txt._wildcard.foo.bar.test", AffixName("cf-txt", "*.foo.bar.test"))
 }
 
 func TestAffixName_WildcardApexBareStar(t *testing.T) {
 	require.Equal(t, "cf-txt._wildcard", AffixName("cf-txt", "*"))
 }
 
+// TestAffixName_EndsInZone is the load-bearing S1 regression: the companion
+// FQDN MUST end with the same registrable suffix as the input hostname so
+// Cloudflare never zone-appends it (the external-jacaudi 81058 root cause).
+func TestAffixName_EndsInZone(t *testing.T) {
+	require.True(t, strings.HasSuffix(AffixName("cf-txt", "external.jacaudi.dev"), ".jacaudi.dev"))
+	require.Equal(t, "cf-txt.external.jacaudi.dev", AffixName("cf-txt", "external.jacaudi.dev"))
+}
+
+// TestAffixName_NonWildcardRegressionUnchanged: S1 intentionally changed the
+// non-apex scheme from "<prefix>-<collapsed-labels>.<lastlabel>" to
+// "<prefix>.<full-hostname>" so the companion ends in the zone (see design
+// 2026-05-19 §4.1 / the external-jacaudi 81058 root cause). Apex is unchanged.
 func TestAffixName_NonWildcardRegressionUnchanged(t *testing.T) {
-	require.Equal(t, "cf-txt.test", AffixName("cf-txt", "test"))
-	require.Equal(t, "cf-txt-foo.test", AffixName("cf-txt", "foo.test"))
-	require.Equal(t, "cf-txt-foo-bar.test", AffixName("cf-txt", "foo.bar.test"))
+	require.Equal(t, "cf-txt.test", AffixName("cf-txt", "test"))         // apex: unchanged
+	require.Equal(t, "cf-txt.foo.test", AffixName("cf-txt", "foo.test")) // sub: NEW scheme
+	require.Equal(t, "cf-txt.foo.bar.test", AffixName("cf-txt", "foo.bar.test"))
 }
 
 func TestAffixName_NeverEmitsAsteriskOrWildcardPrefix(t *testing.T) {

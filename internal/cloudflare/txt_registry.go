@@ -47,33 +47,29 @@ type RegistryPayload struct {
 	H string `json:"h,omitempty"`
 }
 
-// AffixName returns the name of the companion TXT record for a DNS
-// record identified by name.
+// AffixName returns the name of the companion TXT record for a DNS record
+// identified by name. The companion is the hostname with `prefix + "."`
+// prepended as a new leftmost label, so it is ALWAYS a real subdomain that
+// ends in the same zone as the hostname. This is robust by construction:
+// Cloudflare never zone-appends it, and an exact-name List always finds it
+// (the S1 fix for the external-jacaudi 81058 loop — see design 2026-05-19
+// §4.1; the old "collapse all-but-last label" scheme produced names not
+// ending in the zone for multi-label zones).
 //
-// Convention:
-//   - apex (no '.' in name):  prefix + "." + name
-//   - subdomain:              prefix + "-" + collapsed-labels + "." + tld
+// A wildcard label ("*") is mapped per-label to the "_wildcard" sentinel so
+// the companion name is never a literal-'*' DNS name.
 //
-// All-but-last dotted segments of name are joined with hyphens and
-// appended to prefix, then the last segment becomes the zone label.
-// A wildcard label ("*") is mapped to the "_wildcard" sentinel so the
-// companion name is never a literal-'*' DNS name.
-// For example:
-//
-//	AffixName("cf-txt", "test")        → "cf-txt.test"
-//	AffixName("cf-txt", "foo.test")    → "cf-txt-foo.test"
-//	AffixName("cf-txt", "foo.bar.test") → "cf-txt-foo-bar.test"
-//	AffixName("cf-txt", "*.example.com") → "cf-txt-_wildcard-example.com"
+//	AffixName("cf-txt", "test")          → "cf-txt.test"
+//	AffixName("cf-txt", "foo.test")      → "cf-txt.foo.test"
+//	AffixName("cf-txt", "foo.bar.test")  → "cf-txt.foo.bar.test"
+//	AffixName("cf-txt", "*.example.com") → "cf-txt._wildcard.example.com"
+//	AffixName("cf-txt", "*")             → "cf-txt._wildcard"
 func AffixName(prefix, name string) string {
-	if !strings.ContainsRune(name, '.') {
-		return prefix + "." + sanitizeLabel(name)
-	}
 	segs := strings.Split(name, ".")
 	for i, s := range segs {
 		segs[i] = sanitizeLabel(s)
 	}
-	head := strings.Join(segs[:len(segs)-1], "-")
-	return prefix + "-" + head + "." + segs[len(segs)-1]
+	return prefix + "." + strings.Join(segs, ".")
 }
 
 // sanitizeLabel maps a wildcard label ("*") to a reserved, asterisk-free
