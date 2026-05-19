@@ -751,7 +751,7 @@ func TestGatewaySource_NoDNSForTCPListener(t *testing.T) {
 // IMP-2 fix. The TCP/UDP black-hole fix must NOT also drop the apex CNAME for
 // a TLS-mode listener: gateway.emitDNSRecord is the ONLY emitter of
 // "<apex> CNAME -> tunnelCNAME" for a Gateway. TLSRoute.emitChainDNSRecord
-// emits "route-host -> gwApex" (Content=gwApex), never "gwApex -> tunnelCNAME".
+// emits "route-host -> chainContent" (Content=chainContent), never "apex -> tunnelCNAME".
 // So a TLS-apex Gateway still legitimately needs its apex->tunnel record, or
 // the entire TLSRoute chain resolves to nothing.
 //

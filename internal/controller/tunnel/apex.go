@@ -30,6 +30,12 @@ import (
 // actually publishes records for: HTTP/HTTPS and TLS listeners with a
 // non-empty hostname. TCP/UDP (and unset) are excluded — not published, can't
 // back a route chain. Single source of truth for the protocol filter.
+//
+// LOCKSTEP: the protocol set (HTTP/HTTPS/TLS) here MUST stay in sync with the
+// per-listener loop in gateway_source_controller.go (the contribs/tlsApexHostnames
+// build, ~line 205). Changing one without the other causes chainContentFor and
+// the gateway-source listener loop to disagree about which hostnames are "published",
+// silently breaking apex-CNAME emission or chain-record gating.
 func publishableListenerHostnames(gw *gwv1.Gateway) []string {
 	out := make([]string, 0, len(gw.Spec.Listeners))
 	for _, l := range gw.Spec.Listeners {

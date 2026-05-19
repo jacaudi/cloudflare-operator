@@ -130,6 +130,8 @@ ignored:
 metadata:
   annotations:
     cloudflare.io/tunnel: "true"
+    cloudflare.io/tunnel-name: my-tunnel
+    cloudflare.io/gateway-service: <namespace>/<service>
     cloudflare.io/gateway-apex: external.example.com
 ```
 

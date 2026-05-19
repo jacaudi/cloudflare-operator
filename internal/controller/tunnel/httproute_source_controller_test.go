@@ -312,10 +312,10 @@ func TestHTTPRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	// Cache entry written for the tunnel reconciler to consume.
 	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
 	require.Len(t, snap, 1)
-	// But no DNSRecord — gwApex via chain still resolves, BUT the design
-	// requires deferring DNS emission until the tunnel CR populates its
-	// status (so the per-route chain CNAME isn't created before the apex
-	// CNAME exists). T11 has the same guard.
+	// But no DNSRecord — chainContent resolves, BUT the design requires
+	// deferring DNS emission until the tunnel CR populates its status (so the
+	// per-route chain CNAME isn't created before the apex CNAME exists).
+	// T11 has the same guard.
 	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Empty(t, list.Items, "DNSRecord emission deferred until tunnel CNAME populates")

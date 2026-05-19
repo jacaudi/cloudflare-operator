@@ -200,6 +200,12 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 
 	// Build per-listener contributions. HTTP/HTTPS only; TLS is owned by the
 	// TLSRoute reconciler; TCP/UDP are rejected with an Event.
+	//
+	// LOCKSTEP: the protocol filter applied in this loop (HTTP/HTTPS → contribs,
+	// TLS → tlsApexHostnames, default → Event) MUST stay in sync with
+	// publishableListenerHostnames in apex.go. Diverging the two causes
+	// chainContentFor and this emission loop to disagree about which hostnames
+	// are "published", silently breaking apex-CNAME emission or chain-record gating.
 	contribs := make([]tunnelsynth.IngressContribution, 0, len(gw.Spec.Listeners))
 	tlsApexHostnames := make([]string, 0, len(gw.Spec.Listeners))
 	for _, l := range gw.Spec.Listeners {

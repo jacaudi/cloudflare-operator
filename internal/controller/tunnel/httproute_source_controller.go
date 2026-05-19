@@ -150,6 +150,8 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 	chainContent, apexBlocked, _ := chainContentFor(gw, tn)
 
 	gwOrigin := tunnelsynth.GatewayOrigin{
+		// Hostname is informational only — not consumed by the translator
+		// (routing is driven by .Service). Stored for diagnostics/logging.
 		Hostname: chainContent,
 		Service:  fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", gwSvc.Name, gwSvc.Namespace, port),
 	}

@@ -593,10 +593,10 @@ func TestTLSRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 // parent Gateway's listener hostname yields anything to attach.
 //
 // Reconciler flow in this case:
-//   - hostnames slice is empty after the listener-fallback (gwApex is "").
+//   - hostnames slice is empty after the listener-fallback (no listener hostname).
 //   - TranslateTLSRoute returns zero contributions + the always-on
 //     ClientSideClientRequired warning.
-//   - DNSRecord emission is deferred (gwApex == "" trips the guard).
+//   - DNSRecord emission is deferred (chainContent == "" trips the guard).
 //   - writeParentStatus stamps Accepted=False/NoListenerHostname (hasContribs
 //     is false) AND PartiallyInvalid=True/ClientSideClientRequired (the
 //     translator warning is always present for TLSRoute).
@@ -647,10 +647,10 @@ func TestTLSRouteSource_NoListenerHostname_ZeroContribs_AcceptedFalse(t *testing
 	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
 	require.Empty(t, snap, "no hostnames resolved → no contributions")
 
-	// No DNSRecord — emission deferred because gwApex == "".
+	// No DNSRecord — emission deferred because chainContent == "".
 	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
-	require.Empty(t, list.Items, "DNSRecord emission deferred when gwApex empty")
+	require.Empty(t, list.Items, "DNSRecord emission deferred when chainContent empty")
 
 	// Status: Accepted=False/NoListenerHostname AND
 	// PartiallyInvalid=True/ClientSideClientRequired (translator warning always
