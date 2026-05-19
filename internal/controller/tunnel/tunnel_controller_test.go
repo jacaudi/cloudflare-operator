@@ -310,10 +310,21 @@ func TestTunnelReconciler_NotReadyWhenDeploymentNotAvailable(t *testing.T) {
 	// empty and isDeploymentAvailable returns false — even with healthy
 	// connectors seeded into the mock, the rollup must report
 	// Ready=False/ConnectorDeploying.
+	//
+	// The auto-created annotation marks this as an operator-managed tunnel so
+	// it enters the cascade-GC branch rather than the orphaned-unmanaged
+	// branch. Without it, a tunnel with no annotation, no source labels, and
+	// empty AttachedSources would be classified as user-authored and hit the
+	// OrphanedUnmanaged observability path instead of the deployment-availability
+	// assertion this test is verifying.
 	setEnvCreds(t)
 	s := tunnelScheme(t)
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "tnl",
+			Namespace:   "ns",
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
 		Spec: v2alpha1.CloudflareTunnelSpec{
 			Name:      "cf-ns",
 			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
@@ -1085,6 +1096,96 @@ drain:
 	require.True(t, foundTerminal, "expected TerminalNoSources event before self-delete")
 }
 
+// TestReconcile_OrphanedUserAuthored_SurfacedNotDeleted asserts that a tunnel
+// with no operator source labels, no cloudflare.io/auto-created annotation, no
+// OwnerReferences, and empty Status.AttachedSources (genuinely user-authored,
+// orphan-shaped) is NEVER auto-deleted — not even past the grace window — and
+// is surfaced via a Warning Event + Ready=False condition with reason
+// ReasonOrphanedUnmanaged. The Event is transition-gated so a second reconcile
+// does not emit a duplicate.
+func TestReconcile_OrphanedUserAuthored_SurfacedNotDeleted(t *testing.T) {
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	// Genuinely user-authored: no annotation, no operator source labels,
+	// no OwnerReferences, empty Status.AttachedSources.
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "user-tnl",
+			Namespace:  "ns",
+			Finalizers: []string{conventions.FinalizerName},
+			// No AnnotationAutoCreated, no source labels, no OwnerReferences.
+		},
+		Spec:   v2alpha1.CloudflareTunnelSpec{Name: "cf-user", Connector: v2alpha1.ConnectorSpec{Replicas: 1, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: nil},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(16)
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+	r.Recorder = rec
+
+	// Reconcile #1: must NOT delete, must NOT stamp auto-created, must NOT set
+	// LastOrphanedAt, must emit ReasonOrphanedUnmanaged Event + condition.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "user-tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	var afterPass1 v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "user-tnl", Namespace: "ns"}, &afterPass1))
+
+	// CR must still exist and must NOT have been deleted or marked for deletion.
+	require.Nil(t, afterPass1.DeletionTimestamp, "user-authored tunnel must NOT be deleted")
+
+	// auto-created annotation must NOT be stamped.
+	require.Empty(t, afterPass1.Annotations[conventions.AnnotationAutoCreated],
+		"user-authored tunnel must NOT receive auto-created annotation")
+
+	// LastOrphanedAt must NOT be set (tunnel never entered the cascade-GC path).
+	require.Nil(t, afterPass1.Status.LastOrphanedAt,
+		"user-authored tunnel must NOT have LastOrphanedAt set")
+
+	// Ready condition must be Ready=False with reason OrphanedUnmanaged.
+	var readyCond *metav1.Condition
+	for i := range afterPass1.Status.Conditions {
+		if afterPass1.Status.Conditions[i].Type == conventions.ConditionTypeReady {
+			readyCond = &afterPass1.Status.Conditions[i]
+		}
+	}
+	require.NotNil(t, readyCond, "Ready condition must be present after pass 1")
+	require.Equal(t, metav1.ConditionFalse, readyCond.Status, "Ready must be False for orphaned-unmanaged tunnel")
+	require.Equal(t, conventions.ReasonOrphanedUnmanaged, readyCond.Reason,
+		"Ready condition reason must be OrphanedUnmanaged")
+
+	// At least one OrphanedUnmanaged Warning Event must have been emitted.
+	pass1Events := drainEvents(rec)
+	sawOrphanedUnmanaged := false
+	for _, ev := range pass1Events {
+		if containsAll(ev, conventions.ReasonOrphanedUnmanaged) {
+			sawOrphanedUnmanaged = true
+		}
+	}
+	require.True(t, sawOrphanedUnmanaged, "Warning Event with reason OrphanedUnmanaged must be emitted on pass 1")
+
+	// Reconcile #2: transition-gate must suppress a duplicate OrphanedUnmanaged
+	// Event (condition is already OrphanedUnmanaged so no new Event).
+	_, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "user-tnl", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	var afterPass2 v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "user-tnl", Namespace: "ns"}, &afterPass2))
+
+	// Still not deleted after pass 2.
+	require.Nil(t, afterPass2.DeletionTimestamp, "user-authored tunnel must NOT be deleted after pass 2")
+
+	// No duplicate OrphanedUnmanaged Event on pass 2.
+	pass2Events := drainEvents(rec)
+	for _, ev := range pass2Events {
+		require.False(t, containsAll(ev, conventions.ReasonOrphanedUnmanaged),
+			"duplicate OrphanedUnmanaged Event must NOT be emitted on pass 2 (transition-gated)")
+	}
+}
+
 // containsAll returns true when s contains every substring.
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
@@ -1100,4 +1201,18 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+// drainEvents drains all currently buffered events from a FakeRecorder into a
+// slice without blocking.
+func drainEvents(rec *record.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case ev := <-rec.Events:
+			out = append(out, ev)
+		default:
+			return out
+		}
+	}
 }

@@ -37,6 +37,7 @@ func TestTunnelReasons_AllDefined(t *testing.T) {
 		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,
 		ReasonOrphanedDNSRecordPruned,
 		ReasonGatewayApexRequired, ReasonGatewayApexInvalid,
+		ReasonOrphanedUnmanaged,
 	}
 	for _, r := range want {
 		require.NotEmpty(t, r)
@@ -59,6 +60,7 @@ func TestTunnelReasons_NoDuplicatesWithBase(t *testing.T) {
 		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,
 		ReasonOrphanedDNSRecordPruned,
 		ReasonGatewayApexRequired, ReasonGatewayApexInvalid,
+		ReasonOrphanedUnmanaged,
 	}
 	for _, r := range tunnel {
 		_, dup := base[r]

@@ -278,6 +278,25 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// promoted): clear the stamp (persisted by the gate below).
 			tn.Status.LastOrphanedAt = nil
 		}
+	} else if len(tn.OwnerReferences) == 0 && len(tn.Status.AttachedSources) == 0 {
+		// Orphan-shaped but NOT cascade-GC-eligible (no auto-created
+		// annotation, no operator source labels = user-authored). NEVER
+		// auto-delete (design §7). Surface it so it is not silent. The
+		// Event is transition-gated: emit only when the Ready condition was
+		// NOT already OrphanedUnmanaged at the start of this reconcile
+		// (originalStatus), so the Event fires exactly once on the
+		// transition into this state, not on every subsequent pass.
+		// SetReady is idempotent and overwrites rollupStatus's tentative
+		// Ready reason so that OrphanedUnmanaged is the persisted state.
+		prevStored := reconcilelib.FindReady(originalStatus.Conditions)
+		if r.Recorder != nil && (prevStored == nil || prevStored.Reason != conventions.ReasonOrphanedUnmanaged) {
+			r.Recorder.Eventf(&tn, corev1.EventTypeWarning, conventions.ReasonOrphanedUnmanaged,
+				"tunnel has no sources and no owner but is not operator-managed; "+
+					"it will NOT be auto-deleted — adopt/label it or delete it manually")
+		}
+		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
+			conventions.ReasonOrphanedUnmanaged,
+			"orphaned but not operator-managed; operator will not auto-GC it — adopt/label it or delete it manually")
 	}
 
 	// Only persist status when something material changed or spec generation

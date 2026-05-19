@@ -21,6 +21,7 @@ package reconcile
 import (
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
@@ -36,6 +37,13 @@ var inProgressReasons = map[string]struct{}{
 // reallocated) slice.
 func SetReady(conds []metav1.Condition, status metav1.ConditionStatus, reason, msg string) []metav1.Condition {
 	return SetCondition(conds, conventions.ConditionTypeReady, status, reason, msg)
+}
+
+// FindReady returns a pointer to the Ready condition in conds, or nil if none
+// is present. The returned pointer points into the original slice; callers must
+// not modify it after the slice is mutated.
+func FindReady(conds []metav1.Condition) *metav1.Condition {
+	return meta.FindStatusCondition(conds, conventions.ConditionTypeReady)
 }
 
 // SetCondition upserts a condition by Type. The LastTransitionTime is only

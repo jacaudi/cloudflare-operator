@@ -199,6 +199,13 @@ const (
 	// ReasonGatewayApexInvalid: cloudflare.io/gateway-apex is set but not a
 	// valid non-wildcard DNS1123 hostname; it is ignored.
 	ReasonGatewayApexInvalid = "GatewayApexInvalid"
+
+	// ReasonOrphanedUnmanaged: a tunnel has no sources and no owner but is
+	// NOT cascade-GC-eligible (no auto-created annotation, no operator
+	// source labels). The operator will NOT auto-delete it (design §7);
+	// surfaced so the state is never silent. Admin must adopt/label or
+	// delete it manually.
+	ReasonOrphanedUnmanaged = "OrphanedUnmanaged"
 )
 
 // TunnelReasons returns the reason vocabulary appended by spec 3 for the
@@ -229,5 +236,6 @@ func TunnelReasons() []string {
 		ReasonOrphanedDNSRecordPruned,
 		ReasonGatewayApexRequired,
 		ReasonGatewayApexInvalid,
+		ReasonOrphanedUnmanaged,
 	}
 }
