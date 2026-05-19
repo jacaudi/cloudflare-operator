@@ -334,8 +334,14 @@ func runTunnel(opts Options, scheme *runtime.Scheme) {
 		log.Error(perr, "invalid tunnel connector resources")
 		os.Exit(1)
 	}
+	connImg, ierr := parseConnectorImage(os.Getenv("CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE"))
+	if ierr != nil {
+		log.Error(ierr, "invalid tunnel connector image")
+		os.Exit(1)
+	}
 	if err := startManager(opts, scheme, ctrl.GetConfigOrDie(), func(mgr ctrl.Manager) error {
 		return tunnel.AddToManager(mgr, tunnel.Options{
+			DefaultImage:     effectiveDefaultImage(connImg, tunnel.DefaultCloudflaredImage),
 			DefaultConnector: v2alpha1.ConnectorSpec{Resources: connRes},
 		})
 	}); err != nil {
@@ -356,6 +362,15 @@ func parseConnectorResources(raw string) (corev1.ResourceRequirements, error) {
 		return corev1.ResourceRequirements{}, fmt.Errorf("parse CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES: %w", err)
 	}
 	return rr, nil
+}
+
+// effectiveDefaultImage layers an optional chart-provided ConnectorImage over
+// the compile-time pin per-axis (reusing tunnel.ResolveImage). nil → pin.
+func effectiveDefaultImage(ci *v2alpha1.ConnectorImage, pin string) string {
+	if ci == nil {
+		return pin
+	}
+	return tunnel.ResolveImage(ci, pin)
 }
 
 // parseConnectorImage unmarshals the opaque JSON v2alpha1.ConnectorImage the

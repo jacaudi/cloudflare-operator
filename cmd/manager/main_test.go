@@ -26,6 +26,8 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
 
 func TestParseFlags_Defaults(t *testing.T) {
@@ -165,6 +167,15 @@ func TestParseConnectorImage(t *testing.T) {
 
 	_, err = parseConnectorImage(`{not-json`)
 	require.Error(t, err)
+}
+
+func TestEffectiveDefaultImage(t *testing.T) {
+	const pin = "docker.io/cloudflare/cloudflared:2026.5.0"
+	require.Equal(t, pin, effectiveDefaultImage(nil, pin))
+	require.Equal(t, "mirror.example/cf/cloudflared:2026.5.0",
+		effectiveDefaultImage(&v2alpha1.ConnectorImage{Repository: "mirror.example/cf/cloudflared"}, pin))
+	require.Equal(t, "docker.io/cloudflare/cloudflared:2026.6.0",
+		effectiveDefaultImage(&v2alpha1.ConnectorImage{Tag: "2026.6.0"}, pin))
 }
 
 func TestParseFlags_ControllerToggles(t *testing.T) {
