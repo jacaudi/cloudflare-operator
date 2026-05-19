@@ -1414,3 +1414,151 @@ func TestFirstListenerHostname_IsLexicographicallyStable(t *testing.T) {
 	}
 	require.Equal(t, "alpha.example.com", firstListenerHostname(reversed))
 }
+
+// ---------------------------------------------------------------------------
+// N1a — direct unit coverage for hostnameMatchesListener.
+//
+// Gateway-API listener vs. route hostname matching semantics: an empty
+// listener hostname matches anything; "*.suffix" matches a SINGLE-LABEL
+// subdomain but NOT the apex and NOT multi-label subdomains; otherwise the
+// comparison is exact. This is the helper that backs the HTTPS-preferred
+// listener pick during scheme resolution (see schemeForParent).
+// ---------------------------------------------------------------------------
+
+func TestHostnameMatchesListener(t *testing.T) {
+	cases := []struct {
+		name         string
+		listenerHost string
+		routeHost    string
+		want         bool
+	}{
+		{
+			name:         "empty_listener_matches_any_route",
+			listenerHost: "",
+			routeHost:    "foo.example.com",
+			want:         true,
+		},
+		{
+			name:         "exact_match",
+			listenerHost: "example.com",
+			routeHost:    "example.com",
+			want:         true,
+		},
+		{
+			name:         "exact_listener_does_not_implicit_suffix_match",
+			listenerHost: "example.com",
+			routeHost:    "foo.example.com",
+			want:         false,
+		},
+		{
+			name:         "wildcard_single_label_match",
+			listenerHost: "*.example.com",
+			routeHost:    "foo.example.com",
+			want:         true,
+		},
+		{
+			name:         "wildcard_does_not_match_multi_label",
+			listenerHost: "*.example.com",
+			routeHost:    "foo.bar.example.com",
+			want:         false,
+		},
+		{
+			name:         "wildcard_does_not_match_apex",
+			listenerHost: "*.example.com",
+			routeHost:    "example.com",
+			want:         false,
+		},
+		{
+			name:         "wildcard_suffix_mismatch",
+			listenerHost: "*.example.com",
+			routeHost:    "other.com",
+			want:         false,
+		},
+		{
+			// Gateway-API spec says only the LISTENER side carries wildcards;
+			// a route hostname starting with "*." is not expected, but the
+			// helper must not panic and must return false (it falls into the
+			// concrete-vs-concrete exact-match branch and compares strings).
+			name:         "route_side_wildcard_is_not_expanded",
+			listenerHost: "foo.example.com",
+			routeHost:    "*.example.com",
+			want:         false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hostnameMatchesListener(tc.listenerHost, tc.routeHost)
+			require.Equal(t, tc.want, got,
+				"hostnameMatchesListener(%q, %q) = %v; want %v",
+				tc.listenerHost, tc.routeHost, got, tc.want)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// N1b — integration test for the user's actual live failure.
+//
+// Production scenario: parent Gateway has a wildcard "*.example.com" hostname
+// declared on BOTH an HTTP and an HTTPS sibling listener. An HTTPRoute names
+// a concrete sub-hostname ("jellyfin.example.com") with NO parentRef
+// SectionName and NO cloudflare.io/scheme annotation. The user was getting
+// http:// in the contribution; the fix is HTTPS-preferred among the matching
+// listeners. Also asserts cloudflare.io/origin-server-name inherits from the
+// Gateway when not set on the route.
+// ---------------------------------------------------------------------------
+
+func TestHTTPRouteSource_BugScenario_WildcardListenerMatchesConcreteRoute(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		// HTTP listed first to mirror the live failure ordering; the helper
+		// must still pick HTTPS.
+		{Name: "http", Hostname: hostnamePtr("*.example.com"), Port: 80, Protocol: gwv1.HTTPProtocolType},
+		{Name: "https", Hostname: hostnamePtr("*.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, map[string]string{
+		conventions.AnnotationOriginServerName: "external.example.com",
+	})
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"jellyfin.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{
+				// No SectionName: must traverse the hostname-match pass.
+				Name: "gw", Namespace: ptrNs("gw-ns"),
+			}}},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "https://"),
+		"wildcard listener match on concrete sub-hostname must prefer HTTPS over HTTP sibling, got %q", got.Service)
+	require.NotNil(t, got.OriginServerName,
+		"Gateway-level cloudflare.io/origin-server-name must inherit when the route does not override it")
+	require.Equal(t, "external.example.com", *got.OriginServerName)
+}
+
+// ---------------------------------------------------------------------------
+// N2 — cloudflare.io/scheme=<garbage> silent fall-through (route side).
+//
+// Design contract (see schemeForParent doc + Bug 1 review): an unrecognized
+// scheme value silently falls through to the listener-derived path. No error,
+// no Warning event. This locks the regression at the route source.
+// ---------------------------------------------------------------------------
+
+func TestHTTPRouteSource_SchemeGarbage_FallsThroughToListener(t *testing.T) {
+	gw := mkTunnelGwWithListeners("gw", "gw-ns", []gwv1.Listener{
+		{Name: "https", Hostname: hostnamePtr("notes.example.com"), Port: 443, Protocol: gwv1.HTTPSProtocolType},
+	}, nil)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: "app",
+			Annotations: map[string]string{conventions.AnnotationScheme: "garbage"},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames:       []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}}},
+			Rules:           []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	got := reconcileHTTPRouteAndGetContrib(t, gw, rt)
+	require.True(t, strings.HasPrefix(got.Service, "https://"),
+		"cloudflare.io/scheme=garbage must silently fall through to the HTTPS listener, got %q", got.Service)
+}

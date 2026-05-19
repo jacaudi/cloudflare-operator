@@ -1174,3 +1174,19 @@ func TestGatewaySource_BugOne_DeterministicEmitOrder(t *testing.T) {
 			"deterministic Service URL required (i=%d): %q vs %q", i, snap1[i].Service, snap2[i].Service)
 	}
 }
+
+// N2 — cloudflare.io/scheme=<garbage> on the Gateway silently falls through to
+// the listener-derived path. Design contract (see pickListenerScheme doc): an
+// unrecognized override value is ignored — no error, no Warning event, just
+// the listener-derived scheme. Regression lock for the gateway source side.
+func TestGatewaySource_SchemeGarbage_FallsThroughToListener(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, map[string]string{
+		conventions.AnnotationScheme: "garbage",
+	})
+	snap, _ := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, snap, 1)
+	require.True(t, strings.HasPrefix(snap[0].Service, "https://"),
+		"cloudflare.io/scheme=garbage must silently fall through to the HTTPS listener, got %s", snap[0].Service)
+}
