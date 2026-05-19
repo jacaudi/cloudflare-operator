@@ -141,14 +141,16 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 		return reconcile.Result{}, nil
 	}
 
-	// Gateway apex (the CNAME chain hop). Pick the first non-empty listener
-	// hostname — the chain pattern only needs one stable apex per Gateway;
-	// cloudflared dispatches by Host header so the apex is a routing
-	// landmark, not a per-listener pivot.
-	gwApex := firstListenerHostname(gw)
+	// Resolve the chain CNAME content for per-route DNSRecords. Uses the
+	// shared chainContentFor helper (apex.go) which checks for a valid
+	// cloudflare.io/gateway-apex annotation first, then falls back to the
+	// tunnel CNAME for concrete-listener Gateways. Returns blocked=true
+	// when the Gateway has only wildcard listeners and no apex annotation
+	// — emitting a wildcard CNAME would cause Cloudflare error 9007.
+	chainContent, apexBlocked, _ := chainContentFor(gw, tn)
 
 	gwOrigin := tunnelsynth.GatewayOrigin{
-		Hostname: gwApex,
+		Hostname: chainContent,
 		Service:  fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", gwSvc.Name, gwSvc.Namespace, port),
 	}
 	contribs, warns := tunnelsynth.TranslateHTTPRoute(&rt, gwOrigin, tunnelsynth.Defaults{})
@@ -174,26 +176,45 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 		}
 	}
 
-	// Defer DNSRecord emission until the tunnel CR populates Status.TunnelCNAME
-	// AND we have a Gateway apex. The DNSRecord written here is the CHAIN
-	// hop (<route-hostname> → <gateway-apex>); the apex → tunnel-CNAME hop
-	// is written by the GatewaySourceReconciler. Without an apex we can't
-	// build the chain; without a tunnel CNAME the apex itself won't resolve
-	// yet. Status write still happens so operators see progress.
-	if gwApex == "" || tn.Status.TunnelCNAME == "" {
-		logger.V(1).Info("deferring DNSRecord emission until Gateway apex + tunnel CNAME populate",
-			"tunnel", tunnelKey, "gwApex", gwApex, "tunnelCNAME", tn.Status.TunnelCNAME)
+	// Blocked: the parent Gateway has only wildcard listeners and no valid
+	// cloudflare.io/gateway-apex annotation. Emitting a wildcard CNAME
+	// would cause Cloudflare error 9007; instead surface a Warning and
+	// requeue after a bounded interval (no hot-loop). This check must come
+	// BEFORE the deferred-emission guard because apexBlocked also implies
+	// chainContent == "" — without this ordering the deferred guard would
+	// fire first and return without the Warning event.
+	if apexBlocked {
+		if r.Recorder != nil {
+			r.dedupe.emit(r.Recorder, &rt, corev1.EventTypeWarning,
+				conventions.ReasonGatewayApexRequired,
+				"parent Gateway listener is wildcard-only; set the cloudflare.io/gateway-apex annotation on the Gateway to publish per-route records")
+		}
+		if err := r.writeParentStatus(ctx, &rt, *parent, warns, len(contribs) > 0); err != nil {
+			logger.V(1).Info("status write failed (best-effort; ignored)", "err", err)
+		}
+		return reconcile.Result{RequeueAfter: reconcilelib.DefaultRequeueAfter}, nil
+	}
+
+	// Defer DNSRecord emission until the chain content is resolved AND the
+	// tunnel CNAME is populated. On the concrete-listener path chainContent
+	// is tn.Status.TunnelCNAME, so chainContent=="" iff TunnelCNAME=="". The
+	// second clause guards the override path. Without a resolved content we
+	// can't build the chain; without a tunnel CNAME the apex itself won't
+	// resolve yet. Status write still happens so operators see progress.
+	if chainContent == "" || tn.Status.TunnelCNAME == "" {
+		logger.V(1).Info("deferring DNSRecord emission until chain content + tunnel CNAME populate",
+			"tunnel", tunnelKey, "chainContent", chainContent, "tunnelCNAME", tn.Status.TunnelCNAME)
 		if err := r.writeParentStatus(ctx, &rt, *parent, warns, len(contribs) > 0); err != nil {
 			logger.V(1).Info("status write failed (best-effort; ignored)", "err", err)
 		}
 		return reconcile.Result{}, nil
 	}
 
-	// Emit per-Route DNSRecord CRs: CNAME <hostname> → <gateway-apex>.
+	// Emit per-Route DNSRecord CRs: CNAME <hostname> → <chain-content>.
 	desired := make(map[string]struct{}, len(rt.Spec.Hostnames))
 	for _, h := range rt.Spec.Hostnames {
 		desired[string(h)] = struct{}{}
-		if err := r.emitChainDNSRecord(ctx, &rt, string(h), gwApex, gw); err != nil {
+		if err := r.emitChainDNSRecord(ctx, &rt, string(h), chainContent, gw); err != nil {
 			return reconcile.Result{}, fmt.Errorf("emit dns record for %q: %w", h, err)
 		}
 	}
@@ -245,10 +266,11 @@ func (r *HTTPRouteSourceReconciler) findTunnelTargetedParent(
 }
 
 // firstListenerHostname returns the lexicographically-smallest non-empty
-// hostname across the Gateway's listeners. Apiserver listener order is not
-// stable across reconciles, so we sort to guarantee deterministic CNAME
-// emission — otherwise two reconciles of the same Gateway could pick
-// different hostnames when multiple listeners declare hostnames.
+// hostname across the Gateway's listeners; used as the TLSRoute
+// route-identity fallback when TLSRoute.Spec.Hostnames is empty. Apiserver
+// listener order is not stable across reconciles, so we sort to guarantee
+// lexicographic determinism — otherwise two reconciles of the same Gateway
+// could pick different hostnames when multiple listeners declare hostnames.
 func firstListenerHostname(gw *gwv1.Gateway) string {
 	hosts := make([]string, 0, len(gw.Spec.Listeners))
 	for _, l := range gw.Spec.Listeners {
@@ -264,9 +286,11 @@ func firstListenerHostname(gw *gwv1.Gateway) string {
 	return hosts[0]
 }
 
-// emitChainDNSRecord upserts the chain CloudflareDNSRecord CR (route
-// hostname → Gateway apex) for this HTTPRoute + hostname pair via the
-// shared SSA-based helper. Annotation drift (cloudflare.io/adopt,
+// emitChainDNSRecord upserts the chain CloudflareDNSRecord CR for this
+// HTTPRoute + hostname pair via the shared SSA-based helper. chainContent
+// is the resolved chain target: either the cloudflare.io/gateway-apex
+// override hostname (when set on the Gateway), or the tunnel CNAME directly
+// for concrete-listener Gateways. Annotation drift (cloudflare.io/adopt,
 // cloudflare.io/zone-ref, etc.) propagates to the emitted CR because
 // EmitDNSRecord uses SSA.
 //
@@ -277,12 +301,12 @@ func firstListenerHostname(gw *gwv1.Gateway) string {
 //
 // Operator-edits-win: a user `kubectl edit` on the emitted CR will be
 // reverted on the next reconcile.
-func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, gwApex string, gw *gwv1.Gateway) error {
+func (r *HTTPRouteSourceReconciler) emitChainDNSRecord(ctx context.Context, rt *gwv1.HTTPRoute, hostname, chainContent string, gw *gwv1.Gateway) error {
 	return EmitDNSRecord(ctx, r.Client, r.Scheme, EmitOpts{
 		Owner:       rt,
 		OwnerKind:   "HTTPRoute",
 		Hostname:    hostname,
-		Content:     gwApex,
+		Content:     chainContent,
 		Annotations: inheritedAnnotations(rt.GetAnnotations(), gw),
 	})
 }

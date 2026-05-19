@@ -19,12 +19,14 @@ package tunnel
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -112,13 +114,15 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 	// annotation-resolved port (80 here, from the Service's first port).
 	require.Equal(t, "http://gw-svc.gw-ns.svc.cluster.local:80", snap[0].Service)
 
-	// DNSRecord CR emitted: CNAME notes.example.com → external.example.com (chain hop).
+	// DNSRecord CR emitted: CNAME notes.example.com → tunnel CNAME (chain hop).
+	// Bug D behavior change: concrete-listener no-override path chains directly
+	// to the tunnel CNAME (not the listener hostname).
 	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Len(t, list.Items, 1)
 	require.Equal(t, "notes.example.com", list.Items[0].Spec.Name)
 	require.NotNil(t, list.Items[0].Spec.Content)
-	require.Equal(t, "external.example.com", *list.Items[0].Spec.Content)
+	require.Equal(t, "tnl-1.cfargotunnel.com", *list.Items[0].Spec.Content)
 	require.Equal(t, "CNAME", list.Items[0].Spec.Type)
 
 	// Parent status: Accepted=True for the tunnel-targeted parent.
@@ -437,7 +441,9 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	require.True(t, gotHostnames["b.example.com"])
 	require.True(t, gotHostnames["c.example.com"])
 
-	// DNSRecord CRs: one CNAME per hostname, all chaining to the Gateway apex.
+	// DNSRecord CRs: one CNAME per hostname, all chaining to the tunnel CNAME.
+	// Bug D behavior change: concrete-listener no-override path chains directly
+	// to the tunnel CNAME (not the listener hostname).
 	var list v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &list))
 	require.Len(t, list.Items, 3, "expected one DNSRecord CR per hostname")
@@ -445,7 +451,7 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	for _, dr := range list.Items {
 		require.Equal(t, "CNAME", dr.Spec.Type)
 		require.NotNil(t, dr.Spec.Content)
-		require.Equal(t, "external.example.com", *dr.Spec.Content, "every record chains to the gateway apex")
+		require.Equal(t, "tnl-1.cfargotunnel.com", *dr.Spec.Content, "every record chains to the tunnel CNAME directly")
 		gotNames[dr.Spec.Name] = *dr.Spec.Content
 	}
 	require.Contains(t, gotNames, "a.example.com")
@@ -758,6 +764,185 @@ func TestHTTPRouteSource_NoHostnameReason(t *testing.T) {
 	// The message must not mislead operators into thinking rules were dropped.
 	require.NotContains(t, acceptedCond.Message, "all rules dropped",
 		"message must not claim rules were dropped when the issue is missing hostnames")
+}
+
+// TestHTTPRouteChain_ValidOverride asserts that when the parent Gateway carries a
+// valid cloudflare.io/gateway-apex annotation, the chain DNSRecord uses that
+// override host as its CNAME content — even when all listeners are wildcards.
+// This is the Bug D fix: a wildcard-only Gateway with a gateway-apex override
+// must NOT emit a wildcard CNAME content (which would cause Cloudflare 9007).
+func TestHTTPRouteChain_ValidOverride(t *testing.T) {
+	// Gateway with a wildcard listener AND a valid gateway-apex annotation.
+	wild := gwv1.Hostname("*.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "gw-ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "gw-ns/gw-svc",
+				conventions.AnnotationGatewayApex:    "external.example.com",
+			},
+		},
+		Spec: gwv1.GatewaySpec{
+			Listeners: []gwv1.Listener{{
+				Name: "http", Hostname: &wild, Port: 80, Protocol: gwv1.HTTPProtocolType,
+			}},
+		},
+	}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+	}
+	gwSvc := mkGwSvc("gw-svc", "gw-ns")
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"jellyfin.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}},
+			},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	rec := record.NewFakeRecorder(8)
+	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+	require.NoError(t, err)
+
+	var list v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &list))
+	require.Len(t, list.Items, 1, "one chain DNSRecord must be emitted")
+	require.NotNil(t, list.Items[0].Spec.Content)
+	require.Equal(t, "external.example.com", *list.Items[0].Spec.Content,
+		"chain content must be the gateway-apex override, not a wildcard")
+	require.Equal(t, "CNAME", list.Items[0].Spec.Type)
+}
+
+// TestHTTPRouteChain_NoOverride_ConcreteListener_ChainsToTunnelCNAME asserts
+// that when the parent Gateway has a concrete (non-wildcard) listener and no
+// gateway-apex annotation, the chain DNSRecord's content is the tunnel CNAME —
+// not the listener hostname. This is the intended behavior change in Bug D:
+// concrete-listener chain target is now the tunnel CNAME (direct), not a
+// double-hop via the listener hostname.
+func TestHTTPRouteChain_NoOverride_ConcreteListener_ChainsToTunnelCNAME(t *testing.T) {
+	concrete := gwv1.Hostname("app.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "gw-ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "gw-ns/gw-svc",
+				// No gateway-apex annotation.
+			},
+		},
+		Spec: gwv1.GatewaySpec{
+			Listeners: []gwv1.Listener{{
+				Name: "http", Hostname: &concrete, Port: 80, Protocol: gwv1.HTTPProtocolType,
+			}},
+		},
+	}
+	const tunnelCNAME = "tnl-2.cfargotunnel.com"
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: tunnelCNAME},
+	}
+	gwSvc := mkGwSvc("gw-svc", "gw-ns")
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"app.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}},
+			},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache()}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+	require.NoError(t, err)
+
+	var list v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &list))
+	require.Len(t, list.Items, 1, "one chain DNSRecord must be emitted")
+	require.NotNil(t, list.Items[0].Spec.Content)
+	require.Equal(t, tunnelCNAME, *list.Items[0].Spec.Content,
+		"concrete-listener no-override: chain content must be the tunnel CNAME (direct), not the listener hostname")
+}
+
+// TestHTTPRouteChain_WildcardOnly_NoOverride_BlockedNoEmit asserts that when
+// the parent Gateway has ONLY wildcard listeners and no gateway-apex annotation,
+// the route controller emits NO chain DNSRecord, fires a Warning event with
+// reason GatewayApexRequired, and returns a bounded RequeueAfter (no hot-loop).
+// This is the core Bug D fix.
+func TestHTTPRouteChain_WildcardOnly_NoOverride_BlockedNoEmit(t *testing.T) {
+	wild := gwv1.Hostname("*.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "gw-ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "gw-ns/gw-svc",
+				// No gateway-apex annotation — wildcard-only, blocked.
+			},
+		},
+		Spec: gwv1.GatewaySpec{
+			Listeners: []gwv1.Listener{{
+				Name: "http", Hostname: &wild, Port: 80, Protocol: gwv1.HTTPProtocolType,
+			}},
+		},
+	}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
+	}
+	gwSvc := mkGwSvc("gw-svc", "gw-ns")
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"jellyfin.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: ptrNs("gw-ns")}},
+			},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	base := fake.NewClientBuilder().WithScheme(rtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
+		WithStatusSubresource(&gwv1.HTTPRoute{}, &v2alpha1.CloudflareTunnel{}, &v2alpha1.CloudflareDNSRecord{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	rec := record.NewFakeRecorder(8)
+	r := &HTTPRouteSourceReconciler{Client: c, Scheme: rtScheme(t), Cache: tunnelsynth.NewCache(), Recorder: rec}
+	result, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
+	require.NoError(t, err, "blocked path must not return an error (no hot-loop retry)")
+
+	// No chain DNSRecord emitted.
+	var list v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &list))
+	require.Empty(t, list.Items, "no chain DNSRecord must be emitted for wildcard-only gateway without apex annotation")
+
+	// RequeueAfter must be set (bounded, non-zero) to avoid infinite hot-loop.
+	require.Greater(t, result.RequeueAfter, time.Duration(0),
+		"blocked path must set a positive RequeueAfter to avoid hot-loop")
+
+	// A Warning event with reason GatewayApexRequired must be recorded.
+	select {
+	case ev := <-rec.Events:
+		require.Contains(t, ev, conventions.ReasonGatewayApexRequired,
+			"event must carry GatewayApexRequired reason")
+	default:
+		t.Fatal("expected a Warning event with reason GatewayApexRequired")
+	}
 }
 
 func TestFirstListenerHostname_IsLexicographicallyStable(t *testing.T) {
