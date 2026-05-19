@@ -946,3 +946,231 @@ func TestGatewaySource_InvalidOverride_WarnsAndPerListener(t *testing.T) {
 
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)
+
+// ---------------------------------------------------------------------------
+// Bug 1 — Gateway listener HTTPS-wins dedup + scheme override + Defaults
+// surfacing. The HTTP+HTTPS sibling-listener case (the live failure mode) is
+// the headline scenario: a single hostname declared on both HTTP and HTTPS
+// listeners must collapse to ONE contribution carrying the HTTPS scheme. Same
+// applies to the cloudflare.io/scheme override and the
+// cloudflare.io/{no-tls-verify,origin-server-name} read-through.
+// ---------------------------------------------------------------------------
+
+// makeBugOneGw builds a Gateway opted in to the tunnel with the supplied
+// listener slice + optional extra annotations. Keeps each table-row terse.
+func makeBugOneGw(name, ns, gwSvcRef string, listeners []gwv1.Listener, extraAnn map[string]string) *gwv1.Gateway {
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: gwSvcRef,
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: listeners},
+	}
+	for k, v := range extraAnn {
+		gw.Annotations[k] = v
+	}
+	return gw
+}
+
+// reconcileBugOneGw is a small test scaffold: wires the fake client + a
+// pre-created tunnel and runs one reconcile against the supplied Gateway.
+// Returns the cache snapshot + the emitted DNSRecord list.
+func reconcileBugOneGw(t *testing.T, gw *gwv1.Gateway, svcPort int32) ([]tunnelsynth.ContributionWithSource, []v2alpha1.CloudflareDNSRecord) {
+	t.Helper()
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: gw.Namespace},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: svcPort}}},
+	}
+	preTun := gwPreCreatedTunnel("cf-"+gw.Namespace+"-edge", gw.Namespace)
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	cache := tunnelsynth.NewCache()
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache,
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}})
+	require.NoError(t, err)
+
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-" + gw.Namespace + "-edge"})
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	return snap, dnsList.Items
+}
+
+// listenerWithProto builds a listener with the given hostname/port/protocol.
+// Tiny helper to keep the test rows compact.
+func listenerWithProto(name, hostname string, port int32, proto gwv1.ProtocolType) gwv1.Listener {
+	hp := gwv1.Hostname(hostname)
+	return gwv1.Listener{
+		Name:     gwv1.SectionName(name),
+		Hostname: &hp,
+		Port:     gwv1.PortNumber(port),
+		Protocol: proto,
+	}
+}
+
+// T2.1 HTTP-only listener → one http:// contribution.
+func TestGatewaySource_BugOne_HTTPOnlyListener(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("http", "a.example.com", 80, gwv1.HTTPProtocolType),
+	}, nil)
+	snap, _ := reconcileBugOneGw(t, gw, 80)
+	require.Len(t, snap, 1)
+	require.Equal(t, "a.example.com", snap[0].Hostname)
+	require.True(t, strings.HasPrefix(snap[0].Service, "http://"), "expected http:// scheme, got %s", snap[0].Service)
+	require.False(t, strings.HasPrefix(snap[0].Service, "https://"), "must not be https://")
+}
+
+// T2.2 HTTPS-only listener → one https:// contribution.
+func TestGatewaySource_BugOne_HTTPSOnlyListener(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, nil)
+	snap, _ := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, snap, 1)
+	require.Equal(t, "a.example.com", snap[0].Hostname)
+	require.True(t, strings.HasPrefix(snap[0].Service, "https://"), "expected https:// scheme, got %s", snap[0].Service)
+}
+
+// T2.3 HTTP + HTTPS on same hostname → ONE https:// contribution.
+// This is the headline live failure mode: today both contribs are appended and
+// the resolver's same-source tiebreak picks the first (HTTP) — cloudflared then
+// dials http://envoy:443 and gets a connection reset on the TLS listener.
+func TestGatewaySource_BugOne_HTTPAndHTTPSOnSameHost_CollapsesToHTTPS(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		// Order matters for the regression: HTTP first, HTTPS second — mirrors
+		// the user's live Gateway where HTTP listed before HTTPS used to win.
+		listenerWithProto("http", "a.example.com", 80, gwv1.HTTPProtocolType),
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, nil)
+	snap, _ := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, snap, 1, "HTTP+HTTPS sibling listeners must collapse to ONE contribution; got %+v", snap)
+	require.Equal(t, "a.example.com", snap[0].Hostname)
+	require.True(t, strings.HasPrefix(snap[0].Service, "https://"),
+		"HTTPS must win over HTTP for the same hostname; got %s", snap[0].Service)
+}
+
+// T2.4 cloudflare.io/scheme=http forces http even when an HTTPS listener exists.
+func TestGatewaySource_BugOne_SchemeOverrideHTTP(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, map[string]string{
+		conventions.AnnotationScheme: "http",
+	})
+	snap, _ := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, snap, 1)
+	require.True(t, strings.HasPrefix(snap[0].Service, "http://"),
+		"scheme=http override must force http even with HTTPS listener; got %s", snap[0].Service)
+	require.False(t, strings.HasPrefix(snap[0].Service, "https://"))
+}
+
+// T2.5 cloudflare.io/scheme=https forces https even when only HTTP listener exists.
+func TestGatewaySource_BugOne_SchemeOverrideHTTPS(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("http", "a.example.com", 80, gwv1.HTTPProtocolType),
+	}, map[string]string{
+		conventions.AnnotationScheme: "https",
+	})
+	snap, _ := reconcileBugOneGw(t, gw, 80)
+	require.Len(t, snap, 1)
+	require.True(t, strings.HasPrefix(snap[0].Service, "https://"),
+		"scheme=https override must force https even with HTTP-only listener; got %s", snap[0].Service)
+}
+
+// T2.6 Different hostnames per listener (HTTP a.x.com, HTTPS b.x.com) → two
+// contributions, each with its own listener-derived scheme.
+func TestGatewaySource_BugOne_DistinctHostnames_PreservedSeparately(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("http", "a.x.com", 80, gwv1.HTTPProtocolType),
+		listenerWithProto("https", "b.x.com", 443, gwv1.HTTPSProtocolType),
+	}, nil)
+	snap, _ := reconcileBugOneGw(t, gw, 80)
+	require.Len(t, snap, 2)
+	// Cache snapshot is sorted by hostname (Cache.Snapshot already sorts), so
+	// a.x.com comes first.
+	byHost := map[string]string{}
+	for _, c := range snap {
+		byHost[c.Hostname] = c.Service
+	}
+	require.True(t, strings.HasPrefix(byHost["a.x.com"], "http://"),
+		"a.x.com (HTTP listener) must keep http scheme; got %s", byHost["a.x.com"])
+	require.True(t, strings.HasPrefix(byHost["b.x.com"], "https://"),
+		"b.x.com (HTTPS listener) must keep https scheme; got %s", byHost["b.x.com"])
+}
+
+// T2.7 cloudflare.io/origin-server-name on the Gateway threads into the emitted
+// contribution as a non-nil *string.
+func TestGatewaySource_BugOne_OriginServerNameSurfaced(t *testing.T) {
+	const want = "envoy-internal.example.com"
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, map[string]string{
+		conventions.AnnotationOriginServerName: want,
+	})
+	snap, _ := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, snap, 1)
+	require.NotNil(t, snap[0].OriginServerName, "OriginServerName must be non-nil when annotation set")
+	require.Equal(t, want, *snap[0].OriginServerName)
+}
+
+// T2.8 cloudflare.io/no-tls-verify=true on the Gateway threads into the emitted
+// contribution as a non-nil *bool == true.
+func TestGatewaySource_BugOne_NoTLSVerifySurfaced(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, map[string]string{
+		conventions.AnnotationNoTLSVerify: "true",
+	})
+	snap, _ := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, snap, 1)
+	require.NotNil(t, snap[0].NoTLSVerify, "NoTLSVerify must be non-nil when annotation=true")
+	require.True(t, *snap[0].NoTLSVerify, "NoTLSVerify must be true")
+}
+
+// T2.9 DNSRecord emit count is one-per-hostname even when HTTP+HTTPS sibling
+// listeners declare the same hostname. The contribution collapse must not
+// change DNSRecord cardinality (already hostname-deduped via the desired map,
+// but this is the lockstep regression).
+func TestGatewaySource_BugOne_DNSRecordCardinalityUnchanged(t *testing.T) {
+	gw := makeBugOneGw("gw", "ns", "ns/gw-svc", []gwv1.Listener{
+		listenerWithProto("http", "a.example.com", 80, gwv1.HTTPProtocolType),
+		listenerWithProto("https", "a.example.com", 443, gwv1.HTTPSProtocolType),
+	}, nil)
+	_, dns := reconcileBugOneGw(t, gw, 443)
+	require.Len(t, dns, 1, "HTTP+HTTPS sibling listeners must produce exactly ONE DNSRecord (one per hostname)")
+	require.Equal(t, "a.example.com", dns[0].Spec.Name)
+}
+
+// T2.10 Two reconciles produce byte-identical Cache.Snapshot contribution
+// ordering — deterministic emit pass, no map-iteration order leaking through.
+// Build two independent reconcilers against IDENTICAL Gateways (multiple
+// hostnames) and compare the snapshots field-by-field.
+func TestGatewaySource_BugOne_DeterministicEmitOrder(t *testing.T) {
+	listeners := []gwv1.Listener{
+		// Deliberately out-of-sorted-order to make sure the emit pass sorts
+		// (and isn't merely getting "lucky" from input order).
+		listenerWithProto("https-z", "z.example.com", 443, gwv1.HTTPSProtocolType),
+		listenerWithProto("https-a", "a.example.com", 443, gwv1.HTTPSProtocolType),
+		listenerWithProto("https-m", "m.example.com", 443, gwv1.HTTPSProtocolType),
+		listenerWithProto("http-a", "a.example.com", 80, gwv1.HTTPProtocolType),
+	}
+	gw1 := makeBugOneGw("gw", "ns", "ns/gw-svc", listeners, nil)
+	snap1, _ := reconcileBugOneGw(t, gw1, 443)
+
+	gw2 := makeBugOneGw("gw", "ns", "ns/gw-svc", listeners, nil)
+	snap2, _ := reconcileBugOneGw(t, gw2, 443)
+
+	require.Equal(t, len(snap1), len(snap2), "snapshots must be the same length")
+	for i := range snap1 {
+		require.Equal(t, snap1[i].Hostname, snap2[i].Hostname,
+			"deterministic order required (i=%d): %q vs %q", i, snap1[i].Hostname, snap2[i].Hostname)
+		require.Equal(t, snap1[i].Service, snap2[i].Service,
+			"deterministic Service URL required (i=%d): %q vs %q", i, snap1[i].Service, snap2[i].Service)
+	}
+}
