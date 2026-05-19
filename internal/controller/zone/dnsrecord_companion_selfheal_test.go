@@ -285,3 +285,80 @@ func TestReconcile_ForeignCompanionGatesReadyFalse(t *testing.T) {
 	require.Equal(t, metav1.ConditionFalse, cond.Status, "Ready must be False on foreign companion")
 	require.Equal(t, conventions.ReasonOwnershipCompanionFailed, cond.Reason)
 }
+
+// TestExternalJacaudiLoop_Regression reproduces the live prod loop and proves
+// the S1 fix is load-bearing. Setup: zone "jacaudi.dev", hostname
+// "external.jacaudi.dev" (hostname ends in the zone), primary A record seeded,
+// no TxtRecordID. The cfEmulatingDNS decorator models CF's relative-name
+// zone-append so a companion name that does NOT end in the zone is stored
+// zone-appended and the operator's exact-name list cannot find it (the exact
+// production failure pre-S1).
+//
+// With the SHIPPED scheme (cf-txt.<hostname>) the companion name already ends
+// in the zone → zone-append is a no-op → exact-list finds it → convergence:
+// at most ONE companion CreateRecord, then steady-state.
+//
+// Mutation non-vacuity check: see the instructions in the plan — temporarily
+// revert AffixName to the legacy scheme; this test MUST fail (the companion
+// gets zone-appended, list misses, and Create is attempted again). Restore
+// AffixName; this test MUST pass. Do NOT commit the reverted state.
+func TestExternalJacaudiLoop_Regression(t *testing.T) {
+	t.Setenv("CLOUDFLARE_API_TOKEN", "t")
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+	const zoneID, zoneDomain, host = "z1", "jacaudi.dev", "external.jacaudi.dev"
+	s := zoneTestScheme(t)
+	m := mock.New()
+	dec := &cfEmulatingDNS{inner: m.DNS, Canonicalize: true, ZoneDomain: zoneDomain}
+
+	primaryID := seedARecord(t, m, zoneID, host, "1.2.3.4")
+	content := "1.2.3.4"
+	rec := &v2alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ext", Namespace: "network",
+			Finalizers: []string{conventions.FinalizerName},
+		},
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
+			Name: host, Type: "A", Content: &content, ZoneID: zoneID,
+		},
+	}
+	fc := fake.NewClientBuilder().WithScheme(s).WithObjects(rec).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}).Build()
+	rec.Status.RecordID = primaryID
+	rec.Status.CurrentContent = content
+	require.NoError(t, fc.Status().Update(context.Background(), rec))
+	r := &CloudflareDNSRecordReconciler{
+		Client: fc, Scheme: s,
+		DNSClientFn: func(_ cloudflare.Credentials) (cloudflare.DNSClient, error) { return dec, nil },
+		IPResolver:  ipresolver.NewResolver(),
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "ext", Namespace: "network"}}
+	for i := 0; i < 5; i++ {
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err, "reconcile %d must not error", i)
+	}
+
+	// Key convergence assertions:
+	var got v2alpha1.CloudflareDNSRecord
+	require.NoError(t, fc.Get(context.Background(), req.NamespacedName, &got))
+	require.NotEmpty(t, got.Status.TxtRecordID, "companion txtRecordID must be set")
+	cond := findReadyCondition(got.Status.Conditions)
+	require.NotNil(t, cond)
+	require.Equal(t, metav1.ConditionTrue, cond.Status, "Ready=True after convergence")
+
+	// LOAD-BEARING: the companion must be findable by the exact AffixName query
+	// (the name the operator uses to list-by-name). With the shipped scheme the
+	// companion name ends in the zone → zoneAppend is a no-op → stored under the
+	// exact queried name → list finds it. With the legacy scheme the companion
+	// name does NOT end in the zone → zoneAppend fires on write → stored under
+	// name+"."+zone → list queries the un-appended form → empty → assertion FAILS.
+	// This is the exact production failure that S1 fixes; this assertion is the
+	// mutation discriminator.
+	companionName := cloudflare.AffixName(txtAffix, host)
+	listedRecs, lerr := m.DNS.ListRecordsByNameAndType(context.Background(), zoneID, companionName, "TXT")
+	require.NoError(t, lerr)
+	require.Len(t, listedRecs, 1,
+		"companion must be findable by exact AffixName query %q (shipped scheme: zoneAppend is a no-op; "+
+			"legacy scheme: zoneAppend fires on write → companion stored zone-appended → list misses → FAIL). "+
+			"This is the production failure S1 fixes.",
+		companionName)
+}

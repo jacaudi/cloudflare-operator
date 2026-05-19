@@ -100,6 +100,19 @@ import (
 type cfEmulatingDNS struct {
 	inner        cloudflare.DNSClient
 	Canonicalize bool
+	// ZoneDomain (optional): when non-empty, models Cloudflare's relative-
+	// name zone-append: any record whose POSTed Name does not end in the
+	// zone is stored as Name+"."+ZoneDomain, and only write operations
+	// (CreateRecord/UpdateRecord) apply the zone-append before delegating
+	// to the inner mock. Default "" preserves the pre-T6 behavior used by
+	// the existing quote-bug integration tests.
+	//
+	// IMPORTANT: ListRecordsByNameAndType does NOT zone-append — this
+	// asymmetry models the exact production gap that hid S1's bug: the
+	// operator queries by the un-appended name, but Cloudflare stored the
+	// zone-appended form → empty list → 81058 loop. Applying zone-append
+	// symmetrically on List would mask the bug.
+	ZoneDomain string
 }
 
 // Compile-time interface assertion: cfEmulatingDNS must implement DNSClient fully.
@@ -117,6 +130,27 @@ func encodeTXTContent(recordType, content string) string {
 		return cloudflare.EncodeTXT(content)
 	}
 	return content
+}
+
+// zoneAppend models Cloudflare's behavior for record names that don't end in
+// the zone: it appends "."+ZoneDomain. Pass-through when ZoneDomain=="" or
+// name already ends in (or equals) ZoneDomain. This is the production gap
+// that hid S1's external-jacaudi 81058 root cause: the in-memory mock stored
+// records verbatim, so the operator's mis-derived companion name worked in
+// tests but not against real CF.
+//
+// ONLY applied on writes (CreateRecord/UpdateRecord). ListRecordsByNameAndType
+// does NOT zone-append — the asymmetry is intentional: it models the mismatch
+// between how CF stores (zone-appended) and how the operator queries (exact
+// un-appended name). Without this asymmetry the decorator would mask the bug.
+func (c *cfEmulatingDNS) zoneAppend(name string) string {
+	if c.ZoneDomain == "" {
+		return name
+	}
+	if name == c.ZoneDomain || strings.HasSuffix(name, "."+c.ZoneDomain) {
+		return name
+	}
+	return name + "." + c.ZoneDomain
 }
 
 // applyTXTEmulation mirrors mapRecordResponse's TXT gate on the read path: when
@@ -159,16 +193,21 @@ func (c *cfEmulatingDNS) ListRecordsByNameAndType(ctx context.Context, zoneID, n
 	return out, nil
 }
 
-// CreateRecord applies EncodeTXT for TXT records (mirrors wireContent), then
-// delegates to the inner client. The mock therefore stores presentation form.
+// CreateRecord applies zoneAppend to the record name (models CF's relative-name
+// zone-append on POST) and EncodeTXT for TXT content (mirrors wireContent), then
+// delegates to the inner client. The mock therefore stores presentation form with
+// the zone-appended name, as Cloudflare would.
 func (c *cfEmulatingDNS) CreateRecord(ctx context.Context, zoneID string, params cloudflare.DNSRecordParams) (*cloudflare.DNSRecord, error) {
+	params.Name = c.zoneAppend(params.Name)
 	params.Content = encodeTXTContent(params.Type, params.Content)
 	return c.inner.CreateRecord(ctx, zoneID, params)
 }
 
-// UpdateRecord applies EncodeTXT for TXT records (mirrors wireContent), then
-// delegates to the inner client. The mock therefore stores presentation form.
+// UpdateRecord applies zoneAppend to the record name (models CF's relative-name
+// zone-append on PUT) and EncodeTXT for TXT content (mirrors wireContent), then
+// delegates to the inner client.
 func (c *cfEmulatingDNS) UpdateRecord(ctx context.Context, zoneID, recordID string, params cloudflare.DNSRecordParams) (*cloudflare.DNSRecord, error) {
+	params.Name = c.zoneAppend(params.Name)
 	params.Content = encodeTXTContent(params.Type, params.Content)
 	return c.inner.UpdateRecord(ctx, zoneID, recordID, params)
 }
