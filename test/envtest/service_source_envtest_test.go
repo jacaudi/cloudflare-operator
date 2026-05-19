@@ -116,6 +116,7 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("servicesource-"+sanitizeTestName(t.Name())).
 		For(&corev1.Service{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&v2alpha1.CloudflareTunnel{},
 			handler.EnqueueRequestsFromMapFunc(tunnelToServicesTestMapFunc(mgr))).
 		Complete(svcR))
@@ -363,6 +364,96 @@ func TestServiceSourceEnvtest_NoTLSVerify_ThreadsIntoIngressEntry(t *testing.T) 
 		}
 		return false
 	}, 15*time.Second, 250*time.Millisecond, "noTLSVerify=true threaded into ingress entry for tls.example.com")
+}
+
+// TestServiceSourceEnvtest_OwnsEmittedDNSRecord_RecreatesOnOutOfBandDelete
+// closes backlog item #1(d): when the operator's emitted CloudflareDNSRecord
+// CR is deleted out-of-band, the source controller must notice and re-emit.
+// This requires .Owns(&v2alpha1.CloudflareDNSRecord{}) on the source builder
+// — the child is already controller-owner-ref'd via reconcile.SetControllerOwner
+// in EmitDNSRecord, but without .Owns the watch isn't wired.
+func TestServiceSourceEnvtest_OwnsEmittedDNSRecord_RecreatesOnOutOfBandDelete(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	fx := setupServiceEnv(t, "")
+	ctx := context.Background()
+
+	// Create the zone CR so the emitted CloudflareDNSRecord passes admission
+	// (zoneID or zoneRef is required by CEL rule on the CRD).
+	zone := &v2alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: fx.ns},
+		Spec: v2alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, fx.c.Create(ctx, zone))
+
+	// Create an annotated Service that triggers tunnel auto-create + DNSRecord
+	// emission. Pattern mirrors TestServiceSourceEnvtest_OptInAutoCreatesTunnelAndDNS.
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc-owns",
+			Namespace: fx.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "t1",
+				conventions.AnnotationHostnames:  "owns.example.com",
+				conventions.AnnotationZoneRef:    "example-com",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	require.NoError(t, fx.c.Create(ctx, svc))
+
+	// Wait for the emitted CloudflareDNSRecord (initial emit).
+	var emitted v2alpha1.CloudflareDNSRecord
+	require.Eventually(t, func() bool {
+		var list v2alpha1.CloudflareDNSRecordList
+		if err := fx.c.List(ctx, &list, client.InNamespace(fx.ns)); err != nil {
+			return false
+		}
+		for _, r := range list.Items {
+			if r.Spec.Name == "owns.example.com" {
+				emitted = r
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second, 200*time.Millisecond, "operator must emit the initial CloudflareDNSRecord for owns.example.com")
+
+	originalUID := emitted.UID
+	require.NotEmpty(t, originalUID, "initial emit must have a UID")
+
+	// Out-of-band delete the emitted CR. In production a finalizer added by
+	// the DNSRecord controller would run a CF-cleanup pass first; in this
+	// envtest there's no DNSRecord controller wired, so the CR is removed
+	// cleanly. The point under test is the SOURCE controller noticing the
+	// removal and re-emitting.
+	require.NoError(t, fx.c.Delete(ctx, &emitted))
+
+	// .Owns must trigger a source reconcile on the child delete event →
+	// EmitDNSRecord SSAs the CR back into existence (with a NEW UID).
+	// Without .Owns, this Eventually times out.
+	require.Eventually(t, func() bool {
+		var list v2alpha1.CloudflareDNSRecordList
+		if err := fx.c.List(ctx, &list, client.InNamespace(fx.ns)); err != nil {
+			return false
+		}
+		for _, r := range list.Items {
+			if r.Spec.Name == "owns.example.com" && r.UID != originalUID {
+				return true
+			}
+		}
+		return false
+	}, 30*time.Second, 200*time.Millisecond,
+		"emitted CR must be re-created (new UID) after out-of-band delete; "+
+			"this requires .Owns(&v2alpha1.CloudflareDNSRecord{}) on the source builder")
 }
 
 // TestServiceSourceEnvtest_NameTooLong_RejectedNoTunnelCreated covers

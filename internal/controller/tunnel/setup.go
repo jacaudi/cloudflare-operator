@@ -189,6 +189,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("service-source").
 		For(&corev1.Service{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToServices(mgr))).
 		Complete(svcR); err != nil {
 		return fmt.Errorf("setup ServiceSource: %w", err)
