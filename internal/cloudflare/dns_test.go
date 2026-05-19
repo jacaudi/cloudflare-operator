@@ -134,3 +134,17 @@ func TestMapRecordResponse_TXTAlreadyLogicalPassthrough(t *testing.T) {
 		})
 	}
 }
+
+// TestRecordTypeTXT_InSyncWithSDKReadConstant guards the read/write gate
+// symmetry: the write path gates on the local recordTypeTXT constant while
+// mapRecordResponse (read) gates on the cloudflare-go SDK constant
+// dns.RecordResponseTypeTXT. They are coupled only by convention. If a future
+// SDK change ever altered that value, the write side would silently stop
+// RFC1035-encoding TXT content while the read side kept decoding it —
+// silently re-introducing the Cloudflare quote-bearing TXT bug with no other
+// failing test. This assertion makes that drift fail loudly instead.
+func TestRecordTypeTXT_InSyncWithSDKReadConstant(t *testing.T) {
+	require.Equal(t, string(dns.RecordResponseTypeTXT), recordTypeTXT,
+		"write-side recordTypeTXT must equal the SDK read-side dns.RecordResponseTypeTXT; "+
+			"if this fails, an SDK change desynced the TXT read/write gates")
+}
