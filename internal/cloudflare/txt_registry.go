@@ -56,18 +56,38 @@ type RegistryPayload struct {
 //
 // All-but-last dotted segments of name are joined with hyphens and
 // appended to prefix, then the last segment becomes the zone label.
+// A wildcard label ("*") is mapped to the "_wildcard" sentinel so the
+// companion name is never a literal-'*' DNS name.
 // For example:
 //
 //	AffixName("cf-txt", "test")        → "cf-txt.test"
 //	AffixName("cf-txt", "foo.test")    → "cf-txt-foo.test"
 //	AffixName("cf-txt", "foo.bar.test") → "cf-txt-foo-bar.test"
+//	AffixName("cf-txt", "*.example.com") → "cf-txt-_wildcard-example.com"
 func AffixName(prefix, name string) string {
 	if !strings.ContainsRune(name, '.') {
-		return prefix + "." + name
+		return prefix + "." + sanitizeLabel(name)
 	}
 	segs := strings.Split(name, ".")
+	for i, s := range segs {
+		segs[i] = sanitizeLabel(s)
+	}
 	head := strings.Join(segs[:len(segs)-1], "-")
 	return prefix + "-" + head + "." + segs[len(segs)-1]
+}
+
+// sanitizeLabel maps a wildcard label ("*") to a reserved, asterisk-free
+// sentinel so the derived companion name is never a literal-'*' name (which
+// Cloudflare warns about) and is never itself a '*.' wildcard. Exact-equality
+// match: only a standalone "*" label is rewritten; no legitimate hostname has
+// a label equal to "*". Leading underscore keeps the sentinel out of the
+// normal-hostname space (collision with a real "_wildcard.<zone>" is a
+// documented accepted limitation — see design §8).
+func sanitizeLabel(label string) string {
+	if label == "*" {
+		return "_wildcard"
+	}
+	return label
 }
 
 // ErrUnrecognizedCodec is returned by codec decoders when the TXT

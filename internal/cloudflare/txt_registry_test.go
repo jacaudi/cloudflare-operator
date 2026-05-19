@@ -189,3 +189,26 @@ func TestCodecKindFor(t *testing.T) {
 	require.Equal(t, "plaintext", CodecKindFor(`{"version":1}`))
 	require.Equal(t, "plaintext", CodecKindFor(""))
 }
+
+func TestAffixName_WildcardLeadingLabel(t *testing.T) {
+	require.Equal(t, "cf-txt-_wildcard-example.com", AffixName("cf-txt", "*.example.com"))
+	require.Equal(t, "cf-txt-_wildcard-foo-bar.test", AffixName("cf-txt", "*.foo.bar.test"))
+}
+
+func TestAffixName_WildcardApexBareStar(t *testing.T) {
+	require.Equal(t, "cf-txt._wildcard", AffixName("cf-txt", "*"))
+}
+
+func TestAffixName_NonWildcardRegressionUnchanged(t *testing.T) {
+	require.Equal(t, "cf-txt.test", AffixName("cf-txt", "test"))
+	require.Equal(t, "cf-txt-foo.test", AffixName("cf-txt", "foo.test"))
+	require.Equal(t, "cf-txt-foo-bar.test", AffixName("cf-txt", "foo.bar.test"))
+}
+
+func TestAffixName_NeverEmitsAsteriskOrWildcardPrefix(t *testing.T) {
+	for _, name := range []string{"*.example.com", "*", "*.a.b.c.d", "foo.bar.test", "test"} {
+		out := AffixName("cf-txt", name)
+		require.NotContains(t, out, "*", "AffixName(%q) must not contain a literal '*'", name)
+		require.False(t, strings.HasPrefix(out, "*."), "AffixName(%q) must not start with '*.'", name)
+	}
+}
