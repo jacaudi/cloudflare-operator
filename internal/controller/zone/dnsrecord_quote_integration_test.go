@@ -82,18 +82,26 @@ var _ cloudflare.DNSClient = (*cfEmulatingDNS)(nil)
 // within each chunk are escaped as \" and \\ respectively (RFC 1035 §5.1),
 // so that CanonicalizeTXT can correctly decode the result.
 //
+// Note on chunk size: cfWire splits on the LOGICAL (pre-escape) content at
+// 255 bytes. RFC 1035 §3.3's 255-octet limit strictly applies to the on-wire
+// ESCAPED character-string, which may be longer than its logical content when
+// embedded '"' or '\' are escaped. This is intentionally simplified: the
+// operator's only >255-byte TXT payloads are base64 AES v1: envelopes and
+// JSON, which contain no '"' or '\' to escape, so a logical-255 chunk equals
+// the on-wire escaped length exactly and cfWire faithfully emulates
+// Cloudflare's split for the payloads under test.
+//
 // The \X (non-digit backslash escape) form is used for embedded '"' and '\'
 // rather than the RFC 1035 \DDD decimal form because it is simpler to emit
 // and is exactly what cloudflare.CanonicalizeTXT decodes at its
-// non-digit-escape path (see txt_canonical.go). cfWire is therefore the
-// precise inverse of CanonicalizeTXT for printable ASCII; both \X and \DDD
-// are valid RFC 1035 §5.1 escapes.
+// non-digit-escape path (see txt_canonical.go). Both \X and \DDD are valid
+// RFC 1035 §5.1 escapes.
 func cfWire(content string) string {
 	if content == "" {
 		return `""`
 	}
 	var b strings.Builder
-	for i := 0; i < len(content); i += 255 { // RFC 1035 §3.3 <character-string> max length
+	for i := 0; i < len(content); i += 255 { // chunk the LOGICAL content at 255 bytes (see note in cfWire doc)
 		end := i + 255
 		if end > len(content) {
 			end = len(content)
