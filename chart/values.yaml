@@ -37,6 +37,16 @@ controllers:
     # current behavior. Manually-declared CloudflareTunnel CRs are unaffected.
     connector:
       resources: {}
+      # cloudflared connector image override for tunnels this operator
+      # auto-creates. Empty {} = use the operator's Renovate-tracked
+      # compile-time pin. Per-axis: set only `repository` to use a mirror /
+      # ECR pull-through cache (inherits the pinned tag) — the recommended
+      # Docker Hub rate-limit mitigation. Manually-declared CloudflareTunnel
+      # CRs are unaffected (use spec.connector.image).
+      image: {}
+      # image:
+      #   repository: <your-registry>/cloudflare/cloudflared
+      #   tag: "2026.5.0"
 
 # Operator-level default credentials — meta-operator env (CLOUDFLARE_API_TOKEN
 # / CLOUDFLARE_ACCOUNT_ID) and the coordinates it propagates to spawned

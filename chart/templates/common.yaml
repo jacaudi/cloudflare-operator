@@ -19,6 +19,9 @@
 {{- if .Values.controllers.tunnel.connector.resources }}
 {{- $args = append $args (printf "--tunnel-connector-resources=%s" (toJson .Values.controllers.tunnel.connector.resources)) }}
 {{- end }}
+{{- if .Values.controllers.tunnel.connector.image }}
+{{- $args = append $args (printf "--tunnel-connector-image=%s" (toJson .Values.controllers.tunnel.connector.image)) }}
+{{- end }}
 {{- $env := dict
     "CLOUDFLARE_API_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $credSecret "key" .Values.credentials.tokenKey)))
     "CLOUDFLARE_ACCOUNT_ID" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $credSecret "key" .Values.credentials.accountIDKey))) -}}
