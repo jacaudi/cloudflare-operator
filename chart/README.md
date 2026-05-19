@@ -342,6 +342,27 @@ label equal to `*`, and a real `_wildcard` label is rare. Avoid managing a liter
 `_wildcard.<zone>` record alongside a `*.<zone>` wildcard in the same zone with the same
 companion prefix.
 
+### TXT ownership companion — self-heal & name scheme (S1, 2026-05)
+
+The TXT ownership companion record name scheme changed so the companion is
+always a real subdomain of the same zone as the record it protects
+(`cf-txt.<hostname>`, e.g. `cf-txt.external.example.com`). The previous scheme
+could produce a name that did not end in the zone, which Cloudflare stored
+zone-appended and the operator could then never find — causing a permanent
+"identical record already exists" (API 81058) reconcile loop.
+
+On upgrade the operator self-heals forward (it creates the correctly-named
+companion) and **best-effort deletes the stale legacy-named companion only
+when it can prove that companion is its own** (the decoded ownership payload
+matches the record's identity) and only on records that reference their zone
+via `zoneRef`. Records that reference the zone by literal `zoneID` keep the
+old orphaned companion (harmless DNS clutter); delete it manually if desired.
+
+A record whose primary DNS is healthy but whose ownership companion cannot be
+reconciled (foreign owner, undecodable, or a Cloudflare write error) now
+reports `Ready=False` with reason `OwnershipCompanionFailed` and a Warning
+event, instead of misreporting `Ready=True "DNS record synced"`.
+
 ---
 
 ## Renovate tracking
