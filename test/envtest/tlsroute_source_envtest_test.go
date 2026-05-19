@@ -129,6 +129,7 @@ func setupTLSRouteEnv(t *testing.T) *tlsRouteEnvFixture {
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("tlsroutesource-"+sanitizeTestName(t.Name())).
 		For(&gwv1a2.TLSRoute{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&gwv1.Gateway{},
 			handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutesTestMapFunc(mgr))).
 		Complete(rtR))

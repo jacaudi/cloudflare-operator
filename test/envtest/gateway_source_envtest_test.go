@@ -108,6 +108,7 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("gatewaysource-"+sanitizeTestName(t.Name())).
 		For(&gwv1.Gateway{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&v2alpha1.CloudflareTunnel{},
 			handler.EnqueueRequestsFromMapFunc(tunnelToGatewaysTestMapFunc(mgr))).
 		Complete(gwR))

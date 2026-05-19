@@ -127,6 +127,7 @@ func setupHTTPRouteEnv(t *testing.T) *httpRouteEnvFixture {
 	require.NoError(t, ctrl.NewControllerManagedBy(mgr).
 		Named("httproutesource-"+sanitizeTestName(t.Name())).
 		For(&gwv1.HTTPRoute{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&gwv1.Gateway{},
 			handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutesTestMapFunc(mgr))).
 		Complete(rtR))

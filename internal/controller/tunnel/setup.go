@@ -213,6 +213,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-source").
 		For(&gwv1.Gateway{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToGateways(mgr))).
 		Complete(gwR); err != nil {
 		return fmt.Errorf("setup GatewaySource: %w", err)
@@ -232,6 +233,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("httproute-source").
 		For(&gwv1.HTTPRoute{}).
+		Owns(&v2alpha1.CloudflareDNSRecord{}).
 		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutes(mgr))).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToHTTPRoutes(mgr))).
 		Complete(httpR); err != nil {
@@ -253,6 +255,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		if err := ctrl.NewControllerManagedBy(mgr).
 			Named("tlsroute-source").
 			For(&gwv1a2.TLSRoute{}).
+			Owns(&v2alpha1.CloudflareDNSRecord{}).
 			Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr))).
 			Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
 			Complete(tlsR); err != nil {
