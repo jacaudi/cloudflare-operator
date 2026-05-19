@@ -807,5 +807,142 @@ func TestGatewaySource_TLSListenerEmitsApexCNAME(t *testing.T) {
 		"apex record Content must be the tunnel CNAME (proving it's the apex->tunnel record, not a route->apex one)")
 }
 
+// TestGatewaySource_ValidOverride_SingleApex: a Gateway with a wildcard HTTP
+// listener + a valid cloudflare.io/gateway-apex annotation must emit exactly
+// ONE CloudflareDNSRecord (for the apex override hostname, not the wildcard),
+// and the ingress cache contribution must still carry the original wildcard
+// hostname (cloudflared routes the real listener).
+func TestGatewaySource_ValidOverride_SingleApex(t *testing.T) {
+	// Gateway with a *.example.com HTTP listener + valid apex override.
+	hp := gwv1.Hostname("*.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "ns/gw-svc",
+				conventions.AnnotationGatewayApex:    "external.example.com",
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "http", Hostname: &hp, Port: 80, Protocol: gwv1.HTTPProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	cache := tunnelsynth.NewCache()
+	rec := record.NewFakeRecorder(8)
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
+	require.NoError(t, err)
+
+	// Exactly ONE DNSRecord emitted — the apex override, NOT the wildcard.
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "valid apex override must collapse emission to exactly one record")
+
+	dr := dnsList.Items[0]
+	require.Equal(t, "external.example.com", dr.Spec.Name,
+		"emitted record must be for the override apex hostname")
+	require.NotNil(t, dr.Spec.Content)
+	require.Equal(t, "tun-abc.cfargotunnel.com", *dr.Spec.Content,
+		"apex record Content must be the tunnel CNAME")
+
+	// No record named *.example.com.
+	for _, item := range dnsList.Items {
+		require.NotEqual(t, "*.example.com", item.Spec.Name,
+			"wildcard listener hostname must NOT receive a DNS record when apex override is present")
+	}
+
+	// Ingress cache contribution still carries the wildcard hostname (cloudflared
+	// routes the real listener, not the public apex override).
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "ns", Name: "cf-ns-edge"})
+	require.Len(t, snap, 1, "cache must have exactly one ingress contribution")
+	require.Equal(t, "*.example.com", snap[0].Hostname,
+		"ingress cache must still carry the original wildcard listener hostname (decoupled from DNS emission)")
+
+	// Valid apex override must NOT emit a GatewayApexInvalid warning event.
+	// A spurious Warning on the happy path would be a regression this assertion catches.
+	select {
+	case ev := <-rec.Events:
+		t.Fatalf("expected no event on valid apex override, got: %s", ev)
+	default:
+	}
+}
+
+// TestGatewaySource_InvalidOverride_WarnsAndPerListener: a Gateway with a
+// wildcard HTTP listener + an INVALID apex override (wildcard "*.bad") must
+// emit a Warning event with ReasonGatewayApexInvalid, then fall through to
+// per-listener DNS emission (*.example.com record still emitted — invalid
+// override does NOT block emission, it only affects the route chain in T2).
+func TestGatewaySource_InvalidOverride_WarnsAndPerListener(t *testing.T) {
+	hp := gwv1.Hostname("*.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "ns/gw-svc",
+				conventions.AnnotationGatewayApex:    "*.bad", // wildcard → invalid
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "http", Hostname: &hp, Port: 80, Protocol: gwv1.HTTPProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-svc", Namespace: "ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	preTun := gwPreCreatedTunnel("cf-ns-edge", "ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+	rec := record.NewFakeRecorder(16)
+	cache := tunnelsynth.NewCache()
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: cache, Recorder: rec,
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "gw"}})
+	require.NoError(t, err)
+
+	// A Warning event with ReasonGatewayApexInvalid must have been emitted.
+	found := false
+	for drained := false; !drained; {
+		select {
+		case ev := <-rec.Events:
+			if strings.Contains(ev, conventions.ReasonGatewayApexInvalid) {
+				found = true
+			}
+		default:
+			drained = true
+		}
+	}
+	require.True(t, found, "expected a Warning event with ReasonGatewayApexInvalid for wildcard apex override")
+
+	// Per-listener fallback: *.example.com record must still be emitted.
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "invalid override must fall back to per-listener emission")
+	require.Equal(t, "*.example.com", dnsList.Items[0].Spec.Name,
+		"per-listener fallback must emit the original listener hostname")
+	require.NotNil(t, dnsList.Items[0].Spec.Content)
+	require.Equal(t, "tun-abc.cfargotunnel.com", *dnsList.Items[0].Spec.Content)
+}
+
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*GatewaySourceReconciler)(nil)

@@ -259,6 +259,20 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// TLS-listener apex hostnames. TCP/UDP (and otherwise unsupported)
 	// listener hostnames are deliberately excluded — nothing routes them, so
 	// a CNAME would resolve to a black hole (IMP-2).
+	//
+	// If a valid cloudflare.io/gateway-apex override is present, collapse DNS
+	// emission to a single record for that apex hostname (CNAME → tunnel CNAME).
+	// The ingress contribs (r.Cache.Set above) are unchanged — cloudflared still
+	// routes the real listener wildcard hostnames. An invalid-but-present override
+	// emits a Warning event and falls through to per-listener emission.
+	apexHost, apexValid, apexPresent := gatewayApexOverride(&gw)
+	if apexPresent && !apexValid && r.Recorder != nil {
+		r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning,
+			conventions.ReasonGatewayApexInvalid,
+			fmt.Sprintf("cloudflare.io/gateway-apex %q is not a valid non-wildcard hostname; ignoring",
+				gw.GetAnnotations()[conventions.AnnotationGatewayApex]))
+	}
+
 	desired := make(map[string]struct{}, len(contribs)+len(tlsApexHostnames))
 	emitOne := func(h string) error {
 		if _, seen := desired[h]; seen {
@@ -270,14 +284,22 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		}
 		return nil
 	}
-	for _, cont := range contribs {
-		if err := emitOne(cont.Hostname); err != nil {
+	if apexValid {
+		// Valid override: emit exactly one apex record → tunnel CNAME.
+		// Stale per-listener records are pruned below by pruneOrphanedDNSRecords.
+		if err := emitOne(apexHost); err != nil {
 			return reconcile.Result{}, err
 		}
-	}
-	for _, h := range tlsApexHostnames {
-		if err := emitOne(h); err != nil {
-			return reconcile.Result{}, err
+	} else {
+		for _, cont := range contribs {
+			if err := emitOne(cont.Hostname); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+		for _, h := range tlsApexHostnames {
+			if err := emitOne(h); err != nil {
+				return reconcile.Result{}, err
+			}
 		}
 	}
 
