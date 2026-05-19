@@ -20,6 +20,7 @@ import (
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
 // inheritAnnotation returns the route's own value for `key` if set, falling
@@ -54,6 +55,7 @@ func inheritedAnnotations(routeAnnotations map[string]string, gw *gwv1.Gateway) 
 		conventions.AnnotationTTL,
 		conventions.AnnotationNoTLSVerify,
 		conventions.AnnotationOriginServerName,
+		conventions.AnnotationScheme,
 	}
 	out := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -62,4 +64,30 @@ func inheritedAnnotations(routeAnnotations map[string]string, gw *gwv1.Gateway) 
 		}
 	}
 	return out
+}
+
+// defaultsFromAnnotations reads the originRequest-shaped annotations off a
+// merged annotation map (typically the output of inheritedAnnotations) and
+// returns a tunnelsynth.Defaults populated for the HTTPRoute/TLSRoute
+// translator call sites.
+//
+//   - cloudflare.io/no-tls-verify is parsed via conventions.ParseTruthy.
+//     Unrecognized values (per ParseTruthy: empty string, "1", arbitrary
+//     strings) leave NoTLSVerifyDefault nil — translators then fall back to
+//     the tunnel-level default. This matches the read-from-annotation contract
+//     documented on Defaults.NoTLSVerifyDefault.
+//   - cloudflare.io/origin-server-name is read verbatim. Empty leaves the
+//     default nil.
+//   - CAPoolPath is intentionally NOT set here. It's tunnel-level state
+//     wired into Defaults at the Gateway-source layer (see gateway_source_*),
+//     not derivable from per-route annotations.
+func defaultsFromAnnotations(ann map[string]string) tunnelsynth.Defaults {
+	var d tunnelsynth.Defaults
+	if v, err := conventions.ParseTruthy(ann[conventions.AnnotationNoTLSVerify]); err == nil {
+		d.NoTLSVerifyDefault = &v
+	}
+	if s := ann[conventions.AnnotationOriginServerName]; s != "" {
+		d.OriginServerNameDefault = &s
+	}
+	return d
 }
