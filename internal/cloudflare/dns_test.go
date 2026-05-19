@@ -19,6 +19,7 @@ package cloudflare
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
@@ -87,6 +88,19 @@ func TestMapRecordResponse_NonTXTUntouched(t *testing.T) {
 	}
 	got := mapRecordResponse(r)
 	require.Equal(t, `"weird"`, got.Content, "non-TXT content must NOT be canonicalized")
+}
+
+func TestWireContent_TXTEncoded(t *testing.T) {
+	logical := `{"v":1,"k":"CloudflareDNSRecord","ns":"network","n":"x","h":"sha256:abc"}`
+	got := wireContent("TXT", logical)
+	require.Equal(t, EncodeTXT(logical), got, "TXT content must be RFC1035-encoded for the wire")
+	require.Equal(t, logical, CanonicalizeTXT(got), "must round-trip back to the logical value")
+	require.True(t, strings.HasPrefix(got, `"`) && strings.HasSuffix(got, `"`), "presentation form is quoted")
+}
+
+func TestWireContent_NonTXTUntouched(t *testing.T) {
+	require.Equal(t, "192.0.2.1", wireContent("A", "192.0.2.1"))
+	require.Equal(t, `"weird"`, wireContent("CNAME", `"weird"`), "non-TXT passes through verbatim")
 }
 
 // TestMapRecordResponse_TXTAlreadyLogicalPassthrough anchors the steady-state

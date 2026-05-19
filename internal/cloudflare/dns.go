@@ -83,7 +83,7 @@ func (c *dnsClient) CreateRecord(ctx context.Context, zoneID string, params DNSR
 	body := dns.RecordNewParamsBody{
 		Name:    cfgo.F(params.Name),
 		Type:    cfgo.F(dns.RecordNewParamsBodyType(params.Type)),
-		Content: cfgo.F(params.Content),
+		Content: cfgo.F(wireContent(params.Type, params.Content)),
 		TTL:     cfgo.F(dns.TTL(params.TTL)),
 	}
 	if params.Proxied != nil {
@@ -110,7 +110,7 @@ func (c *dnsClient) UpdateRecord(ctx context.Context, zoneID, recordID string, p
 	body := dns.RecordUpdateParamsBody{
 		Name:    cfgo.F(params.Name),
 		Type:    cfgo.F(dns.RecordUpdateParamsBodyType(params.Type)),
-		Content: cfgo.F(params.Content),
+		Content: cfgo.F(wireContent(params.Type, params.Content)),
 		TTL:     cfgo.F(dns.TTL(params.TTL)),
 	}
 	if params.Proxied != nil {
@@ -141,6 +141,23 @@ func (c *dnsClient) DeleteRecord(ctx context.Context, zoneID, recordID string) e
 		return fmt.Errorf("delete DNS record %s: %w", recordID, classifyDNSAPIErr(err))
 	}
 	return nil
+}
+
+// recordTypeTXT is the DNS record-type string for TXT records on the write
+// path. It matches dns.RecordResponseTypeTXT used by the read side
+// (mapRecordResponse); keep the two in sync.
+const recordTypeTXT = "TXT"
+
+// wireContent returns the value to send as a record's Content field. TXT
+// content is rendered into RFC 1035 presentation form (EncodeTXT) so
+// Cloudflare stores quote-bearing content losslessly; all other types pass
+// through unchanged. TXT-only inverse of the read-side CanonicalizeTXT
+// applied (also TXT-gated) in mapRecordResponse.
+func wireContent(recordType, content string) string {
+	if recordType == recordTypeTXT {
+		return EncodeTXT(content)
+	}
+	return content
 }
 
 // mapRecordResponse converts a Cloudflare SDK RecordResponse to our internal
