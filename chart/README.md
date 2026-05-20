@@ -422,6 +422,61 @@ significantly less wordy; CRs like
 `jellyfin-jellyfin-example-com-jellyfin-example-com-<hash>` collapse to
 `jellyfin-example-com-<hash>`.
 
+### Tunnel `originRequest` plumbing — controller-managed (OR, 2026-05)
+
+The tunnel controller now manages the cloudflared `originRequest` block on
+every synthesized ingress entry. Two fields are plumbed end-to-end:
+`originServerName` (the expected SAN on the origin certificate) and
+`noTLSVerify` (disable origin TLS verification).
+
+**Configuration surfaces.** Per ingress entry, the operator resolves
+`originRequest` in this order (first match wins per field):
+
+1. Route annotation on `HTTPRoute` / `TLSRoute` — `cloudflare.io/origin-server-name` / `cloudflare.io/no-tls-verify`.
+2. Gateway annotation (same keys) on the parent `Gateway`.
+3. `CloudflareTunnel.Spec.Routing.OriginRequest.{originServerName,noTLSVerify}` (tunnel-level default).
+4. Unset → no `originRequest` block on that entry.
+
+For Service-sourced entries the precedence collapses to **service annotation > Spec default > unset** (no Gateway parent).
+
+**Status reflection.** `tn.Status.observedIngress[i].originRequest` now
+mirrors what was last PUT to Cloudflare, using the same conditional
+projection rules as the read-from-Cloudflare path (`noTLSVerify` projected
+only when `true`; `originServerName` only when non-empty). Drift detection
+and PUT-skip become `originRequest`-aware automatically.
+
+**Breaking (v2alpha1).** `TunnelOriginRequest.caPool` and
+`TunnelOriginRequest.connectTimeoutSeconds` are removed. Internal types
+`cloudflare.IngressOriginRequest.CAPool` / `.ConnectTimeoutSeconds` and
+`tunnelsynth.IngressContribution.CAPoolPath` are removed. The cloudflared
+remote-config API still accepts these fields; the operator simply does not
+project them in either direction. Setting them in a CR Spec is silently
+dropped on the next write.
+
+**Migration — adopted tunnels with ghost `originRequest`.** A tunnel
+adopted via `cloudflare.io/adopt: true` may have an `originRequest` block on
+Cloudflare that has no matching source annotation or Spec default. The
+operator's behavior is two-phase:
+
+1. **On every reconcile until the next forced re-PUT** — a `DriftDetected`
+   Warning event fires (live config differs from `observedIngress`).
+2. **On the next reconcile that forces a re-PUT** (hostname/path/service
+   change, annotation flip, etc.) — the operator PUTs without
+   `originRequest`, Cloudflare clears the field, and an
+   `OriginRequestWiped` Warning event names the affected hostname.
+
+To preserve a ghost value, set `cloudflare.io/origin-server-name` on the
+source (Gateway / Route / Service) or set
+`Spec.Routing.OriginRequest.originServerName` on the CR before the next
+forced re-PUT. Same for `cloudflare.io/no-tls-verify`. Detector:
+
+```bash
+kubectl get cloudflaretunnel -A -o json | jq -r '
+  .items[] |
+  select(.status.observedIngress // [] | length > 0) |
+  "\(.metadata.namespace)/\(.metadata.name): check Cloudflare dashboard for originRequest values that may need to be expressed via Spec.Routing.OriginRequest or source annotations"'
+```
+
 ---
 
 ## Renovate tracking
