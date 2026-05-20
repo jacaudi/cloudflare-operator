@@ -18,6 +18,7 @@ package tunnel
 
 import (
 	"context"
+	"strconv"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -45,8 +46,14 @@ type EmitOpts struct {
 	// hostname (the intermediate stabilizer in the per-design §4.2 CNAME chain).
 	Content string
 	// Annotations carries optional source-object annotations that thread into
-	// the emitted CR. Recognized keys: AnnotationZoneRef, AnnotationZoneRefNamespace, AnnotationAdopt.
-	// Unrecognized keys are ignored.
+	// the emitted CR. Recognized keys: AnnotationZoneRef, AnnotationZoneRefNamespace,
+	// AnnotationAdopt, AnnotationProxied, AnnotationTTL. Unrecognized keys are ignored.
+	//
+	// AnnotationProxied defaults to true for tunnel-emitted records (CNAME →
+	// <uuid>.cfargotunnel.com generally needs to be proxied to route);
+	// override with cloudflare.io/proxied: "false". Malformed values
+	// (unrecognized by conventions.ParseTruthy) fall back to the default.
+	// AnnotationTTL accepts an integer; absent/malformed → Spec.TTL=0 (auto).
 	Annotations map[string]string
 }
 
@@ -63,10 +70,11 @@ type EmitOpts struct {
 // Field ownership: this helper operates as the "cloudflare-operator" field
 // manager (per reconcile.Apply). Operator-edits-win is intentional — matches
 // Foundation's SSA convention for owned children. A user `kubectl edit` of
-// an emitted CR will be reverted on the next reconcile — including Spec.Adopt and
-// Spec.ZoneRef, which are re-asserted from the SOURCE object's annotations
-// (cloudflare.io/adopt, cloudflare.io/zone-ref, cloudflare.io/zone-ref-namespace). Toggle these on the
-// source, not on the emitted CR.
+// an emitted CR will be reverted on the next reconcile — including Spec.Adopt,
+// Spec.ZoneRef, Spec.Proxied, and Spec.TTL, which are re-asserted from the
+// SOURCE object's annotations (cloudflare.io/adopt, cloudflare.io/zone-ref,
+// cloudflare.io/zone-ref-namespace, cloudflare.io/proxied, cloudflare.io/ttl).
+// Toggle these on the source, not on the emitted CR.
 func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme, opts EmitOpts) error {
 	content := opts.Content // local copy so we can take its address; Spec.Content is *string
 	dr := &v2alpha1.CloudflareDNSRecord{
@@ -98,5 +106,27 @@ func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	if adopt, _ := conventions.ParseTruthy(opts.Annotations[conventions.AnnotationAdopt]); adopt {
 		dr.Spec.Adopt = true
 	}
+
+	// Proxied: default true for tunnel-emitted records (CNAME →
+	// <uuid>.cfargotunnel.com requires proxied to route). Annotation
+	// override: cloudflare.io/proxied: "false" yields grey-cloud.
+	// Malformed values silently fall back to the default (true).
+	proxiedDefault := true
+	dr.Spec.Proxied = &proxiedDefault
+	if v, ok := opts.Annotations[conventions.AnnotationProxied]; ok && v != "" {
+		if p, err := conventions.ParseTruthy(v); err == nil {
+			b := p
+			dr.Spec.Proxied = &b
+		}
+	}
+
+	// TTL: optional integer annotation; absent or malformed leaves Spec.TTL=0
+	// (Cloudflare interprets 0 as automatic).
+	if v := opts.Annotations[conventions.AnnotationTTL]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			dr.Spec.TTL = n
+		}
+	}
+
 	return reconcilelib.Apply(ctx, c, dr)
 }
