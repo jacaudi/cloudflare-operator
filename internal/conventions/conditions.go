@@ -215,6 +215,11 @@ const (
 	// surfaced so the state is never silent. Admin must adopt/label or
 	// delete it manually.
 	ReasonOrphanedUnmanaged = "OrphanedUnmanaged"
+
+	// ReasonOriginRequestWiped: a one-shot Warning event emitted when the
+	// tunnel controller detects a Cloudflare-side originRequest block that
+	// has no matching annotation or Spec.Routing.OriginRequest and wipes it.
+	ReasonOriginRequestWiped = "OriginRequestWiped"
 )
 
 // TunnelReasons returns the reason vocabulary appended by spec 3 for the
@@ -246,5 +251,6 @@ func TunnelReasons() []string {
 		ReasonGatewayApexRequired,
 		ReasonGatewayApexInvalid,
 		ReasonOrphanedUnmanaged,
+		ReasonOriginRequestWiped,
 	}
 }

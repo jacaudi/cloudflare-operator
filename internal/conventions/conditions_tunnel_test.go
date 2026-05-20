@@ -37,7 +37,7 @@ func TestTunnelReasons_AllDefined(t *testing.T) {
 		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,
 		ReasonOrphanedDNSRecordPruned,
 		ReasonGatewayApexRequired, ReasonGatewayApexInvalid,
-		ReasonOrphanedUnmanaged,
+		ReasonOrphanedUnmanaged, ReasonOriginRequestWiped,
 	}
 	for _, r := range want {
 		require.NotEmpty(t, r)
@@ -60,7 +60,7 @@ func TestTunnelReasons_NoDuplicatesWithBase(t *testing.T) {
 		ReasonGatewayServiceUnresolved, ReasonUnsupportedProtocol,
 		ReasonOrphanedDNSRecordPruned,
 		ReasonGatewayApexRequired, ReasonGatewayApexInvalid,
-		ReasonOrphanedUnmanaged,
+		ReasonOrphanedUnmanaged, ReasonOriginRequestWiped,
 	}
 	for _, r := range tunnel {
 		_, dup := base[r]
@@ -79,6 +79,10 @@ func TestTunnelReasons_NoDuplicatesAcrossSets(t *testing.T) {
 		require.NotContains(t, seen, r, "duplicate reason across base + zone + tunnel: %s", r)
 		seen[r] = struct{}{}
 	}
+}
+
+func TestReasonOriginRequestWiped_Exists(t *testing.T) {
+	require.Equal(t, "OriginRequestWiped", ReasonOriginRequestWiped)
 }
 
 func TestConditionTypes_TunnelSet(t *testing.T) {
