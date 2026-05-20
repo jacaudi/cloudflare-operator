@@ -163,7 +163,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	}
 
 	// Translate annotations + Service spec → contributions.
-	contribs, warns := tunnelsynth.TranslateService(&svc, tunnelsynth.Defaults{})
+	contribs, warns := tunnelsynth.TranslateService(&svc, defaultsFromAnnotations(svc.GetAnnotations(), tunnelsynth.DefaultsFor(tn)))
 	for _, w := range warns {
 		if r.Recorder != nil {
 			r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeWarning, w.Reason, w.Message)
