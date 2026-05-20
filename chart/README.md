@@ -396,6 +396,32 @@ The new `cloudflare.io/ttl` annotation (accepts an integer) propagates to
 `Spec.TTL`. Absent or malformed values leave `Spec.TTL=0` (Cloudflare
 interprets 0 as automatic).
 
+### Tunnel-emitted CR names drop the redundant source-name segment (S4 / #6, 2026-05)
+
+Operator-emitted `CloudflareDNSRecord` CRs (one per public hostname routed
+through a Cloudflare Tunnel) are now named **`<sanitized-hostname>-<8hex>`**
+instead of the legacy **`<source-name>-<sanitized-hostname>-<8hex>`** doubled
+form. Two sources emitting the same hostname converge to a single CR — correct,
+since DNS is per-hostname.
+
+**On upgrade:** every existing operator-emitted CR is renamed on the first
+reconcile after upgrade. The source controllers emit the new-form CR via
+SSA; the existing `pruneOrphanedDNSRecords` helper deletes the legacy
+doubled-name CR in the same Reconcile pass (gated by the three
+`cloudflare.io/source-{kind,name,namespace}` labels — user-authored CRs
+without those labels are NEVER touched).
+
+**Brief one-time DNS flap per record:** the legacy CR's finalizer deletes
+the Cloudflare record before the new CR's reconcile creates it back. S1's
+81053-as-relist-verify path absorbs the unavoidable overlap as a self-
+resolving transient (`Ready=False` briefly), not a stuck error. No manual
+migration steps are required.
+
+**Effect on observability:** `kubectl get cloudflarednsrecord` listings are
+significantly less wordy; CRs like
+`jellyfin-jellyfin-jacaudi-jellyfin-jacaudi-dev-0e610722` collapse to
+`jellyfin-jacaudi-dev-0e610722`.
+
 ---
 
 ## Renovate tracking
