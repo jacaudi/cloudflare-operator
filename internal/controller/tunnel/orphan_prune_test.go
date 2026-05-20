@@ -188,3 +188,74 @@ func TestPruneOrphanedDNSRecords_IgnoresRecordDeletedBetweenListAndDelete(t *tes
 	err = c.Get(context.Background(), client.ObjectKeyFromObject(racing), &gone)
 	require.True(t, apierrors.IsNotFound(err), "expected NotFound, got %v", err)
 }
+
+// TestPruneOrphanedDNSRecords_DeletesOldFormCR_WhenHostnameStillDesired
+// closes backlog #6 migration: an emitted CR whose metadata.Name does NOT
+// match the new emittedDNSRecordName(Spec.Name) derivation must be deleted
+// EVEN WHEN Spec.Name is in the desired set. This is the operator's
+// self-migration path from the old "<source>-<host>-<hash>" doubling
+// to the new "<host>-<hash>" shape. Provably-own filter unchanged.
+func TestPruneOrphanedDNSRecords_DeletesOldFormCR_WhenHostnameStillDesired(t *testing.T) {
+	s := pruneScheme(t)
+	// An emitted CR whose metadata.Name uses the OLD doubled-form
+	// ("svc-foo-example-com-<hash>") but whose Spec.Name is in the
+	// desired set. The label scope identifies it as provably-own.
+	oldForm := &v2alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "svc-foo-example-com-deadbeef", // NOT emittedDNSRecordName("foo.example.com")
+			Namespace: "ns",
+			Labels: map[string]string{
+				conventions.LabelSourceKind:      "Service",
+				conventions.LabelSourceName:      "svc",
+				conventions.LabelSourceNamespace: "ns",
+			},
+		},
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
+			Type: "CNAME",
+			Name: "foo.example.com",
+		},
+	}
+	// A new-form CR for the SAME hostname (would-be replacement; this
+	// proves the helper doesn't accidentally delete the new-form one).
+	newForm := makeEmittedRecord("svc", "foo.example.com")
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(oldForm, newForm).Build()
+
+	desired := map[string]struct{}{"foo.example.com": {}}
+	deleted, err := pruneOrphanedDNSRecords(context.Background(), c, "Service", "svc", "ns", desired)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"foo.example.com"}, deleted,
+		"old-form CR must be reported as deleted (hostname-keyed)")
+
+	// Old-form CR gone.
+	var goneOld v2alpha1.CloudflareDNSRecord
+	err = c.Get(context.Background(),
+		client.ObjectKey{Name: "svc-foo-example-com-deadbeef", Namespace: "ns"},
+		&goneOld)
+	require.True(t, apierrors.IsNotFound(err),
+		"old-form CR must be deleted; got Get err=%v", err)
+
+	// New-form CR still present.
+	var survivingNew v2alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(newForm), &survivingNew),
+		"new-form CR must survive the prune (hostname desired + naming correct)")
+}
+
+// TestPruneOrphanedDNSRecords_KeepsCorrectlyNamedDesiredCR is the negative
+// twin: a single correctly-named CR for a desired hostname must NOT be
+// deleted (guards against a regression that would prune every CR each
+// reconcile).
+func TestPruneOrphanedDNSRecords_KeepsCorrectlyNamedDesiredCR(t *testing.T) {
+	s := pruneScheme(t)
+	keep := makeEmittedRecord("svc", "keep.example.com")
+
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(keep).Build()
+
+	desired := map[string]struct{}{"keep.example.com": {}}
+	deleted, err := pruneOrphanedDNSRecords(context.Background(), c, "Service", "svc", "ns", desired)
+	require.NoError(t, err)
+	require.Empty(t, deleted, "no deletions expected; got %v", deleted)
+
+	var got v2alpha1.CloudflareDNSRecord
+	require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(keep), &got))
+}
