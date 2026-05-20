@@ -221,5 +221,24 @@ func (t *tunnelMock) SeedConnections(tunnelID string, conns []cloudflare.TunnelC
 	t.connections[tunnelID] = append([]cloudflare.TunnelConnection{}, conns...)
 }
 
+// SeedConfig lets tests pre-seed an existing TunnelConfiguration for a tunnel
+// without going through PutConfiguration (which increments the version counter
+// and requires the tunnel to already exist). Used by wipe-path envtests that
+// need an OriginRequest present on the live Cloudflare side before the operator
+// first reconciles.
+//
+// The tunnel must already exist (call SeedConnections or CreateTunnel first to
+// register it). SeedConfig is test-only and bypasses the take() audit; it does
+// NOT increment the call counter for Tunnel.PutConfiguration.
+func (t *tunnelMock) SeedConfig(tunnelID string, cfg cloudflare.TunnelConfig) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	version := 1
+	if prev := t.configs[tunnelID]; prev != nil {
+		version = prev.Version + 1
+	}
+	t.configs[tunnelID] = &cloudflare.TunnelConfiguration{Version: version, Config: cfg}
+}
+
 // Compile-time interface assertion.
 var _ cloudflare.TunnelClient = (*tunnelMock)(nil)
