@@ -49,7 +49,7 @@ var (
 	// ErrNameTooLong indicates the derived tunnel CR name would exceed 52
 	// chars, blowing the cloudflared-<name> 63-char DNS-label budget on the
 	// downstream Deployment. Surfaced as Reason=NameTooLong.
-	ErrNameTooLong = errors.New("tunnel CR name exceeds 52 chars (so cloudflared-<name> fits 63-char DNS label)")
+	ErrNameTooLong = errors.New("tunnel CR name exceeds 52 chars (so cloudflared-<name> fits the DNS-1123 label budget)")
 	// ErrInvalidName indicates one of the inputs (namespace or tunnel-name
 	// annotation) fails DNS-1123 label rules. Surfaced as Reason=InvalidName.
 	ErrInvalidName = errors.New("tunnel CR name must satisfy DNS-1123 label rules")
@@ -61,14 +61,19 @@ var (
 // the error reason cleanly.
 var dns1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-// DeriveTunnelName applies the locked spec 3 §6.1 name template.
+// DeriveTunnelName produces the operator-derived auto-created tunnel CR name.
 //
-// With tunnelNameAnnotation set: returns "cf-<sourceNamespace>-<n>".
-// With it empty (per-namespace pool): returns "cf-<sourceNamespace>".
+// With tunnelNameAnnotation set: returns "<sourceNamespace>-<n>".
+// With it empty (per-namespace pool): returns "<sourceNamespace>".
 //
 // Both inputs must be valid DNS-1123 labels. The total result is capped at 52
 // chars so the dataplane Deployment name "cloudflared-<cr-name>" stays under
-// Kubernetes' 63-char DNS-label limit.
+// Kubernetes' 63-char DNS-label limit. Backlog #5 (2026-05-20) dropped the
+// legacy `cf-` prefix; existing auto-created tunnels with the old shape
+// migrate via the P4 cascade-GC self-delete on next reconcile (sources
+// reattach to the new-named tunnel; the old loses all attached sources and
+// retires after the orphan-state grace window). Direct-create (user-
+// authored) tunnels are never renamed or GC'd.
 //
 // Case-sensitivity contract: the inputs are treated case-sensitively; the
 // caller is responsible for the DNS-1123-mandated lowercase form. We do NOT
@@ -79,12 +84,12 @@ func DeriveTunnelName(sourceNamespace, tunnelNameAnnotation string) (string, err
 	}
 	var name string
 	if tunnelNameAnnotation == "" {
-		name = "cf-" + sourceNamespace
+		name = sourceNamespace
 	} else {
 		if !dns1123.MatchString(tunnelNameAnnotation) {
 			return "", fmt.Errorf("%w: tunnel-name annotation %q", ErrInvalidName, tunnelNameAnnotation)
 		}
-		name = "cf-" + sourceNamespace + "-" + tunnelNameAnnotation
+		name = sourceNamespace + "-" + tunnelNameAnnotation
 	}
 	if len(name) > 52 {
 		return "", fmt.Errorf("%w: would be %q (%d chars)", ErrNameTooLong, name, len(name))

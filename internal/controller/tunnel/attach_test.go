@@ -40,13 +40,13 @@ import (
 func TestDeriveTunnelName_WithName(t *testing.T) {
 	got, err := DeriveTunnelName("app-foo", "payments")
 	require.NoError(t, err)
-	require.Equal(t, "cf-app-foo-payments", got)
+	require.Equal(t, "app-foo-payments", got)
 }
 
 func TestDeriveTunnelName_WithoutName_PerNamespacePool(t *testing.T) {
 	got, err := DeriveTunnelName("app-foo", "")
 	require.NoError(t, err)
-	require.Equal(t, "cf-app-foo", got)
+	require.Equal(t, "app-foo", got)
 }
 
 func TestDeriveTunnelName_NameTooLong(t *testing.T) {
@@ -69,8 +69,8 @@ func TestDeriveTunnelName_InvalidAnnotation(t *testing.T) {
 }
 
 func TestDeriveTunnelName_BoundaryAt52(t *testing.T) {
-	// 52 exactly is OK; 53 is not. cf- (3) + ns (21) + - (1) + nm (27) = 52.
-	ns := "namespace-name-twelve"       // 21
+	// 52 exactly is OK; 53 is not. ns (24) + - (1) + nm (27) = 52.
+	ns := "ns-twentyfour-chars-long"   // 24
 	nm := "tunnel-name-twenty-seven-ok" // 27
 	got, err := DeriveTunnelName(ns, nm)
 	require.NoError(t, err)
@@ -80,6 +80,32 @@ func TestDeriveTunnelName_BoundaryAt52(t *testing.T) {
 	_, err = DeriveTunnelName(ns, nm+"k")
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrNameTooLong))
+}
+
+// TestDeriveTunnelName_NoCfPrefix_DropsRedundantSegment closes backlog #5:
+// the operator-derived tunnel CR name drops the `cf-` prefix. Two prod-
+// evidenced motifs: per-namespace pool ("network" without an annotation) +
+// named-tunnel-in-namespace ("network" + "edge"). Locks the new shape
+// against regression to the old "cf-<ns>" doubling pattern.
+func TestDeriveTunnelName_NoCfPrefix_DropsRedundantSegment(t *testing.T) {
+	cases := []struct {
+		ns         string
+		annotation string
+		want       string
+	}{
+		{"network", "", "network"},
+		{"network", "edge", "network-edge"},
+		{"app-foo", "", "app-foo"},
+		{"app-foo", "payments", "app-foo-payments"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.ns+"_"+tc.annotation, func(t *testing.T) {
+			got, err := DeriveTunnelName(tc.ns, tc.annotation)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got, "ns=%q ann=%q produced %q", tc.ns, tc.annotation, got)
+			require.NotContains(t, got, "cf-", "S5: cf- prefix must be dropped (got %q)", got)
+		})
+	}
 }
 
 // TestParseGatewayServiceRef exercises every parse branch of the
