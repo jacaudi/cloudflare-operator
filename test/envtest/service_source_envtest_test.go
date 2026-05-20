@@ -18,6 +18,8 @@ package envtest_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,11 +27,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -495,4 +499,161 @@ func TestServiceSourceEnvtest_NameTooLong_RejectedNoTunnelCreated(t *testing.T) 
 	var list v2alpha1.CloudflareTunnelList
 	require.NoError(t, f.c.List(ctx, &list, client.InNamespace(f.ns)))
 	require.Empty(t, list.Items, "no CloudflareTunnel CR created when derived name exceeds 52 chars")
+}
+
+// expectedEmittedDNSRecordName mirrors the package-private production
+// helper internal/controller/tunnel.emittedDNSRecordName; locked against
+// drift by TestEmittedDNSRecordName_NewShape_DropsOwnerName.
+func expectedEmittedDNSRecordName(hostname string) string {
+	sum := sha256.Sum256([]byte(hostname))
+	short := hex.EncodeToString(sum[:4])
+	// sanitize: lowercase, non-alnum→'-', collapse runs, trim hyphens.
+	out := make([]byte, 0, len(hostname))
+	prevHyphen := false
+	for i := 0; i < len(hostname); i++ {
+		c := hostname[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+			out = append(out, c)
+			prevHyphen = false
+		case c >= '0' && c <= '9':
+			out = append(out, c)
+			prevHyphen = false
+		case c >= 'A' && c <= 'Z':
+			out = append(out, c+32)
+			prevHyphen = false
+		default:
+			if !prevHyphen {
+				out = append(out, '-')
+				prevHyphen = true
+			}
+		}
+	}
+	san := strings.Trim(string(out), "-")
+	const maxSan = 63 - 1 - 8
+	if len(san) > maxSan {
+		san = strings.TrimRight(san[:maxSan], "-")
+	}
+	if san == "" {
+		return short
+	}
+	return san + "-" + short
+}
+
+// TestServiceSourceEnvtest_S4_MigrationGCsOldFormCR closes backlog #6
+// end-to-end: a pre-existing operator-emitted CR with the legacy doubled-
+// name shape (and the three source-identity labels marking it as provably-
+// own) is migration-GC'd by pruneOrphanedDNSRecords on the next Reconcile,
+// while the new-form CR is the one that remains. User-authored CRs without
+// the source labels are NOT touched.
+func TestServiceSourceEnvtest_S4_MigrationGCsOldFormCR(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	f := setupServiceEnv(t, "")
+	ctx := context.Background()
+
+	zone := &v2alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
+		Spec: v2alpha1.CloudflareZoneSpec{
+			Name: "example.com", Type: "full", DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, zone))
+
+	const hostname = "myservice.example.com"
+	expectedTunnel := "cf-" + f.ns + "-payments"
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "payments",
+				conventions.AnnotationHostnames:  hostname,
+				conventions.AnnotationZoneRef:    "example-com",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, svc))
+
+	// Wait for the auto-created CloudflareTunnel + TunnelCNAME to populate
+	// so the source reconciler will emit the new-form CR.
+	require.Eventually(t, func() bool {
+		var tn v2alpha1.CloudflareTunnel
+		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
+			return false
+		}
+		return tn.Status.TunnelCNAME != ""
+	}, 15*time.Second, 250*time.Millisecond, "tunnel Status.TunnelCNAME populated")
+
+	// Wait for the new-form CR to emit (this is the post-S4 derivation).
+	newName := expectedEmittedDNSRecordName(hostname)
+	require.Eventually(t, func() bool {
+		var got v2alpha1.CloudflareDNSRecord
+		return f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: newName}, &got) == nil
+	}, 15*time.Second, 250*time.Millisecond, "new-form CR %q emitted", newName)
+
+	// Refresh the Service so we have its UID for the owner-ref.
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: "svc"}, svc))
+
+	// Now plant an OLD-form CR for the SAME hostname, with the three
+	// source-identity labels (so it's provably-own from the pruner's POV)
+	// and an owner-ref to the Service (so the source controller's .Owns
+	// watch retriggers it). Its metadata.Name uses the legacy
+	// <sourceName>-<sanitizedHost>-<hash> doubled shape that S4 collapses.
+	oldNameLegacy := "svc-" + strings.ReplaceAll(strings.ReplaceAll(hostname, ".", "-"), "_", "-") + "-deadbeef"
+	require.NotEqual(t, newName, oldNameLegacy, "test setup bug: old-form name must differ from new-form")
+	oldCR := &v2alpha1.CloudflareDNSRecord{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      oldNameLegacy,
+			Namespace: f.ns,
+			Labels: map[string]string{
+				conventions.LabelSourceKind:      "Service",
+				conventions.LabelSourceName:      "svc",
+				conventions.LabelSourceNamespace: f.ns,
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         "v1",
+				Kind:               "Service",
+				Name:               svc.Name,
+				UID:                svc.UID,
+				Controller:         ptr.To(true),
+				BlockOwnerDeletion: ptr.To(true),
+			}},
+		},
+		Spec: v2alpha1.CloudflareDNSRecordSpec{
+			Type:    "CNAME",
+			Name:    hostname,
+			ZoneRef: &v2alpha1.ZoneReference{Name: "example-com", Namespace: f.ns},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, oldCR))
+
+	// Trigger another Reconcile of the Service so pruneOrphanedDNSRecords
+	// runs again (the .Owns watch on the freshly-created old-form CR
+	// fires this automatically; the touch annotation is belt-and-braces).
+	patch := client.MergeFrom(svc.DeepCopy())
+	if svc.Annotations == nil {
+		svc.Annotations = map[string]string{}
+	}
+	svc.Annotations["cloudflare.io/touch"] = time.Now().Format(time.RFC3339Nano)
+	require.NoError(t, f.c.Patch(ctx, svc, patch))
+
+	// Old-form CR must be migration-GC'd within the timeout.
+	require.Eventually(t, func() bool {
+		var got v2alpha1.CloudflareDNSRecord
+		err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: oldNameLegacy}, &got)
+		return apierrors.IsNotFound(err)
+	}, 15*time.Second, 250*time.Millisecond, "old-form CR %q was NOT migration-GC'd by pruneOrphanedDNSRecords", oldNameLegacy)
+
+	// New-form CR must still be present (sanity check — prune must NOT
+	// accidentally delete the correctly-named replacement).
+	var stillPresent v2alpha1.CloudflareDNSRecord
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: newName}, &stillPresent),
+		"new-form CR %q must survive migration-GC", newName)
 }
