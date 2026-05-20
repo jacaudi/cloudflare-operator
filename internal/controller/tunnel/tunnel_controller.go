@@ -646,10 +646,38 @@ func (r *CloudflareTunnelReconciler) fetchSource(ctx context.Context, src tunnel
 
 // snapshotFromConfig converts a cf.TunnelConfig into the status-side
 // IngressEntrySnapshot list used for drift detection.
+//
+// The projection rules for OriginRequest MUST match
+// internal/cloudflare/tunnel.go mapConfigurationGetResponse byte-for-byte:
+//   - NoTLSVerify projected only when true (unset-vs-explicit-false ambiguity
+//     is unavoidable per the existing comment in cloudflare/tunnel.go).
+//   - OriginServerName projected only when non-empty.
+//   - OriginRequest attached only when at least one is set.
+//
+// Symmetry preserves the P3 invariant that drift detection and PUT-skip
+// share one comparison basis.
 func snapshotFromConfig(cfg cloudflare.TunnelConfig) []v2alpha1.IngressEntrySnapshot {
 	out := make([]v2alpha1.IngressEntrySnapshot, 0, len(cfg.Ingress))
 	for _, e := range cfg.Ingress {
-		out = append(out, v2alpha1.IngressEntrySnapshot{Hostname: e.Hostname, Path: e.Path, Service: e.Service})
+		snap := v2alpha1.IngressEntrySnapshot{Hostname: e.Hostname, Path: e.Path, Service: e.Service}
+		if e.OriginRequest != nil {
+			or := &v2alpha1.IngressSnapshotOriginRequest{}
+			hasAny := false
+			if e.OriginRequest.NoTLSVerify != nil && *e.OriginRequest.NoTLSVerify {
+				v := true
+				or.NoTLSVerify = &v
+				hasAny = true
+			}
+			if e.OriginRequest.OriginServerName != nil && *e.OriginRequest.OriginServerName != "" {
+				v := *e.OriginRequest.OriginServerName
+				or.OriginServerName = &v
+				hasAny = true
+			}
+			if hasAny {
+				snap.OriginRequest = or
+			}
+		}
+		out = append(out, snap)
 	}
 	return out
 }

@@ -1312,6 +1312,51 @@ func TestReconcile_OrphanedUserAuthored_SurfacedNotDeleted(t *testing.T) {
 	}
 }
 
+func TestSnapshotFromConfig_ProjectsOriginRequest(t *testing.T) {
+	osn := "origin.example.com"
+	ntvTrue := true
+	ntvFalse := false
+
+	cases := []struct {
+		name string
+		in   *cloudflare.IngressOriginRequest
+		want *v2alpha1.IngressSnapshotOriginRequest
+	}{
+		{"nil → nil", nil, nil},
+		{"empty → nil", &cloudflare.IngressOriginRequest{}, nil},
+		{"osn only → osn", &cloudflare.IngressOriginRequest{OriginServerName: &osn}, &v2alpha1.IngressSnapshotOriginRequest{OriginServerName: &osn}},
+		{"ntv=true → ntv=true", &cloudflare.IngressOriginRequest{NoTLSVerify: &ntvTrue}, &v2alpha1.IngressSnapshotOriginRequest{NoTLSVerify: &ntvTrue}},
+		{"ntv=false (unset-vs-false ambiguity) → nil", &cloudflare.IngressOriginRequest{NoTLSVerify: &ntvFalse}, nil},
+		{"both → both", &cloudflare.IngressOriginRequest{OriginServerName: &osn, NoTLSVerify: &ntvTrue}, &v2alpha1.IngressSnapshotOriginRequest{OriginServerName: &osn, NoTLSVerify: &ntvTrue}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
+				{Hostname: "h.example.com", Service: "https://svc:443", OriginRequest: c.in},
+			}}
+			got := snapshotFromConfig(cfg)
+			require.Len(t, got, 1)
+			if c.want == nil {
+				require.Nil(t, got[0].OriginRequest)
+				return
+			}
+			require.NotNil(t, got[0].OriginRequest)
+			if c.want.OriginServerName == nil {
+				require.Nil(t, got[0].OriginRequest.OriginServerName)
+			} else {
+				require.NotNil(t, got[0].OriginRequest.OriginServerName)
+				require.Equal(t, *c.want.OriginServerName, *got[0].OriginRequest.OriginServerName)
+			}
+			if c.want.NoTLSVerify == nil {
+				require.Nil(t, got[0].OriginRequest.NoTLSVerify)
+			} else {
+				require.NotNil(t, got[0].OriginRequest.NoTLSVerify)
+				require.Equal(t, *c.want.NoTLSVerify, *got[0].OriginRequest.NoTLSVerify)
+			}
+		})
+	}
+}
+
 // containsAll returns true when s contains every substring.
 func containsAll(s string, subs ...string) bool {
 	for _, sub := range subs {
