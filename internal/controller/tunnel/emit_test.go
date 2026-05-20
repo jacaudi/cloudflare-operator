@@ -332,3 +332,29 @@ func TestEmitDNSRecord_TTLMalformedSilentlyZero(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, 0, got.Spec.TTL, "malformed TTL annotation must fall back to 0")
 }
+
+// TestEmitDNSRecord_TTLNegativeSilentlyZero: a negative integer TTL annotation
+// must be rejected by the n>=0 guard and leave Spec.TTL=0. Locks in the guard
+// against a future cleanup that "simplifies" away the bounds check (strconv.Atoi
+// alone would happily return -1 here, which would propagate a nonsense value
+// into Cloudflare).
+func TestEmitDNSRecord_TTLNegativeSilentlyZero(t *testing.T) {
+	s := emitTestScheme(t)
+	svc := &corev1.Service{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	require.NoError(t, EmitDNSRecord(context.Background(), c, s, EmitOpts{
+		Owner: svc, OwnerKind: "Service",
+		Hostname: "foo.example.com", Content: "tunnel.cfargotunnel.com",
+		Annotations: map[string]string{conventions.AnnotationTTL: "-1"},
+	}))
+
+	var got v2alpha1.CloudflareDNSRecord
+	name := emittedDNSRecordName("svc", "foo.example.com")
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
+	require.Equal(t, 0, got.Spec.TTL, "negative TTL annotation must be rejected by n>=0 guard; Spec.TTL stays 0")
+}
