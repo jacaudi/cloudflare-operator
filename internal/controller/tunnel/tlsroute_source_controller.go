@@ -174,7 +174,8 @@ func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.
 		hostnames = []string{listenerApex}
 	}
 
-	contribs, warns := tunnelsynth.TranslateTLSRoute(&rt, hostnames, gwOrigin, tunnelsynth.Defaults{})
+	merged := inheritedAnnotations(rt.GetAnnotations(), gw)
+	contribs, warns := tunnelsynth.TranslateTLSRoute(&rt, hostnames, gwOrigin, defaultsFromAnnotations(merged, tunnelsynth.DefaultsFor(tn)))
 
 	tunnelKey := tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name}
 
