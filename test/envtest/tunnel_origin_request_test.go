@@ -88,7 +88,7 @@ func testEnvtest_OriginRequest_GatewayAnnotation(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
 
-	tunnelName := "cf-" + f.ns + "-edge"
+	tunnelName := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: tunnelName}, &tn); err != nil {
@@ -192,7 +192,7 @@ func testEnvtest_OriginRequest_RouteOverridesGateway(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
 
-	tunnelName := "cf-" + f.ns + "-edge"
+	tunnelName := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: tunnelName}, &tn); err != nil {
@@ -294,7 +294,7 @@ func testEnvtest_OriginRequest_SpecFallback(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
 
-	tunnelName := "cf-" + f.ns + "-edge"
+	tunnelName := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: tunnelName}, &tn); err != nil {
@@ -423,7 +423,7 @@ func testEnvtest_OriginRequest_WipePath(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
 
-	tunnelName := "cf-" + f.ns + "-edge"
+	tunnelName := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: tunnelName}, &tn); err != nil {
