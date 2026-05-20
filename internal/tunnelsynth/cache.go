@@ -87,10 +87,6 @@ func (c *Cache) Snapshot(tk TunnelKey) []ContributionWithSource {
 				v := *ic.OriginServerName
 				cp.OriginServerName = &v
 			}
-			if ic.CAPoolPath != nil {
-				v := *ic.CAPoolPath
-				cp.CAPoolPath = &v
-			}
 			out = append(out, ContributionWithSource{IngressContribution: cp, Source: src})
 		}
 	}

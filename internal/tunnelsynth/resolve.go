@@ -106,7 +106,7 @@ func Resolve(contribs []ContributionWithSource, opts ResolveOpts) (cf.TunnelConf
 			Path:     w.Path,
 			Service:  w.Service,
 		}
-		if w.NoTLSVerify != nil || w.OriginServerName != nil || w.CAPoolPath != nil {
+		if w.NoTLSVerify != nil || w.OriginServerName != nil {
 			or := &cf.IngressOriginRequest{}
 			if w.NoTLSVerify != nil {
 				v := *w.NoTLSVerify
@@ -115,10 +115,6 @@ func Resolve(contribs []ContributionWithSource, opts ResolveOpts) (cf.TunnelConf
 			if w.OriginServerName != nil {
 				v := *w.OriginServerName
 				or.OriginServerName = &v
-			}
-			if w.CAPoolPath != nil {
-				v := *w.CAPoolPath
-				or.CAPool = &v
 			}
 			entry.OriginRequest = or
 		}

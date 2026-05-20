@@ -27,19 +27,17 @@ import (
 )
 
 // Defaults is the per-tunnel translator context: tunnel-level originRequest
-// defaults + the configured caPool path (when the tunnel CR sets an
-// originCASecretRef).
+// defaults applied to ingress entries that do not supply their own via
+// per-source annotations.
 type Defaults struct {
-	// CAPoolPath, when non-empty, is the absolute path inside cloudflared
-	// Pods where the origin-CA bundle is mounted
-	// (e.g. /etc/cloudflared/ca/bundle.crt). Threaded into HTTPS
-	// contributions when the source has not opted out of TLS verification.
-	CAPoolPath string
-	// NoTLSVerifyDefault is the tunnel-level default applied when the source
-	// has no own annotation (or has an unparseable value).
+	// NoTLSVerifyDefault is the tunnel-level default for noTLSVerify
+	// applied to ingress entries that do not supply their own via per-source
+	// annotations.
 	NoTLSVerifyDefault *bool
+
 	// OriginServerNameDefault is the tunnel-level default origin SAN applied
-	// when the source has no own annotation.
+	// to ingress entries that do not supply their own via per-source
+	// annotations.
 	OriginServerNameDefault *string
 }
 
@@ -68,10 +66,6 @@ type TranslateWarning struct {
 //     conventions.ParseTruthy; unparseable values fall through to
 //     Defaults.NoTLSVerifyDefault.
 //   - cloudflare.io/origin-server-name — verbatim string SAN override.
-//
-// When the resolved scheme is https, the source has not opted out of TLS
-// verification, and Defaults.CAPoolPath is set, the contribution gets
-// CAPoolPath threaded through so the resolver can emit originRequest.caPool.
 func TranslateService(svc *corev1.Service, defaults Defaults) ([]IngressContribution, []TranslateWarning) {
 	ann := svc.GetAnnotations()
 	if ann == nil {
@@ -108,12 +102,6 @@ func TranslateService(svc *corev1.Service, defaults Defaults) ([]IngressContribu
 		osnPtr = &v
 	}
 
-	var caPool *string
-	if scheme == "https" && (noTLS == nil || !*noTLS) && defaults.CAPoolPath != "" {
-		p := defaults.CAPoolPath
-		caPool = &p
-	}
-
 	svcURL := fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, svc.Name, svc.Namespace, port)
 
 	out := make([]IngressContribution, 0, len(hostnames))
@@ -123,7 +111,6 @@ func TranslateService(svc *corev1.Service, defaults Defaults) ([]IngressContribu
 			Service:          svcURL,
 			NoTLSVerify:      noTLS,
 			OriginServerName: osnPtr,
-			CAPoolPath:       caPool,
 		})
 	}
 	return out, nil

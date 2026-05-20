@@ -48,8 +48,6 @@ type IngressContribution struct {
 	NoTLSVerify *bool
 	// OriginServerName reflects cloudflare.io/origin-server-name; nil means inherit.
 	OriginServerName *string
-	// CAPoolPath, when set, threads originRequest.caPool into the entry.
-	CAPoolPath *string
 }
 
 // ContributionWithSource is what Snapshot returns — IngressContribution plus
