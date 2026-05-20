@@ -279,8 +279,8 @@ func testEnvtest_OriginRequest_SpecFallback(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "gw", Namespace: f.ns,
 			Annotations: map[string]string{
-				conventions.AnnotationTunnel:       "true",
-				conventions.AnnotationTunnelName:   "edge",
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
 				conventions.AnnotationGatewayService: f.ns + "/gw-svc",
 				// No origin-server-name on Gateway.
 			},
@@ -390,8 +390,8 @@ func testEnvtest_OriginRequest_SpecFallback(t *testing.T) {
 //     live entry for the route's hostname (simulating a dashboard edit).
 //  3. Trigger re-reconcile via annotation touch.
 //  4. Assert: (a) OriginRequestWiped Warning event emitted on the tunnel CR.
-//             (b) Mock's live config no longer has OriginRequest on that entry.
-//             (c) Status.ObservedIngress carries nil OriginRequest on that entry.
+//     (b) Mock's live config no longer has OriginRequest on that entry.
+//     (c) Status.ObservedIngress carries nil OriginRequest on that entry.
 func testEnvtest_OriginRequest_WipePath(t *testing.T) {
 	t.Helper()
 	f := setupHTTPRouteEnv(t)
