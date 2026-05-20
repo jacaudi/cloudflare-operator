@@ -77,6 +77,14 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Feature F prelude: check whether a force-reconcile was requested via the
+	// cloudflare.io/reconcile-at annotation.  Evaluated after the Get so we
+	// have both the live annotation and the persisted ack in status.
+	forceReconcile := reconcile.ForceReconcileRequested(
+		cfg.Annotations[conventions.AnnotationReconcileAt],
+		cfg.Status.LastReconcileToken,
+	)
+
 	// Deletion path: zone settings are not "owned" objects in Cloudflare
 	// (they persist server-side and reverting them is out of scope), so we
 	// only drop the finalizer.
@@ -134,8 +142,10 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// Out-of-band dashboard edits won't be reverted until the K8s spec
 	// itself changes. Exit BEFORE constructing the Cloudflare client
 	// (pre-flight contract: no client construction on the fast-skip path).
+	// A force-reconcile request bypasses the fast-skip so the settings are
+	// re-applied regardless of the cached hash.
 	desiredHash := hashZoneConfigSpec(&cfg.Spec)
-	if cfg.Status.AppliedSpecHash == desiredHash && cfg.Status.Phase == v2alpha1.PhaseReady {
+	if cfg.Status.AppliedSpecHash == desiredHash && cfg.Status.Phase == v2alpha1.PhaseReady && !forceReconcile {
 		logger.V(1).Info("zoneconfig spec unchanged, fast-skip", "hash", desiredHash)
 		return ctrl.Result{RequeueAfter: interval}, nil
 	}
@@ -184,6 +194,13 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// Emit transition events after conditions are finalized so we compare
 	// the new status against the snapshot taken before this pass.
 	r.emitGroupTransitionEvents(&cfg, prior, results)
+
+	// Feature F: ack a completed force-reconcile before the status write so
+	// the same write carries the token.  Only assigned on a successful path —
+	// any earlier error return leaves the ack empty, keeping the trigger live.
+	if forceReconcile {
+		cfg.Status.LastReconcileToken = cfg.Annotations[conventions.AnnotationReconcileAt]
+	}
 
 	candidate := cfg.Status.DeepCopy()
 	candidate.LastSyncedAt = originalStatus.LastSyncedAt

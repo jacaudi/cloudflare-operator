@@ -79,6 +79,14 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Feature F prelude: check whether a force-reconcile was requested via the
+	// cloudflare.io/reconcile-at annotation.  Evaluated after the Get so we
+	// have both the live annotation and the persisted ack in status.
+	forceReconcile := reconcile.ForceReconcileRequested(
+		rs.Annotations[conventions.AnnotationReconcileAt],
+		rs.Status.LastReconcileToken,
+	)
+
 	// Deletion path: leave the upstream phase entrypoint in place; only drop
 	// the finalizer.
 	if !rs.DeletionTimestamp.IsZero() {
@@ -164,8 +172,8 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				"created %s phase entrypoint %s", rs.Spec.Phase, created.ID)
 		}
 
-	case rulesetMatches(existing, params):
-		// In sync — no API write needed.
+	case rulesetMatches(existing, params) && !forceReconcile:
+		// In sync and no force-reconcile requested — no API write needed.
 		rs.Status.RulesetID = existing.ID
 		rs.Status.RuleCount = len(existing.Rules)
 
@@ -186,6 +194,13 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	rs.Status.Conditions = reconcile.SetReady(rs.Status.Conditions, metav1.ConditionTrue,
 		conventions.ReasonReady, "ruleset synced")
 	rs.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonReady)
+
+	// Feature F: ack a completed force-reconcile before the status write so
+	// the same write carries the token.  Only assigned on a successful path —
+	// any earlier error return leaves the ack empty, keeping the trigger live.
+	if forceReconcile {
+		rs.Status.LastReconcileToken = rs.Annotations[conventions.AnnotationReconcileAt]
+	}
 
 	candidate := rs.Status.DeepCopy()
 	candidate.LastSyncedAt = originalStatus.LastSyncedAt

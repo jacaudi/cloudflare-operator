@@ -81,6 +81,14 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Feature F prelude: check whether a force-reconcile was requested via the
+	// cloudflare.io/reconcile-at annotation.  Evaluated after the Get so we
+	// have both the live annotation and the persisted ack in status.
+	forceReconcile := reconcile.ForceReconcileRequested(
+		rec.Annotations[conventions.AnnotationReconcileAt],
+		rec.Status.LastReconcileToken,
+	)
+
 	if !rec.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &rec)
 	}
@@ -367,6 +375,13 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
 			conventions.ReasonOwnershipCompanionFailed, msg)
 		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonOwnershipCompanionFailed)
+	}
+
+	// Feature F: ack a completed force-reconcile before the status write so
+	// the same write carries the token.  Only assigned on a successful managed-
+	// mode path — error returns and observe-mode leave the ack empty.
+	if forceReconcile {
+		rec.Status.LastReconcileToken = rec.Annotations[conventions.AnnotationReconcileAt]
 	}
 
 	candidate := rec.Status.DeepCopy()

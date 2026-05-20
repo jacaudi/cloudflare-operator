@@ -84,6 +84,14 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Feature F prelude: check whether a force-reconcile was requested via the
+	// cloudflare.io/reconcile-at annotation.  Evaluated after the Get so we
+	// have both the live annotation and the persisted ack in status.
+	forceReconcile := reconcile.ForceReconcileRequested(
+		z.Annotations[conventions.AnnotationReconcileAt],
+		z.Status.LastReconcileToken,
+	)
+
 	if !z.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &z)
 	}
@@ -205,6 +213,13 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			conventions.ConditionTypeReady, metav1.ConditionUnknown,
 			conventions.ReasonReconciling, "zone status: "+got.Status)
 		z.Status.Phase = v2alpha1.PhasePending
+	}
+
+	// Feature F: ack a completed force-reconcile before the status write so
+	// the same write carries the token.  Only assigned on a successful path —
+	// any earlier error return leaves the ack empty, keeping the trigger live.
+	if forceReconcile {
+		z.Status.LastReconcileToken = z.Annotations[conventions.AnnotationReconcileAt]
 	}
 
 	candidate := z.Status.DeepCopy()

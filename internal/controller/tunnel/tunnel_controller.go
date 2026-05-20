@@ -124,6 +124,14 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Feature F prelude: check whether a force-reconcile was requested via the
+	// cloudflare.io/reconcile-at annotation.  Evaluated after the Get so we
+	// have both the live annotation and the persisted ack in status.
+	forceReconcile := reconcilelib.ForceReconcileRequested(
+		tn.Annotations[conventions.AnnotationReconcileAt],
+		tn.Status.LastReconcileToken,
+	)
+
 	if !tn.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &tn)
 	}
@@ -193,7 +201,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// (design §8 step 9). A degraded Deployment must not report Ready=True
 	// even if connectors have lingered from a previous successful rollout.
 	depAvailable := r.isDeploymentAvailable(ctx, &tn)
-	if err := r.applyRemoteConfig(ctx, &tn, tc, creds.AccountID); err != nil {
+	if err := r.applyRemoteConfig(ctx, &tn, tc, creds.AccountID, forceReconcile); err != nil {
 		return ctrl.Result{}, r.failStatus(ctx, &tn, conventions.ReasonRemoteConfigStale, err)
 	}
 	r.observeConnectors(ctx, &tn, tc, creds.AccountID)
@@ -297,6 +305,13 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
 			conventions.ReasonOrphanedUnmanaged,
 			"orphaned but not operator-managed; operator will not auto-GC it — adopt/label it or delete it manually")
+	}
+
+	// Feature F: ack a completed force-reconcile before the status write so
+	// the same write carries the token.  Only assigned on a successful path —
+	// any earlier error return leaves the ack empty, keeping the trigger live.
+	if forceReconcile {
+		tn.Status.LastReconcileToken = tn.Annotations[conventions.AnnotationReconcileAt]
 	}
 
 	// Only persist status when something material changed or spec generation
@@ -509,11 +524,16 @@ func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v2
 // DriftDetected Warning Event, detection only), then diff against
 // status.observedIngress and PUT if different. The PUT is a full replace —
 // Cloudflare has no merge semantics on /configurations.
+//
+// forceReconcile bypasses the reflect.DeepEqual drift-skip so that a
+// force-reconcile annotation causes a PUT even when the ingress config has not
+// changed since the last operator-observed push.
 func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	ctx context.Context,
 	tn *v2alpha1.CloudflareTunnel,
 	tc cloudflare.TunnelClient,
 	accountID string,
+	forceReconcile bool,
 ) error {
 	contribs := r.Cache.Snapshot(tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name})
 	catchAll := "http_status:404"
@@ -586,7 +606,7 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	}
 
 	wantSnap := snapshotFromConfig(cfg)
-	if reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) {
+	if reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) && !forceReconcile {
 		return nil
 	}
 	emitOriginRequestWipedEvents(r.Recorder, tn, live, cfg)
