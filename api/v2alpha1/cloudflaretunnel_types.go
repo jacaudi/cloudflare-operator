@@ -153,7 +153,10 @@ type TunnelFallback struct {
 }
 
 // TunnelOriginRequest mirrors cloudflared's originRequest block at the
-// tunnel level (defaults inherited by every ingress entry).
+// tunnel level (defaults inherited by every ingress entry that does not
+// supply its own via per-source annotations). Per-ingress overrides come
+// from cloudflare.io/origin-server-name and cloudflare.io/no-tls-verify
+// on the source Gateway / HTTPRoute / TLSRoute / Service.
 type TunnelOriginRequest struct {
 	// NoTLSVerify disables TLS verification to the origin.
 	// +optional
@@ -161,9 +164,6 @@ type TunnelOriginRequest struct {
 	// OriginServerName is the expected SAN on the origin certificate.
 	// +optional
 	OriginServerName *string `json:"originServerName,omitempty"`
-	// ConnectTimeoutSeconds is the per-connection timeout to origin.
-	// +optional
-	ConnectTimeoutSeconds *int32 `json:"connectTimeoutSeconds,omitempty"`
 }
 
 // CloudflareTunnelStatus is the observed state.
@@ -231,7 +231,9 @@ type CloudflareTunnelStatus struct {
 
 // IngressEntrySnapshot is a status-only snapshot of one materialized ingress
 // entry. NOT the source-of-truth shape — the reconciler computes ingress fresh
-// each loop. This is for drift detection only.
+// each loop. Used for drift detection and PUT-skip; the projection rules
+// must match internal/cloudflare/tunnel.go mapConfigurationGetResponse
+// byte-for-byte so live-config and want-config snapshots are byte-comparable.
 type IngressEntrySnapshot struct {
 	// Hostname is the public hostname.
 	// +optional
@@ -242,6 +244,22 @@ type IngressEntrySnapshot struct {
 	// Service is the cloudflared service URL (e.g. http://svc.ns:80).
 	// +optional
 	Service string `json:"service,omitempty"`
+	// OriginRequest mirrors the per-entry originRequest block as last PUT.
+	// +optional
+	OriginRequest *IngressSnapshotOriginRequest `json:"originRequest,omitempty"`
+}
+
+// IngressSnapshotOriginRequest projects the per-entry originRequest block.
+// Conditional projection (mirrors mapConfigurationGetResponse):
+//   - NoTLSVerify projected only when true (unset-vs-explicit-false ambiguity is unavoidable).
+//   - OriginServerName projected only when non-empty.
+//
+// At least one must be set or the parent IngressEntrySnapshot.OriginRequest stays nil.
+type IngressSnapshotOriginRequest struct {
+	// +optional
+	OriginServerName *string `json:"originServerName,omitempty"`
+	// +optional
+	NoTLSVerify *bool `json:"noTLSVerify,omitempty"`
 }
 
 // AttachedSource identifies one source object contributing to this tunnel.
