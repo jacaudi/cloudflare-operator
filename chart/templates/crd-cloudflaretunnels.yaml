@@ -1489,11 +1489,6 @@ spec:
                       OriginRequest defaults applied to all synthesized rules unless overridden
                       by per-source annotations (no-tls-verify, origin-server-name, …).
                     properties:
-                      connectTimeoutSeconds:
-                        description: ConnectTimeoutSeconds is the per-connection timeout
-                          to origin.
-                        format: int32
-                        type: integer
                       noTLSVerify:
                         description: NoTLSVerify disables TLS verification to the
                           origin.
@@ -1640,11 +1635,22 @@ spec:
                   description: |-
                     IngressEntrySnapshot is a status-only snapshot of one materialized ingress
                     entry. NOT the source-of-truth shape — the reconciler computes ingress fresh
-                    each loop. This is for drift detection only.
+                    each loop. Used for drift detection and PUT-skip; the projection rules
+                    must match internal/cloudflare/tunnel.go mapConfigurationGetResponse
+                    byte-for-byte so live-config and want-config snapshots are byte-comparable.
                   properties:
                     hostname:
                       description: Hostname is the public hostname.
                       type: string
+                    originRequest:
+                      description: OriginRequest mirrors the per-entry originRequest
+                        block as last PUT.
+                      properties:
+                        noTLSVerify:
+                          type: boolean
+                        originServerName:
+                          type: string
+                      type: object
                     path:
                       description: Path is the optional path filter.
                       type: string
