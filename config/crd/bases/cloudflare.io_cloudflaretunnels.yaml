@@ -1612,6 +1612,16 @@ spec:
                   Operator-managed; user edits will be reverted on the next reconcile.
                 format: date-time
                 type: string
+              lastReconcileToken:
+                description: |-
+                  LastReconcileToken is the controller-owned ack of the most recent
+                  cloudflare.io/reconcile-at annotation value the controller has
+                  observed. The prelude in internal/reconcile.ForceReconcileRequested
+                  compares this against the live annotation; mismatch forces a full
+                  re-check this reconcile (bypassing the change-detection short-
+                  circuit). The operator NEVER modifies the annotation itself — only
+                  this status field — so admin force-triggers are not auto-cleared.
+                type: string
               lastSyncedAt:
                 description: |-
                   LastSyncedAt is the wall-clock time of the most recent successful

@@ -227,6 +227,16 @@ type CloudflareTunnelStatus struct {
 	// Operator-managed; user edits will be reverted on the next reconcile.
 	// +optional
 	LastOrphanedAt *metav1.Time `json:"lastOrphanedAt,omitempty"`
+
+	// LastReconcileToken is the controller-owned ack of the most recent
+	// cloudflare.io/reconcile-at annotation value the controller has
+	// observed. The prelude in internal/reconcile.ForceReconcileRequested
+	// compares this against the live annotation; mismatch forces a full
+	// re-check this reconcile (bypassing the change-detection short-
+	// circuit). The operator NEVER modifies the annotation itself — only
+	// this status field — so admin force-triggers are not auto-cleared.
+	// +optional
+	LastReconcileToken string `json:"lastReconcileToken,omitempty"`
 }
 
 // IngressEntrySnapshot is a status-only snapshot of one materialized ingress
