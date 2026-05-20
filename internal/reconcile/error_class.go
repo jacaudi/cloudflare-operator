@@ -29,6 +29,17 @@ import (
 	"regexp"
 )
 
+// Stable class-label strings. Used both as the sentinel error messages and
+// as the values ErrorClass returns, so the two cannot drift. Callers outside
+// this package (e.g. internal/controller/zone txt_registry's failClass
+// field) should reference these constants directly instead of duplicating
+// the literals.
+const (
+	ClassNameMiss    = "name-miss"
+	ClassForeign     = "foreign"
+	ClassUndecodable = "undecodable"
+)
+
 // Sentinel errors for the named classes. Consumers in zone/ + tunnel/ wrap
 // these via fmt.Errorf("%w: ...", ErrForeign) so errors.Is(err, ErrForeign)
 // returns true.
@@ -38,17 +49,17 @@ var (
 	// operator's state suggests one should exist. S1's companion-self-heal
 	// classifies a "companion expected but list returned empty" condition as
 	// this class.
-	ErrNameMiss = errors.New("name-miss")
+	ErrNameMiss = errors.New(ClassNameMiss)
 	// ErrForeign indicates a record exists at the expected name+type but is
 	// owned by something other than this CR — the ownership companion
 	// decoded successfully but the embedded reference doesn't match this
 	// CR's identity.
-	ErrForeign = errors.New("foreign")
+	ErrForeign = errors.New(ClassForeign)
 	// ErrUndecodable indicates a record exists at the expected name+type
 	// with an ownership companion that fails to decode (corrupted payload
 	// or wrong codec). The operator refuses to write/adopt — manual cleanup
 	// or AES key rotation is required.
-	ErrUndecodable = errors.New("undecodable")
+	ErrUndecodable = errors.New(ClassUndecodable)
 )
 
 // cfAPICodeRe extracts the numeric Cloudflare API error code from a
@@ -75,11 +86,11 @@ func ErrorClass(err error) string {
 	}
 	switch {
 	case errors.Is(err, ErrNameMiss):
-		return "name-miss"
+		return ClassNameMiss
 	case errors.Is(err, ErrForeign):
-		return "foreign"
+		return ClassForeign
 	case errors.Is(err, ErrUndecodable):
-		return "undecodable"
+		return ClassUndecodable
 	}
 	if m := cfAPICodeRe.FindStringSubmatch(err.Error()); len(m) == 2 {
 		return "cf-api-" + m[1]

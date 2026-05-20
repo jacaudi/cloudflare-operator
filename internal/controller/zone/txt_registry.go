@@ -29,6 +29,7 @@ import (
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
+	"github.com/jacaudi/cloudflare-operator/internal/reconcile"
 )
 
 // ErrTxtRegistryKeyMalformed is returned by loadCodec when the Secret's key
@@ -210,7 +211,7 @@ type companionInputs struct {
 type companionOutcome struct {
 	txtRecordID string // set when the companion is ours and present
 	ownershipOK bool   // true ⇒ companion is in the desired state
-	failClass   string // "" | "name-miss" | "foreign" | "undecodable" | "cf-create" | "cf-update"
+	failClass   string // "" | reconcile.ClassNameMiss | reconcile.ClassForeign | reconcile.ClassUndecodable | "cf-create" | "cf-update"
 }
 
 // reconcileTXTCompanion converges the TXT ownership companion against ACTUAL
@@ -226,8 +227,8 @@ type companionOutcome struct {
 //     absent      → CreateRecord; on CF 81058 ⇒ re-list + re-classify
 //     (never a hard error — sub-bug b).
 //     Match       → if payload-hash drift: UpdateRecord; set TxtRecordID.
-//     Foreign     → REFUSE (no write); ownershipOK=false, failClass="foreign".
-//     Unrecognized→ REFUSE (no write); ownershipOK=false, failClass="undecodable".
+//     Foreign     → REFUSE (no write); ownershipOK=false, failClass=ClassForeign.
+//     Unrecognized→ REFUSE (no write); ownershipOK=false, failClass=ClassUndecodable.
 //
 // Anti-hijack invariant (P5 design Q2): NEVER writes a TXT companion for a
 // record this CR cannot prove it owns.
@@ -263,9 +264,9 @@ func reconcileTXTCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID 
 			}
 			return companionOutcome{txtRecordID: found.ID, ownershipOK: true}, nil
 		case TxtOwnershipForeign:
-			return companionOutcome{ownershipOK: false, failClass: "foreign"}, nil
+			return companionOutcome{ownershipOK: false, failClass: reconcile.ClassForeign}, nil
 		default: // TxtOwnershipUnrecognized
-			return companionOutcome{ownershipOK: false, failClass: "undecodable"}, nil
+			return companionOutcome{ownershipOK: false, failClass: reconcile.ClassUndecodable}, nil
 		}
 	}
 
@@ -285,17 +286,17 @@ func reconcileTXTCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID 
 		}
 		if len(list) == 0 {
 			// CF claims the record exists but our exact-name list can't see it
-			// (the original external-jacaudi failure mode pre-T1, now a name-miss
+			// (the original external-host failure mode pre-T1, now a name-miss
 			// rather than an infinite loop).
-			return companionOutcome{ownershipOK: false, failClass: "name-miss"}, nil
+			return companionOutcome{ownershipOK: false, failClass: reconcile.ClassNameMiss}, nil
 		}
 		switch verifyTXTOwnership(list[0].Content, in.readCodec, "CloudflareDNSRecord", in.ourNS, in.ourName) {
 		case TxtOwnershipMatch:
 			return companionOutcome{txtRecordID: list[0].ID, ownershipOK: true}, nil
 		case TxtOwnershipForeign:
-			return companionOutcome{ownershipOK: false, failClass: "foreign"}, nil
+			return companionOutcome{ownershipOK: false, failClass: reconcile.ClassForeign}, nil
 		default:
-			return companionOutcome{ownershipOK: false, failClass: "undecodable"}, nil
+			return companionOutcome{ownershipOK: false, failClass: reconcile.ClassUndecodable}, nil
 		}
 	}
 	return companionOutcome{txtRecordID: created.ID, ownershipOK: true}, nil
