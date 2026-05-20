@@ -508,6 +508,56 @@ The cascade-GC eligibility predicate (`cascadeGCEligible`) gates on the
 labels — direct-create CRs carry neither and are invisible to the
 migration.
 
+### Force-reconcile annotation + structured error-class signal (S6 / #2 + #7, 2026-05)
+
+#### Force-reconcile (`cloudflare.io/reconcile-at`)
+
+Setting (or changing) the `cloudflare.io/reconcile-at` annotation on any
+of the 5 operator CRDs (`CloudflareZone`, `CloudflareZoneConfig`,
+`CloudflareDNSRecord`, `CloudflareRuleset`, `CloudflareTunnel`) forces a
+**full re-check** on the next reconcile of that CR — bypassing the
+controller's change-detection / no-drift short-circuit so the operator
+will read the live Cloudflare state and re-apply the spec.
+
+The value is **opaque** — the operator never parses it as a time. Any
+change triggers exactly one full re-check. Common admin choices:
+
+```yaml
+metadata:
+  annotations:
+    cloudflare.io/reconcile-at: "2026-05-20T12:34:56Z"   # RFC3339 timestamp
+    # — or —
+    cloudflare.io/reconcile-at: "manual-1"                # bump on demand
+```
+
+The controller persists an ack in `status.lastReconcileToken`. As long as
+the annotation value matches the ack, no force fires. **Controller
+restart is not a re-trigger**: the ack lives in status, so only an
+admin-driven *change* to the annotation re-arms the force.
+
+**Source-object annotations:** the source controllers (Service / Gateway
+/ HTTPRoute / TLSRoute) do NOT consume `cloudflare.io/reconcile-at` — they
+are passive readers of K8s objects, not CRDs. To force-reconcile a
+tunnel, set the annotation on the `CloudflareTunnel` CR itself.
+
+#### Structured error-class signal
+
+A shared helper (`internal/reconcile.ErrorClass`) classifies operator
+errors into a stable set of strings for use in Warning Event reasons,
+status condition reasons, and (future) metrics:
+
+- `name-miss` — expected record not found in Cloudflare (list returned empty).
+- `foreign` — record exists but is owned by something else (ownership-companion identity mismatch).
+- `undecodable` — record exists but the ownership companion fails to decode.
+- `cf-api-<code>` — Cloudflare API rejected the operation (e.g. `cf-api-81058`, `cf-api-9207`).
+- `unknown` — fallthrough for errors that don't match the above.
+
+This lets dashboards and alerting route on the underlying CAUSE instead
+of grepping log lines. Existing S1 reasons (`OwnershipCompanionFailed`,
+`AdoptRefusedForeign`, `DriftDetected`) are unchanged; the class is an
+additional, machine-grep-able field. Consumer wiring lands incrementally
+in later slices — the helper is in place today and is safe to adopt.
+
 ---
 
 ## Renovate tracking
