@@ -76,13 +76,13 @@ type IngressEntry struct {
 }
 
 // IngressOriginRequest is the per-entry origin-request override. Only the
-// fields the operator currently models are included; the SDK surface
-// carries many more that we do not propagate.
+// two fields the tunnel controller actively manages are modeled; any
+// additional cloudflared originRequest fields (caPool, connectTimeoutSeconds,
+// etc.) are deliberately omitted. Adding more requires adding annotation
+// keys, CR Spec fields, synth plumbing, and tests in one change.
 type IngressOriginRequest struct {
-	NoTLSVerify           *bool   `json:"noTLSVerify,omitempty"`
-	OriginServerName      *string `json:"originServerName,omitempty"`
-	CAPool                *string `json:"caPool,omitempty"`
-	ConnectTimeoutSeconds *int32  `json:"connectTimeout,omitempty"`
+	NoTLSVerify      *bool   `json:"noTLSVerify,omitempty"`
+	OriginServerName *string `json:"originServerName,omitempty"`
 }
 
 // TunnelConnection is one connector connection summary. ColoName and
@@ -288,15 +288,6 @@ func mapConfigurationGetResponse(resp *zero_trust.TunnelCloudflaredConfiguration
 			or.OriginServerName = &s
 			hasAny = true
 		}
-		if s := in.OriginRequest.CAPool; s != "" {
-			or.CAPool = &s
-			hasAny = true
-		}
-		if ct := in.OriginRequest.ConnectTimeout; ct != 0 {
-			v := int32(ct) //nolint:gosec // G115: ConnectTimeout is a small positive seconds value from the operator spec; int32 overflow is not a practical concern
-			or.ConnectTimeoutSeconds = &v
-			hasAny = true
-		}
 		if hasAny {
 			entry.OriginRequest = &or
 		}
@@ -327,15 +318,6 @@ func mapConfigurationUpdateResponse(resp *zero_trust.TunnelCloudflaredConfigurat
 			or.OriginServerName = &s
 			hasAny = true
 		}
-		if s := in.OriginRequest.CAPool; s != "" {
-			or.CAPool = &s
-			hasAny = true
-		}
-		if ct := in.OriginRequest.ConnectTimeout; ct != 0 {
-			v := int32(ct) //nolint:gosec // G115: ConnectTimeout is a small positive seconds value from the operator spec; int32 overflow is not a practical concern
-			or.ConnectTimeoutSeconds = &v
-			hasAny = true
-		}
 		if hasAny {
 			entry.OriginRequest = &or
 		}
@@ -362,12 +344,6 @@ func toSDKConfig(cfg TunnelConfig) zero_trust.TunnelCloudflaredConfigurationUpda
 			}
 			if e.OriginRequest.OriginServerName != nil {
 				or.OriginServerName = cfgo.F(*e.OriginRequest.OriginServerName)
-			}
-			if e.OriginRequest.CAPool != nil {
-				or.CAPool = cfgo.F(*e.OriginRequest.CAPool)
-			}
-			if e.OriginRequest.ConnectTimeoutSeconds != nil {
-				or.ConnectTimeout = cfgo.F(int64(*e.OriginRequest.ConnectTimeoutSeconds))
 			}
 			ie.OriginRequest = cfgo.F(or)
 		}

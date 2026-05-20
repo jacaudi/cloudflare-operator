@@ -112,10 +112,6 @@ func TestClassifyTunnelAPIErr(t *testing.T) {
 func TestToSDKConfig_RoundTrip(t *testing.T) {
 	noVerify := true
 	serverName := "origin.example.com"
-	caPool := "/etc/ssl/ca.pem"
-	timeout := int32(30)
-
-	caPoolOnly := "/only/ca.pem"
 
 	cfg := TunnelConfig{
 		Ingress: []IngressEntry{
@@ -124,17 +120,15 @@ func TestToSDKConfig_RoundTrip(t *testing.T) {
 				Path:     "/api",
 				Service:  "http://svc.ns:80",
 				OriginRequest: &IngressOriginRequest{
-					NoTLSVerify:           &noVerify,
-					OriginServerName:      &serverName,
-					CAPool:                &caPool,
-					ConnectTimeoutSeconds: &timeout,
+					NoTLSVerify:      &noVerify,
+					OriginServerName: &serverName,
 				},
 			},
 			{
 				Hostname: "partial.example.com",
 				Service:  "https://svc.ns:443",
 				OriginRequest: &IngressOriginRequest{
-					CAPool: &caPoolOnly,
+					OriginServerName: &serverName,
 				},
 			},
 			{Service: "http_status:404"}, // catch-all, no OriginRequest
@@ -146,26 +140,22 @@ func TestToSDKConfig_RoundTrip(t *testing.T) {
 	ingress := out.Ingress.Value
 	require.Len(t, ingress, 3)
 
-	// Entry 0 — full OriginRequest
+	// Entry 0 — full OriginRequest (both supported fields)
 	require.Equal(t, "full.example.com", ingress[0].Hostname.Value)
 	require.Equal(t, "/api", ingress[0].Path.Value)
 	require.Equal(t, "http://svc.ns:80", ingress[0].Service.Value)
 	or0 := ingress[0].OriginRequest.Value
 	require.True(t, or0.NoTLSVerify.Value)
 	require.Equal(t, "origin.example.com", or0.OriginServerName.Value)
-	require.Equal(t, "/etc/ssl/ca.pem", or0.CAPool.Value)
-	require.Equal(t, int64(30), or0.ConnectTimeout.Value)
 
-	// Entry 1 — partial OriginRequest (only CAPool)
+	// Entry 1 — partial OriginRequest (only OriginServerName)
 	require.Equal(t, "partial.example.com", ingress[1].Hostname.Value)
 	require.Equal(t, "https://svc.ns:443", ingress[1].Service.Value)
 	or1 := ingress[1].OriginRequest.Value
-	require.Equal(t, "/only/ca.pem", or1.CAPool.Value)
+	require.Equal(t, "origin.example.com", or1.OriginServerName.Value)
 	// Unset fields stay zero — param.Field with the zero present-flag is
 	// what the SDK marshals as "absent".
 	require.False(t, or1.NoTLSVerify.Value)
-	require.Equal(t, "", or1.OriginServerName.Value)
-	require.Equal(t, int64(0), or1.ConnectTimeout.Value)
 
 	// Entry 2 — catch-all, no OriginRequest projected at all.
 	require.Equal(t, "http_status:404", ingress[2].Service.Value)
@@ -175,12 +165,10 @@ func TestToSDKConfig_RoundTrip(t *testing.T) {
 	or2 := ingress[2].OriginRequest.Value
 	require.False(t, or2.NoTLSVerify.Value)
 	require.Equal(t, "", or2.OriginServerName.Value)
-	require.Equal(t, "", or2.CAPool.Value)
-	require.Equal(t, int64(0), or2.ConnectTimeout.Value)
 }
 
 // TestMapConfigurationGetResponse_AllFields verifies the GET-side mapper
-// projects all four operator-modeled OriginRequest fields when the SDK
+// projects both operator-modeled OriginRequest fields when the SDK
 // reports non-zero values, and projects no OriginRequest at all when every
 // field is zero.
 func TestMapConfigurationGetResponse_AllFields(t *testing.T) {
@@ -195,8 +183,6 @@ func TestMapConfigurationGetResponse_AllFields(t *testing.T) {
 					OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
 						NoTLSVerify:      true,
 						OriginServerName: "origin.example.com",
-						CAPool:           "/etc/ssl/ca.pem",
-						ConnectTimeout:   30,
 					},
 				},
 				{
@@ -212,7 +198,7 @@ func TestMapConfigurationGetResponse_AllFields(t *testing.T) {
 	require.Equal(t, 11, out.Version)
 	require.Len(t, out.Config.Ingress, 2)
 
-	// Entry 0 — all four fields projected.
+	// Entry 0 — both supported fields projected.
 	e0 := out.Config.Ingress[0]
 	require.Equal(t, "full.example.com", e0.Hostname)
 	require.Equal(t, "/api", e0.Path)
@@ -222,10 +208,6 @@ func TestMapConfigurationGetResponse_AllFields(t *testing.T) {
 	require.True(t, *e0.OriginRequest.NoTLSVerify)
 	require.NotNil(t, e0.OriginRequest.OriginServerName)
 	require.Equal(t, "origin.example.com", *e0.OriginRequest.OriginServerName)
-	require.NotNil(t, e0.OriginRequest.CAPool)
-	require.Equal(t, "/etc/ssl/ca.pem", *e0.OriginRequest.CAPool)
-	require.NotNil(t, e0.OriginRequest.ConnectTimeoutSeconds)
-	require.Equal(t, int32(30), *e0.OriginRequest.ConnectTimeoutSeconds)
 
 	// Entry 1 — all SDK OriginRequest fields zero ⇒ no projection.
 	e1 := out.Config.Ingress[1]
@@ -248,8 +230,6 @@ func TestMapConfigurationUpdateResponse_AllFields(t *testing.T) {
 					OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
 						NoTLSVerify:      true,
 						OriginServerName: "origin.example.com",
-						CAPool:           "/etc/ssl/ca.pem",
-						ConnectTimeout:   45,
 					},
 				},
 				{
@@ -270,10 +250,6 @@ func TestMapConfigurationUpdateResponse_AllFields(t *testing.T) {
 	require.True(t, *e0.OriginRequest.NoTLSVerify)
 	require.NotNil(t, e0.OriginRequest.OriginServerName)
 	require.Equal(t, "origin.example.com", *e0.OriginRequest.OriginServerName)
-	require.NotNil(t, e0.OriginRequest.CAPool)
-	require.Equal(t, "/etc/ssl/ca.pem", *e0.OriginRequest.CAPool)
-	require.NotNil(t, e0.OriginRequest.ConnectTimeoutSeconds)
-	require.Equal(t, int32(45), *e0.OriginRequest.ConnectTimeoutSeconds)
 
 	e1 := out.Config.Ingress[1]
 	require.Nil(t, e1.OriginRequest)
@@ -285,18 +261,17 @@ func TestMapConfigurationUpdateResponse_AllFields(t *testing.T) {
 // build matching field combinations on both SDK response types and assert
 // the two mappers produce identical plain-Go IngressOriginRequest values.
 func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
-	// Case A: every field non-zero (everything should project).
-	// Case B: only OriginServerName set (CAPool, ConnectTimeout zero; NoTLSVerify false).
+	// Case A: both supported fields non-zero (both should project).
+	// Case B: only OriginServerName set (NoTLSVerify false).
 	//          This is the one Fix 1 specifically guards.
 	// Case C: only NoTLSVerify true.
-	// Case D: only ConnectTimeout set.
-	// Case E: all zero (no projection at either side).
+	// Case D: all zero (no projection at either side).
 
 	getResp := &zero_trust.TunnelCloudflaredConfigurationGetResponse{
 		Config: zero_trust.TunnelCloudflaredConfigurationGetResponseConfig{
 			Ingress: []zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngress{
 				{Hostname: "a.example.com", Service: "http://a:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
-					NoTLSVerify: true, OriginServerName: "a.origin", CAPool: "/a", ConnectTimeout: 5,
+					NoTLSVerify: true, OriginServerName: "a.origin",
 				}},
 				{Hostname: "b.example.com", Service: "http://b:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
 					OriginServerName: "b.origin",
@@ -304,10 +279,7 @@ func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
 				{Hostname: "c.example.com", Service: "http://c:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
 					NoTLSVerify: true,
 				}},
-				{Hostname: "d.example.com", Service: "http://d:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
-					ConnectTimeout: 99,
-				}},
-				{Hostname: "e.example.com", Service: "http://e:80"},
+				{Hostname: "d.example.com", Service: "http://d:80"},
 			},
 		},
 	}
@@ -315,7 +287,7 @@ func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
 		Config: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfig{
 			Ingress: []zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngress{
 				{Hostname: "a.example.com", Service: "http://a:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
-					NoTLSVerify: true, OriginServerName: "a.origin", CAPool: "/a", ConnectTimeout: 5,
+					NoTLSVerify: true, OriginServerName: "a.origin",
 				}},
 				{Hostname: "b.example.com", Service: "http://b:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
 					OriginServerName: "b.origin",
@@ -323,10 +295,7 @@ func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
 				{Hostname: "c.example.com", Service: "http://c:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
 					NoTLSVerify: true,
 				}},
-				{Hostname: "d.example.com", Service: "http://d:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
-					ConnectTimeout: 99,
-				}},
-				{Hostname: "e.example.com", Service: "http://e:80"},
+				{Hostname: "d.example.com", Service: "http://d:80"},
 			},
 		},
 	}
@@ -334,8 +303,8 @@ func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
 	gotGet := mapConfigurationGetResponse(getResp)
 	gotUpd := mapConfigurationUpdateResponse(updResp)
 
-	require.Len(t, gotGet.Config.Ingress, 5)
-	require.Len(t, gotUpd.Config.Ingress, 5)
+	require.Len(t, gotGet.Config.Ingress, 4)
+	require.Len(t, gotUpd.Config.Ingress, 4)
 
 	// Hostname/Path/Service equality is incidental; the contract under
 	// test is OriginRequest projection symmetry.
@@ -352,7 +321,7 @@ func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
 	require.Equal(t, "b.origin", *caseB.OriginRequest.OriginServerName)
 	require.Nil(t, caseB.OriginRequest.NoTLSVerify, "NoTLSVerify must not be projected when SDK reports false (unset vs. explicit-false ambiguity)")
 
-	// Case E — every field zero ⇒ no projection.
-	require.Nil(t, gotGet.Config.Ingress[4].OriginRequest)
-	require.Nil(t, gotUpd.Config.Ingress[4].OriginRequest)
+	// Case D — every field zero ⇒ no projection.
+	require.Nil(t, gotGet.Config.Ingress[3].OriginRequest)
+	require.Nil(t, gotUpd.Config.Ingress[3].OriginRequest)
 }
