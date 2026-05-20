@@ -82,7 +82,7 @@ func TestServiceSourceEnvtest_AnnotationChangePropagatesToDNSRecord(t *testing.T
 
 	// Wait for the tunnel CR + Status.TunnelCNAME (same as the sibling
 	// envtest's deferred-emission flow).
-	expectedTunnel := "cf-" + f.ns + "-payments"
+	expectedTunnel := f.ns + "-payments"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {

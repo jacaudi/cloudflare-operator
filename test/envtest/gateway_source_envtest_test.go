@@ -220,7 +220,7 @@ func TestGatewaySourceEnvtest_ListenerProducesApexCNAME(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
 
-	expectedTunnel := "cf-" + f.ns + "-edge"
+	expectedTunnel := f.ns + "-edge"
 
 	// Auto-created CloudflareTunnel CR with the derived name.
 	require.Eventually(t, func() bool {

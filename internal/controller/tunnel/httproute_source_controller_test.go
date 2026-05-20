@@ -81,7 +81,7 @@ func mkGwSvc(name, ns string) *corev1.Service {
 func TestHTTPRouteSource_HappyPath(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -108,7 +108,7 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
 
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 1)
 	require.Equal(t, "notes.example.com", snap[0].Hostname)
 	// The service URL points at the Gateway's underlying Service, port from
@@ -143,7 +143,7 @@ func TestHTTPRouteSource_HappyPath(t *testing.T) {
 func TestHTTPRouteSource_FilterRejected_PartiallyInvalid(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -178,7 +178,7 @@ func TestHTTPRouteSource_FilterRejected_PartiallyInvalid(t *testing.T) {
 func TestHTTPRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	otherGw := &gwv1.Gateway{ // no tunnel annotation
@@ -219,7 +219,7 @@ func TestHTTPRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 func TestHTTPRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	otherGw := &gwv1.Gateway{
@@ -288,7 +288,7 @@ func TestHTTPRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 func TestHTTPRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		// TunnelCNAME deliberately empty — tunnel reconciler hasn't run yet.
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -310,7 +310,7 @@ func TestHTTPRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache entry written for the tunnel reconciler to consume.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 1)
 	// But no DNSRecord — chainContent resolves, BUT the design requires
 	// deferring DNS emission until the tunnel CR populates its status (so the
@@ -359,7 +359,7 @@ func TestHTTPRouteSource_NoTunnelTargetedParent(t *testing.T) {
 func TestHTTPRouteSource_DeleteSweepsCache(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -379,7 +379,7 @@ func TestHTTPRouteSource_DeleteSweepsCache(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
-	tk := tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"}
+	tk := tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"}
 	require.Len(t, cache.Snapshot(tk), 1)
 
 	// Delete the route, reconcile again.
@@ -403,7 +403,7 @@ func ptrNs(s string) *gwv1.Namespace {
 func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -432,7 +432,7 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache: one contribution per hostname.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 3, "expected one cache contribution per hostname")
 	gotHostnames := map[string]bool{}
 	for _, c := range snap {
@@ -466,13 +466,13 @@ func TestHTTPRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 // is honored. Subsequent tunnel-targeted parents are NOT attached — neither
 // cache contributions nor a parent status entry.
 func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
-	// First parent: tunnel "edge" → CR "cf-gw-ns-edge".
+	// First parent: tunnel "edge" → CR "gw-ns-edge".
 	gw1 := mkParentGw("gw1", "gw-ns")
 	tn1 := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
-	// Second parent: distinct tunnel "edge2" → CR "cf-gw-ns-edge2".
+	// Second parent: distinct tunnel "edge2" → CR "gw-ns-edge2".
 	h2 := gwv1.Hostname("other.example.com")
 	gw2 := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
@@ -488,7 +488,7 @@ func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 		},
 	}
 	tn2 := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge2", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge2", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: "tnl-2.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -513,9 +513,9 @@ func TestHTTPRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 	require.NoError(t, err)
 
 	// Only the first tunnel-key has a contribution; the second is untouched.
-	snap1 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap1 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap1, 1, "first parent's tunnel attached")
-	snap2 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge2"})
+	snap2 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge2"})
 	require.Empty(t, snap2, "second tunnel-targeted parent must NOT be attached")
 
 	// Status: exactly one entry, for the FIRST parent.
@@ -582,7 +582,7 @@ func TestHTTPRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	rt := &gwv1.HTTPRoute{
@@ -605,7 +605,7 @@ func TestHTTPRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 	require.NoError(t, err, "gateway-service unresolved must NOT fail the reconcile")
 
 	// No cache contribution — the parent did not qualify.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Empty(t, snap)
 
 	// No DNSRecord CR emitted.
@@ -629,7 +629,7 @@ func TestHTTPRouteSource_InheritsAdoptFromGateway(t *testing.T) {
 	gw.Annotations[conventions.AnnotationAdopt] = "true"
 
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -669,7 +669,7 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 	gw.Annotations[conventions.AnnotationAdopt] = "true"
 
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -713,7 +713,7 @@ func TestHTTPRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 func TestHTTPRouteSource_NoHostnameReason(t *testing.T) {
 	gw := mkParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -792,7 +792,7 @@ func TestHTTPRouteChain_ValidOverride(t *testing.T) {
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -850,7 +850,7 @@ func TestHTTPRouteChain_NoOverride_ConcreteListener_ChainsToTunnelCNAME(t *testi
 	}
 	const tunnelCNAME = "tnl-2.cfargotunnel.com"
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: tunnelCNAME},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -904,7 +904,7 @@ func TestHTTPRouteChain_WildcardOnly_NoOverride_BlockedNoEmit(t *testing.T) {
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -989,7 +989,7 @@ func TestDogfooding_EmittedChainCRsNeverWildcard(t *testing.T) {
 			},
 		}
 		tn := &v2alpha1.CloudflareTunnel{
-			ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+			ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 			Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 		}
 		gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -1048,7 +1048,7 @@ func TestDogfooding_EmittedChainCRsNeverWildcard(t *testing.T) {
 		}
 		const tunnelCNAME = "tnl-2.cfargotunnel.com"
 		tn := &v2alpha1.CloudflareTunnel{
-			ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+			ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 			Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: tunnelCNAME},
 		}
 		gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -1105,7 +1105,7 @@ func TestDogfooding_EmittedChainCRsNeverWildcard(t *testing.T) {
 			},
 		}
 		tn := &v2alpha1.CloudflareTunnel{
-			ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+			ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 			Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 		}
 		gwSvc := mkGwSvc("gw-svc", "gw-ns")
@@ -1173,7 +1173,7 @@ func sectionNamePtr(s string) *gwv1.SectionName {
 func reconcileHTTPRouteAndGetContrib(t *testing.T, gw *gwv1.Gateway, rt *gwv1.HTTPRoute) tunnelsynth.ContributionWithSource {
 	t.Helper()
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: gw.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: gw.Namespace},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkGwSvc("gw-svc", gw.Namespace)
@@ -1186,7 +1186,7 @@ func reconcileHTTPRouteAndGetContrib(t *testing.T, gw *gwv1.Gateway, rt *gwv1.HT
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name}})
 	require.NoError(t, err)
 
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: "gw-ns-edge"})
 	require.Len(t, snap, 1, "expected exactly one contribution")
 	return snap[0]
 }

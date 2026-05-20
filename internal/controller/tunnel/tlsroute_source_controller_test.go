@@ -91,7 +91,7 @@ func mkTLSGwSvc(name, ns string) *corev1.Service {
 func TestTLSRouteSource_HappyPath_StampsClientSideClientRequired(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -117,7 +117,7 @@ func TestTLSRouteSource_HappyPath_StampsClientSideClientRequired(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
 
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 1)
 	require.Equal(t, "secure.example.com", snap[0].Hostname)
 
@@ -157,7 +157,7 @@ func TestTLSRouteSource_HappyPath_StampsClientSideClientRequired(t *testing.T) {
 func TestTLSRouteSource_TCPProtocolURL(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -176,7 +176,7 @@ func TestTLSRouteSource_TCPProtocolURL(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
 
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 1)
 	require.True(t, strings.HasPrefix(snap[0].Service, "tcp://"), "expected tcp:// scheme, got %q", snap[0].Service)
 	// Port comes from the resolved Gateway service (annotation/first-port fallback),
@@ -221,7 +221,7 @@ func TestTLSRouteSource_NoTunnelTargetedParent(t *testing.T) {
 func TestTLSRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	otherGw := &gwv1.Gateway{
@@ -258,7 +258,7 @@ func TestTLSRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	otherGw := &gwv1.Gateway{
@@ -324,7 +324,7 @@ func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 func TestTLSRouteSource_DeleteSweepsCache(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -343,7 +343,7 @@ func TestTLSRouteSource_DeleteSweepsCache(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
-	tk := tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"}
+	tk := tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"}
 	require.Len(t, cache.Snapshot(tk), 1)
 
 	require.NoError(t, c.Delete(context.Background(), rt))
@@ -358,7 +358,7 @@ func TestTLSRouteSource_DeleteSweepsCache(t *testing.T) {
 func TestTLSRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -378,7 +378,7 @@ func TestTLSRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app", Name: "r"}})
 	require.NoError(t, err)
 
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 3, "one contribution per hostname")
 	for _, ic := range snap {
 		require.True(t, strings.HasPrefix(ic.Service, "tcp://"), "expected tcp:// scheme")
@@ -396,7 +396,7 @@ func TestTLSRouteSource_MultipleHostnames_EmitsPerHostname(t *testing.T) {
 func TestTLSRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		// TunnelCNAME deliberately empty — tunnel reconciler hasn't run yet.
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -417,7 +417,7 @@ func TestTLSRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cache entry written for the tunnel reconciler to consume.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 1, "cache contribution still written when tunnel CNAME is empty")
 
 	// But no DNSRecord — DNS emission deferred until the tunnel CR populates
@@ -433,13 +433,13 @@ func TestTLSRouteSource_DeferredOnEmptyTunnelCNAME(t *testing.T) {
 // only the FIRST is honored — neither cache contributions nor a status entry
 // touch the second parent. Mirror of T12's analogous HTTPRoute test.
 func TestTLSRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
-	// First parent: tunnel "edge" → CR "cf-gw-ns-edge".
+	// First parent: tunnel "edge" → CR "gw-ns-edge".
 	gw1 := mkTLSParentGw("gw1", "gw-ns")
 	tn1 := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
-	// Second parent: distinct tunnel "edge2" → CR "cf-gw-ns-edge2".
+	// Second parent: distinct tunnel "edge2" → CR "gw-ns-edge2".
 	h2 := gwv1.Hostname("other.example.com")
 	gw2 := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
@@ -455,7 +455,7 @@ func TestTLSRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 		},
 	}
 	tn2 := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge2", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge2", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: "tnl-2.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -479,9 +479,9 @@ func TestTLSRouteSource_TwoTunnelTargetedParents_FirstWins(t *testing.T) {
 	require.NoError(t, err)
 
 	// Only the first tunnel-key has a contribution; the second is untouched.
-	snap1 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap1 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap1, 1, "first parent's tunnel attached")
-	snap2 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge2"})
+	snap2 := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge2"})
 	require.Empty(t, snap2, "second tunnel-targeted parent must NOT be attached")
 
 	// Status: exactly one entry, for the FIRST parent.
@@ -521,7 +521,7 @@ func TestTLSRouteSource_ParentGatewayNotFound_Skips(t *testing.T) {
 	require.Empty(t, list.Items)
 
 	// No cache write.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Empty(t, snap)
 
 	// No status entries written.
@@ -552,7 +552,7 @@ func TestTLSRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	rt := &gwv1a2.TLSRoute{
@@ -574,7 +574,7 @@ func TestTLSRouteSource_GatewayServiceUnresolved_Skips(t *testing.T) {
 	require.NoError(t, err, "gateway-service unresolved must NOT fail the reconcile")
 
 	// No cache contribution — the parent did not qualify.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Empty(t, snap)
 
 	// No DNSRecord CR emitted.
@@ -621,7 +621,7 @@ func TestTLSRouteSource_NoListenerHostname_ZeroContribs_AcceptedFalse(t *testing
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -644,7 +644,7 @@ func TestTLSRouteSource_NoListenerHostname_ZeroContribs_AcceptedFalse(t *testing
 	require.NoError(t, err)
 
 	// Zero contributions emitted (no hostnames to fan out over).
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Empty(t, snap, "no hostnames resolved → no contributions")
 
 	// No DNSRecord — emission deferred because chainContent == "".
@@ -688,7 +688,7 @@ func TestTLSRouteSource_InheritsAdoptFromGateway(t *testing.T) {
 	gw.Annotations[conventions.AnnotationAdopt] = "true"
 
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -727,7 +727,7 @@ func TestTLSRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 	gw.Annotations[conventions.AnnotationAdopt] = "true"
 
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -776,7 +776,7 @@ func TestTLSRouteSource_InheritsListenerHostname_WhenSpecEmpty(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns") // listener hostname == "tls.example.com"
 	const tunnelCNAME = "tnl-1.cfargotunnel.com"
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: tunnelCNAME},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -799,7 +799,7 @@ func TestTLSRouteSource_InheritsListenerHostname_WhenSpecEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Exactly one contribution using the inherited listener hostname.
-	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "cf-gw-ns-edge"})
+	snap := cache.Snapshot(tunnelsynth.TunnelKey{Namespace: "gw-ns", Name: "gw-ns-edge"})
 	require.Len(t, snap, 1, "Spec.Hostnames empty + listener hostname present → 1 inherited contribution")
 	require.Equal(t, "tls.example.com", snap[0].Hostname, "contribution uses the inherited listener hostname")
 	require.True(t, strings.HasPrefix(snap[0].Service, "tcp://"))
@@ -861,7 +861,7 @@ func TestTLSRouteChain_ValidOverride(t *testing.T) {
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -916,7 +916,7 @@ func TestTLSRouteChain_NoOverride_ConcreteListener_ChainsToTunnelCNAME(t *testin
 	}
 	const tunnelCNAME = "tnl-2.cfargotunnel.com"
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-2", TunnelCNAME: tunnelCNAME},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
@@ -969,7 +969,7 @@ func TestTLSRouteChain_WildcardOnly_NoOverride_BlockedNoEmit(t *testing.T) {
 		},
 	}
 	tn := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-gw-ns-edge", Namespace: "gw-ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")

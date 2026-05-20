@@ -221,7 +221,7 @@ func createGatewayForRouteTest(t *testing.T, f *httpRouteEnvFixture) {
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
 
-	expectedTunnel := "cf-" + f.ns + "-edge"
+	expectedTunnel := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
@@ -297,7 +297,7 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 	// production picks up the new contributions on the 30-min requeue or on
 	// the next tunnel-CR event. We trigger one via a no-op annotation update.
 	var tn v2alpha1.CloudflareTunnel
-	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: "cf-" + f.ns + "-edge"}, &tn))
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: f.ns + "-edge"}, &tn))
 	require.NotEmpty(t, tn.Status.TunnelID)
 	if tn.Annotations == nil {
 		tn.Annotations = map[string]string{}

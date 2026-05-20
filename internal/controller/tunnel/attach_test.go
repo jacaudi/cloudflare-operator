@@ -177,7 +177,7 @@ func TestEnsureTunnelCR_StampsAutoCreatedAnnotation(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
 
-	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v2alpha1.ConnectorSpec{
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "ns", v2alpha1.ConnectorSpec{
 		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 	})
 	require.NoError(t, err)
@@ -213,14 +213,14 @@ func TestIsAutoCreated_AnnotationOtherValue(t *testing.T) {
 func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T) {
 	s := tunnelScheme(t)
 	existing := &v2alpha1.CloudflareTunnel{
-		ObjectMeta: metav1.ObjectMeta{Name: "cf-ns", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "ns", Namespace: "ns"},
 	}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(existing, svc).Build()
 
-	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "cf-ns", v2alpha1.ConnectorSpec{
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "ns", v2alpha1.ConnectorSpec{
 		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
 	})
 	require.NoError(t, err)
@@ -611,8 +611,8 @@ func TestFindTunnelTargetedParentRef(t *testing.T) {
 		gwSvc := mkGwSvc("gw-svc", "ns1")
 
 		// Build the CloudflareTunnel CR the helper must locate.
-		// Name = DeriveTunnelName("ns1","edge") = "cf-ns1-edge", matching the
-		// pattern used by every existing test (e.g. Name: "cf-gw-ns-edge" in
+		// Name = DeriveTunnelName("ns1","edge") = "ns1-edge", matching the
+		// pattern used by every existing test (e.g. Name: "gw-ns-edge" in
 		// TestHTTPRouteSource_HappyPath for namespace "gw-ns" and tunnel-name "edge").
 		tnName, err := DeriveTunnelName("ns1", "edge")
 		require.NoError(t, err)

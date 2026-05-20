@@ -49,9 +49,9 @@ func mkTunnel(name, ns string, mut func(*v2alpha1.CloudflareTunnel)) *v2alpha1.C
 }
 
 func TestBuildDeployment_NamingTemplate(t *testing.T) {
-	tn := mkTunnel("cf-app-foo-payments", "app-foo", nil)
+	tn := mkTunnel("app-foo-payments", "app-foo", nil)
 	dep := BuildDeployment(tn, testDefaultImage)
-	require.Equal(t, "cloudflared-cf-app-foo-payments", dep.Name)
+	require.Equal(t, "cloudflared-app-foo-payments", dep.Name)
 	require.Equal(t, "app-foo", dep.Namespace)
 }
 

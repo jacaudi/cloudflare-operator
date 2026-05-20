@@ -179,7 +179,7 @@ func sanitizeTestName(name string) string {
 }
 
 // shortUniqueNamespace returns a DNS-1123-valid namespace small enough that
-// the derived "cf-<ns>-<tunnel-name>" stays under the 52-char cap enforced
+// the derived "<ns>-<tunnel-name>" stays under the 52-char cap enforced
 // by DeriveTunnelName. Hard-capped at 20 chars; hex suffix avoids collisions.
 func shortUniqueNamespace(t *testing.T) string {
 	t.Helper()
@@ -197,7 +197,7 @@ func shortUniqueNamespace(t *testing.T) string {
 
 // TestServiceSourceEnvtest_OptInAutoCreatesTunnelAndDNS covers design §12.2:
 // annotating a Service with tunnel=true + tunnel-name=payments + hostnames
-// produces an auto-created CloudflareTunnel CR named cf-<ns>-payments AND a
+// produces an auto-created CloudflareTunnel CR named <ns>-payments AND a
 // dog-fooded CloudflareDNSRecord (CNAME hostname → tunnel CNAME). Exercises
 // the full deferred-emission flow: source caches contrib → tunnel reconciler
 // creates the Cloudflare-side tunnel + populates Status.TunnelCNAME →
@@ -223,7 +223,7 @@ func TestServiceSourceEnvtest_OptInAutoCreatesTunnelAndDNS(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, zone))
 
-	expectedTunnel := "cf-" + f.ns + "-payments"
+	expectedTunnel := f.ns + "-payments"
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "svc", Namespace: f.ns,
@@ -283,7 +283,7 @@ func TestServiceSourceEnvtest_NoTunnelName_AttachesToNamespacePool(t *testing.T)
 	f := setupServiceEnv(t, "")
 	ctx := context.Background()
 
-	expectedPool := "cf-" + f.ns
+	expectedPool := f.ns
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "svc", Namespace: f.ns,
@@ -317,7 +317,7 @@ func TestServiceSourceEnvtest_NoTLSVerify_ThreadsIntoIngressEntry(t *testing.T) 
 	f := setupServiceEnv(t, "")
 	ctx := context.Background()
 
-	expectedTunnel := "cf-" + f.ns
+	expectedTunnel := f.ns
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "svc", Namespace: f.ns,
@@ -464,7 +464,7 @@ func TestServiceSourceEnvtest_OwnsEmittedDNSRecord_RecreatesOnOutOfBandDelete(t 
 // design §12.11: a Service whose derived tunnel CR name exceeds 52 chars
 // is rejected (Event with Reason=NameTooLong) and no CloudflareTunnel CR is
 // created. Namespace = 40 chars, tunnel-name = 20 chars → derived name
-// "cf-<40>-<20>" = 65 chars, well over the cap.
+// "<40>-<20>" = 61 chars, well over the cap.
 func TestServiceSourceEnvtest_NameTooLong_RejectedNoTunnelCreated(t *testing.T) {
 	if sharedConfig == nil {
 		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
@@ -562,7 +562,7 @@ func TestServiceSourceEnvtest_S4_MigrationGCsOldFormCR(t *testing.T) {
 	require.NoError(t, f.c.Create(ctx, zone))
 
 	const hostname = "myservice.example.com"
-	expectedTunnel := "cf-" + f.ns + "-payments"
+	expectedTunnel := f.ns + "-payments"
 
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{

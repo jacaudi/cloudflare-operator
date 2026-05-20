@@ -86,7 +86,7 @@ func TestEnvtest_OrphanPrune_RemovesDNSRecordWhenHostnameDropped(t *testing.T) {
 	require.NoError(t, f.c.Create(ctx, svc))
 
 	// Wait for the tunnel CR + Status.TunnelCNAME (deferred-emission flow).
-	expectedTunnel := "cf-" + f.ns + "-payments"
+	expectedTunnel := f.ns + "-payments"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
@@ -178,7 +178,7 @@ func TestEnvtest_OrphanPrune_RespectsLabelScope(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, svc2))
 
-	expectedTunnel := "cf-" + f.ns + "-payments"
+	expectedTunnel := f.ns + "-payments"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {

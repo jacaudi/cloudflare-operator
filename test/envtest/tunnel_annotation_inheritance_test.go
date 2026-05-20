@@ -105,7 +105,7 @@ func TestEnvtest_HTTPRoute_InheritsAdoptFromGateway(t *testing.T) {
 
 	// Wait for Status.TunnelCNAME so the HTTPRoute reconciler advances past the
 	// deferred-emission guard on the first reconcile pass.
-	expectedTunnel := "cf-" + f.ns + "-edge"
+	expectedTunnel := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {
@@ -220,7 +220,7 @@ func TestEnvtest_TLSRoute_InheritsAdoptFromGateway(t *testing.T) {
 
 	// Wait for Status.TunnelCNAME so the TLSRoute reconciler advances past the
 	// deferred-emission guard on the first reconcile pass.
-	expectedTunnel := "cf-" + f.ns + "-edge"
+	expectedTunnel := f.ns + "-edge"
 	require.Eventually(t, func() bool {
 		var tn v2alpha1.CloudflareTunnel
 		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: expectedTunnel}, &tn); err != nil {

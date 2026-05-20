@@ -118,7 +118,7 @@ func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v2alpha1.Cloudf
 //
 // Sequence:
 //  1. Create a CloudflareTunnel CR directly with the derived name
-//     "cf-<ns>-direct-owns" and NO auto-created annotation (finalizer
+//     "<ns>-direct-owns" and NO auto-created annotation (finalizer
 //     present so it reconciles like a real CR).
 //  2. Create an annotated Service (tunnel-name: direct-owns) that adopts it
 //     via EnsureTunnelCR's find path (no owner-ref set on adopt).
@@ -159,7 +159,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 	// Step 1: create the CloudflareTunnel CR directly — no auto-created
 	// annotation. The name follows the DeriveTunnelName template so the
 	// annotated Service's EnsureTunnelCR finds it via Get (adopt path).
-	tnName := "cf-" + f.ns + "-direct-owns"
+	tnName := f.ns + "-direct-owns"
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
 	directTunnel := &v2alpha1.CloudflareTunnel{
@@ -170,7 +170,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 			Finalizers: []string{conventions.FinalizerName},
 		},
 		Spec: v2alpha1.CloudflareTunnelSpec{
-			Name: "cf-direct-owns",
+			Name: "direct-owns",
 			Connector: v2alpha1.ConnectorSpec{
 				Replicas:           1,
 				Protocol:           "auto",
@@ -259,8 +259,8 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 // Harness-fidelity notes (this is an envtest, not a real cluster):
 //
 //   - Derived tunnel name. EnsureTunnelCR names the CR via
-//     DeriveTunnelName(ns, tunnel-name) => "cf-<ns>-<tunnel-name>", not the
-//     bare annotation value. Every sibling envtest Gets "cf-<ns>-<name>";
+//     DeriveTunnelName(ns, tunnel-name) => "<ns>-<tunnel-name>", not the
+//     bare annotation value. Every sibling envtest Gets "<ns>-<name>";
 //     this test mirrors that.
 //
 //   - Nondeterministic initial owner. EnsureTunnelCR is find-or-create with
@@ -328,8 +328,8 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 	require.NoError(t, f.c.Create(ctx, svcA))
 	require.NoError(t, f.c.Create(ctx, svcB))
 
-	// DeriveTunnelName template: "cf-<ns>-<tunnel-name>".
-	tunnelName := "cf-" + f.ns + "-shared-tnl"
+	// DeriveTunnelName template: "<ns>-<tunnel-name>".
+	tunnelName := f.ns + "-shared-tnl"
 	tunnelKey := types.NamespacedName{Namespace: f.ns, Name: tunnelName}
 
 	// The auto-created tunnel appears, carries the auto-created marker, and is
@@ -419,7 +419,7 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 //
 // Harness-fidelity notes inherited from TestEnvtest_CascadeGC_OwnerTransfer:
 //
-//   - Derived tunnel name: "cf-<ns>-<tunnel-name>" (same inline template).
+//   - Derived tunnel name: "<ns>-<tunnel-name>" (same inline template).
 //
 //   - No garbage collector in envtest. Deleting the only Service leaves a
 //     dangling ownerReference on the tunnel CR. isOrphaned requires
@@ -469,8 +469,8 @@ func TestEnvtest_CascadeGC_LastSourceSelfDelete(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, svc))
 
-	// DeriveTunnelName template: "cf-<ns>-<tunnel-name>".
-	tnName := "cf-" + f.ns + "-solo-tnl"
+	// DeriveTunnelName template: "<ns>-<tunnel-name>".
+	tnName := f.ns + "-solo-tnl"
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
 	// Wait for the auto-created tunnel owned by solo-svc.
@@ -587,8 +587,8 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 	first := mkSvc("first", "first.example.com")
 	require.NoError(t, f.c.Create(ctx, first))
 
-	// DeriveTunnelName template: "cf-<ns>-<tunnel-name>".
-	tnName := "cf-" + f.ns + "-race-tnl"
+	// DeriveTunnelName template: "<ns>-<tunnel-name>".
+	tnName := f.ns + "-race-tnl"
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
 	require.Eventually(t, func() bool {
@@ -654,7 +654,7 @@ func TestEnvtest_CascadeGC_TwoTickRaceProtection(t *testing.T) {
 //
 // Sequence:
 //  1. Create a CloudflareTunnel CR directly with the derived name
-//     "cf-<ns>-direct-tnl" and NO auto-created annotation. Add the standard
+//     "<ns>-direct-tnl" and NO auto-created annotation. Add the standard
 //     finalizer so it reconciles like a real CR.
 //  2. Create an annotated Service (tunnel-name: direct-tnl). EnsureTunnelCR
 //     finds the existing CR (adopt path) and returns it UNTOUCHED — it must
@@ -715,7 +715,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 	// Step 1: create the CloudflareTunnel CR directly — no auto-created annotation.
 	// The name follows the DeriveTunnelName template so the annotated Service's
 	// EnsureTunnelCR will find it via Get and take the adopt path (return as-is).
-	tnName := "cf-" + f.ns + "-direct-tnl"
+	tnName := f.ns + "-direct-tnl"
 	tnKey := types.NamespacedName{Namespace: f.ns, Name: tnName}
 
 	directTunnel := &v2alpha1.CloudflareTunnel{
@@ -727,7 +727,7 @@ func TestEnvtest_CascadeGC_DirectCreateNeverGCd(t *testing.T) {
 			Finalizers: []string{conventions.FinalizerName},
 		},
 		Spec: v2alpha1.CloudflareTunnelSpec{
-			Name: "cf-direct",
+			Name: "direct",
 			Connector: v2alpha1.ConnectorSpec{
 				Replicas:           1,
 				Protocol:           "auto",
