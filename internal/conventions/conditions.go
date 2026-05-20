@@ -127,6 +127,14 @@ const (
 	// Ready=False on this so a broken anti-hijack companion is never
 	// masked behind "DNS record synced".
 	ReasonOwnershipCompanionFailed = "OwnershipCompanionFailed"
+
+	// ReasonSettingsApplied / ReasonSettingsApplyFailed mark per-group
+	// transitions emitted by the zoneconfig reconciler when a settings
+	// group (SSL, Security, Performance, Network, DNS, BotManagement)
+	// finishes a reconcile pass. Normal event on success transition,
+	// Warning event on failure transition.
+	ReasonSettingsApplied     = "SettingsApplied"
+	ReasonSettingsApplyFailed = "SettingsApplyFailed"
 )
 
 // ZoneReasons returns the reason vocabulary appended by spec 2.
@@ -149,6 +157,8 @@ func ZoneReasons() []string {
 		ReasonObserving,
 		ReasonTxtRegistryWriteFailed,
 		ReasonOwnershipCompanionFailed,
+		ReasonSettingsApplied,
+		ReasonSettingsApplyFailed,
 	}
 }
 

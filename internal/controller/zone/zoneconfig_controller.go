@@ -497,10 +497,10 @@ func (r *CloudflareZoneConfigReconciler) emitGroupTransitionEvents(
 		}
 		switch newStatus {
 		case metav1.ConditionTrue:
-			r.Recorder.Eventf(obj, corev1.EventTypeNormal, "SettingsApplied",
+			r.Recorder.Eventf(obj, corev1.EventTypeNormal, conventions.ReasonSettingsApplied,
 				"%s applied (%d setting(s))", g.groupLabel, g.count)
 		default:
-			r.Recorder.Eventf(obj, corev1.EventTypeWarning, "SettingsApplyFailed",
+			r.Recorder.Eventf(obj, corev1.EventTypeWarning, conventions.ReasonSettingsApplyFailed,
 				"%s: %s: %s", g.groupLabel, g.reason(), g.message())
 		}
 	}

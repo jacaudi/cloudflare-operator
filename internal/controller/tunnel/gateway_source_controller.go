@@ -133,7 +133,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		// key directly. Use DeriveTunnelName — the single source of truth the
 		// opt-in path uses — so the swept key can never silently diverge from
 		// what opt-in wrote if the naming template changes. One call covers
-		// both the no-annotation (cf-<ns>) and named (cf-<ns>-<tn>) forms; for
+		// both the no-annotation (<ns>) and named (<ns>-<tn>) forms; for
 		// a name DeriveTunnelName rejects, the opt-in path also wrote nothing,
 		// so skipping the Clear is correct.
 		if k, derr := DeriveTunnelName(gw.Namespace, gw.Annotations[conventions.AnnotationTunnelName]); derr == nil {
