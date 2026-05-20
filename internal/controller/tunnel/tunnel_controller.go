@@ -569,13 +569,18 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	// (cloudflared ingress is semantically ordered: the catch-all is last).
 	// If DriftDetected ever becomes chronically noisy, server-side ingress
 	// reordering is the first thing to check here.
+	var live *cloudflare.TunnelConfiguration
 	if tn.Status.TunnelID != "" && len(tn.Status.ObservedIngress) > 0 {
-		if live, gerr := tc.GetConfiguration(ctx, accountID, tn.Status.TunnelID); gerr != nil {
+		l, gerr := tc.GetConfiguration(ctx, accountID, tn.Status.TunnelID)
+		if gerr != nil {
 			log.FromContext(ctx).V(1).Info("GetConfiguration drift-check failed (continuing)", "err", gerr.Error())
-		} else if live != nil && !reflect.DeepEqual(snapshotFromConfig(live.Config), tn.Status.ObservedIngress) {
-			if r.Recorder != nil {
-				r.Recorder.Eventf(tn, corev1.EventTypeWarning, conventions.ReasonDriftDetected,
-					"live tunnel configuration differs from operator-observed config (out-of-band edit detected)")
+		} else {
+			live = l
+			if live != nil && !reflect.DeepEqual(snapshotFromConfig(live.Config), tn.Status.ObservedIngress) {
+				if r.Recorder != nil {
+					r.Recorder.Eventf(tn, corev1.EventTypeWarning, conventions.ReasonDriftDetected,
+						"live tunnel configuration differs from operator-observed config (out-of-band edit detected)")
+				}
 			}
 		}
 	}
@@ -584,6 +589,7 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	if reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) {
 		return nil
 	}
+	emitOriginRequestWipedEvents(r.Recorder, tn, live, cfg)
 	if _, err := tc.PutConfiguration(ctx, accountID, tn.Status.TunnelID, cfg); err != nil {
 		return err
 	}
@@ -680,6 +686,39 @@ func snapshotFromConfig(cfg cloudflare.TunnelConfig) []v2alpha1.IngressEntrySnap
 		out = append(out, snap)
 	}
 	return out
+}
+
+// emitOriginRequestWipedEvents emits one Warning event per ingress entry
+// whose live OriginRequest carries values that the operator's about-to-PUT
+// config does not. Entries are paired by (Hostname, Path). Safe to call
+// with live==nil (no-op). Best-effort; never fails the reconcile.
+//
+// One-shot by construction: after the PUT completes, Cloudflare no longer
+// has the field; subsequent reconciles produce no event.
+func emitOriginRequestWipedEvents(rec record.EventRecorder, tn *v2alpha1.CloudflareTunnel, live *cloudflare.TunnelConfiguration, cfg cloudflare.TunnelConfig) {
+	if rec == nil || live == nil {
+		return
+	}
+	type key struct{ Host, Path string }
+	want := make(map[key]*cloudflare.IngressOriginRequest, len(cfg.Ingress))
+	for _, e := range cfg.Ingress {
+		want[key{e.Hostname, e.Path}] = e.OriginRequest
+	}
+	for _, le := range live.Config.Ingress {
+		if le.OriginRequest == nil {
+			continue
+		}
+		we, ok := want[key{le.Hostname, le.Path}]
+		if !ok {
+			continue // entry is going away; the PUT removes it whole-cloth, no need to flag the OR specifically
+		}
+		if we != nil {
+			continue // operator still manages OriginRequest for this entry
+		}
+		rec.Eventf(tn, corev1.EventTypeWarning, conventions.ReasonOriginRequestWiped,
+			"wiping cloudflared originRequest on hostname %q (path %q); declare cloudflare.io/origin-server-name / cloudflare.io/no-tls-verify on the source or set Spec.Routing.OriginRequest to preserve",
+			le.Hostname, le.Path)
+	}
 }
 
 // observeConnectors populates ConnectionsHealthy from the Cloudflare API.

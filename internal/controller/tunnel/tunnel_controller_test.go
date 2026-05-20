@@ -1387,3 +1387,54 @@ func drainEvents(rec *record.FakeRecorder) []string {
 		}
 	}
 }
+
+func TestEmitOriginRequestWipedEvents(t *testing.T) {
+	osn := "origin.example.com"
+	live := &cloudflare.TunnelConfiguration{Config: cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
+		{Hostname: "kept.example.com", Service: "https://a:443", OriginRequest: &cloudflare.IngressOriginRequest{OriginServerName: &osn}},
+		{Hostname: "wiped.example.com", Service: "https://b:443", OriginRequest: &cloudflare.IngressOriginRequest{OriginServerName: &osn}},
+		{Service: "http_status:404"},
+	}}}
+	wantOSN := "origin.example.com"
+	cfg := cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
+		{Hostname: "kept.example.com", Service: "https://a:443", OriginRequest: &cloudflare.IngressOriginRequest{OriginServerName: &wantOSN}},
+		{Hostname: "wiped.example.com", Service: "https://b:443"},
+		{Service: "http_status:404"},
+	}}
+	rec := record.NewFakeRecorder(8)
+	tn := &v2alpha1.CloudflareTunnel{ObjectMeta: metav1.ObjectMeta{Name: "tn", Namespace: "ns"}}
+	emitOriginRequestWipedEvents(rec, tn, live, cfg)
+	var got []string
+	for {
+		select {
+		case e := <-rec.Events:
+			got = append(got, e)
+		default:
+			require.Len(t, got, 1, "expected exactly one wipe event; got: %v", got)
+			require.Contains(t, got[0], "wiped.example.com")
+			require.NotContains(t, got[0], "kept.example.com")
+			require.Contains(t, got[0], conventions.ReasonOriginRequestWiped)
+			return
+		}
+	}
+}
+
+func TestEmitOriginRequestWipedEvents_NilLiveIsNoop(t *testing.T) {
+	rec := record.NewFakeRecorder(4)
+	tn := &v2alpha1.CloudflareTunnel{ObjectMeta: metav1.ObjectMeta{Name: "tn", Namespace: "ns"}}
+	emitOriginRequestWipedEvents(rec, tn, nil, cloudflare.TunnelConfig{})
+	select {
+	case e := <-rec.Events:
+		t.Fatalf("expected no events on nil live; got %s", e)
+	default:
+	}
+}
+
+func TestEmitOriginRequestWipedEvents_NilRecorderIsNoop(t *testing.T) {
+	live := &cloudflare.TunnelConfiguration{Config: cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
+		{Hostname: "x.example.com", OriginRequest: &cloudflare.IngressOriginRequest{}},
+	}}}
+	cfg := cloudflare.TunnelConfig{}
+	// Should not panic.
+	emitOriginRequestWipedEvents(nil, nil, live, cfg)
+}
