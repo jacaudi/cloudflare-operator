@@ -70,7 +70,7 @@ func TestDeriveTunnelName_InvalidAnnotation(t *testing.T) {
 
 func TestDeriveTunnelName_BoundaryAt52(t *testing.T) {
 	// 52 exactly is OK; 53 is not. ns (24) + - (1) + nm (27) = 52.
-	ns := "ns-twentyfour-chars-long"   // 24
+	ns := "ns-twentyfour-chars-long"    // 24
 	nm := "tunnel-name-twenty-seven-ok" // 27
 	got, err := DeriveTunnelName(ns, nm)
 	require.NoError(t, err)
