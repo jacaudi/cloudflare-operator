@@ -712,7 +712,7 @@ func TestTLSRouteSource_InheritsAdoptFromGateway(t *testing.T) {
 	require.NoError(t, err)
 
 	// Re-Get the emitted DNSRecord and assert Spec.Adopt reflects the Gateway's annotation.
-	drName := emittedDNSRecordName("r", "secure.example.com")
+	drName := emittedDNSRecordName("secure.example.com")
 	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: drName}, &got))
 	require.True(t, got.Spec.Adopt, "Spec.Adopt must be true (inherited from parent Gateway)")
@@ -753,7 +753,7 @@ func TestTLSRouteSource_RouteOverridesGatewayAdopt(t *testing.T) {
 	require.NoError(t, err)
 
 	// Re-Get the emitted DNSRecord and assert the route's own annotation wins.
-	drName := emittedDNSRecordName("r", "secure.example.com")
+	drName := emittedDNSRecordName("secure.example.com")
 	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app", Name: drName}, &got))
 	require.False(t, got.Spec.Adopt, "Spec.Adopt must be false (TLSRoute annotation overrides Gateway)")

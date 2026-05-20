@@ -577,11 +577,12 @@ func TestEmittedDNSRecordNameDNS1123Compliant(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := emittedDNSRecordName(tc.svcName, tc.hostname)
+			got := emittedDNSRecordName(tc.hostname)
 			require.LessOrEqual(t, len(got), 63, "name must fit DNS-1123 label limit: %q", got)
 			require.True(t, dns1123Subdomain.MatchString(got), "name must be DNS-1123 valid: %q", got)
-			// Hash suffix is always 8 hex chars at the tail.
-			require.Regexp(t, `-[0-9a-f]{8}$`, got, "name must end with -<8-hex-hash>: %q", got)
+			// Hash is always 8 hex chars at the tail (with separator except for
+			// pathological all-non-alnum hostnames which fall back to hash-only).
+			require.Regexp(t, `[0-9a-f]{8}$`, got, "name must end with 8-hex-hash: %q", got)
 		})
 	}
 }
@@ -592,8 +593,8 @@ func TestEmittedDNSRecordNameDNS1123Compliant(t *testing.T) {
 // the hash suffix, the second hostname's DNSRecord would be
 // silently overwritten by the second SSA Apply on the same CR name.
 func TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias(t *testing.T) {
-	a := emittedDNSRecordName("svc", "foo.example.com")
-	b := emittedDNSRecordName("svc", "foo-example-com")
+	a := emittedDNSRecordName("foo.example.com")
+	b := emittedDNSRecordName("foo-example-com")
 	require.NotEqual(t, a, b, "alias hostnames must produce distinct CR names")
 }
 
@@ -602,8 +603,8 @@ func TestEmittedDNSRecordName_NoCollisionOnSanitizedAlias(t *testing.T) {
 // budget) still produce distinct CR names via the hash suffix.
 func TestEmittedDNSRecordName_NoCollisionOnTruncation(t *testing.T) {
 	prefix := strings.Repeat("a", 60)
-	a := emittedDNSRecordName("svc", prefix+".one.example.com")
-	b := emittedDNSRecordName("svc", prefix+".two.example.com")
+	a := emittedDNSRecordName(prefix + ".one.example.com")
+	b := emittedDNSRecordName(prefix + ".two.example.com")
 	require.NotEqual(t, a, b, "long hostnames sharing a prefix must produce distinct CR names")
 }
 

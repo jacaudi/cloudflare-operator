@@ -50,7 +50,7 @@ func makeEmittedRecord(svcName, hostname string) *v2alpha1.CloudflareDNSRecord {
 func makeEmittedRecordInSourceNS(svcName, hostname, sourceNS string) *v2alpha1.CloudflareDNSRecord {
 	return &v2alpha1.CloudflareDNSRecord{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      emittedDNSRecordName(svcName, hostname),
+			Name:      emittedDNSRecordName(hostname),
 			Namespace: "ns",
 			Labels: map[string]string{
 				conventions.LabelSourceKind:      "Service",

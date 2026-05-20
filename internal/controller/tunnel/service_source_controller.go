@@ -242,46 +242,39 @@ func (r *ServiceSourceReconciler) emitDNSRecord(ctx context.Context, svc *corev1
 	})
 }
 
-// emittedDNSRecordName produces a stable, DNS-1123-compliant CR name combining
-// the source object's name, a sanitized hostname prefix, and a short content
-// hash of the original hostname. The hash guarantees uniqueness across
-// hostnames that would otherwise alias under sanitization
-// (e.g. "foo.example.com" vs "foo-example-com") or truncation (two long
-// hostnames sharing the first N chars).
+// emittedDNSRecordName produces a stable, DNS-1123-compliant CR name from the
+// hostname alone — the source object's name is INTENTIONALLY not part of the
+// derivation. Two sources emitting the same hostname converge to one CR
+// (correct: DNS is per-hostname; the CF-side record is shared either way).
+// The previous `<sourceName>-<sanitizedHost>-<hash>` shape produced visible
+// doubling for sources whose name already encoded the hostname (e.g. a
+// HTTPRoute named `jellyfin` emitting for `jellyfin.jacaudi.dev` →
+// `jellyfin-jellyfin-jacaudi-jellyfin-jacaudi-dev-<hash>`); see backlog
+// item #6 (2026-05-19).
 //
-// Output shape: "<svcName>-<sanitized-prefix>-<8-hex-hash>", ≤63 chars,
-// DNS-1123 valid (alphanumeric start/end, internal hyphens).
+// Output shape: "<sanitized-hostname-truncated>-<8-hex-hash>", ≤63 chars,
+// DNS-1123 valid (alphanumeric start/end, internal hyphens). The hash is
+// sha256(hostname) truncated to 4 bytes / 8 hex chars: 32-bit collision
+// resistance is plenty (collision domain is per-namespace; any collision is
+// surfaced loudly by the apiserver, not silently dropped).
 //
-// The hash is sha256(hostname) truncated to 4 bytes / 8 hex chars: 32-bit
-// collision resistance is plenty here (collision domain is per-Service, and
-// any conflict is surfaced loudly by the apiserver, not silently dropped).
-//
-// Trade-off vs. pure sanitize-and-truncate: kubectl names are slightly less
-// readable ("svc-foo-example-com-9a3f2b1c") but correctness is unconditional.
-// The previous sanitize-only scheme silently dropped the second of any
-// aliasing pair via the IsAlreadyExists swallow in Create.
-func emittedDNSRecordName(sourceName, hostname string) string {
+// Budget: 63 chars total - 1 (sep) - 8 (hash) = 54 chars for sanitized.
+// Pathological all-separator hostnames produce the hash alone (still a valid
+// DNS-1123 label — hex digits are alphanumeric).
+func emittedDNSRecordName(hostname string) string {
 	sum := sha256.Sum256([]byte(hostname))
 	short := hex.EncodeToString(sum[:4]) // 8 hex chars
 	sanitized := sanitizeHostname(hostname)
-	// Budget for the sanitized middle segment:
-	// 63 - len(sourceName) - 1 (sep) - 1 (sep) - 8 (hash) = 53 - len(sourceName).
-	maxSan := 63 - len(sourceName) - 1 - 1 - 8
-	if maxSan < 1 {
-		// Source name is itself approaching the 63-char ceiling — drop the
-		// sanitized middle and emit "<sourceName>-<hash>". Caller's
-		// responsibility to keep source names DNS-1123 (≤63); defensive.
-		return sourceName + "-" + short
-	}
+	const maxSan = 63 - 1 - 8 // 54
 	if len(sanitized) > maxSan {
 		sanitized = strings.TrimRight(sanitized[:maxSan], "-")
 	}
 	if sanitized == "" {
-		// Pathological hostname (all non-alphanumeric) — fall back to
-		// "<sourceName>-<hash>". Hash still disambiguates per hostname.
-		return sourceName + "-" + short
+		// Pathological hostname (all non-alphanumeric) — the hash alone is
+		// DNS-1123 valid (hex digits are alphanumeric).
+		return short
 	}
-	return sourceName + "-" + sanitized + "-" + short
+	return sanitized + "-" + short
 }
 
 // sanitizeHostname lowercases and replaces non-[a-z0-9] with '-', collapses

@@ -59,7 +59,7 @@ func TestEmitDNSRecord_CreatesNew(t *testing.T) {
 	require.NoError(t, err)
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, "CNAME", got.Spec.Type)
 	require.Equal(t, "foo.example.com", got.Spec.Name)
@@ -95,7 +95,7 @@ func TestEmitDNSRecord_UpdatesSpecOnAnnotationChange(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.True(t, got.Spec.Adopt,
 		"adopt annotation flip must propagate through SSA; got Spec.Adopt=false (silent-bug regression)")
@@ -116,7 +116,7 @@ func TestEmitDNSRecord_NoAnnotationsAreNoOpFields(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Nil(t, got.Spec.ZoneRef, "no zoneRef annotation → no ZoneRef")
 	require.False(t, got.Spec.Adopt, "no adopt annotation → Adopt=false")
@@ -142,7 +142,7 @@ func TestEmitDNSRecord_ZoneRefNamespace(t *testing.T) {
 		}}))
 	var got v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{
-		Namespace: "ns", Name: emittedDNSRecordName("svc", "foo.example.com")}, &got))
+		Namespace: "ns", Name: emittedDNSRecordName("foo.example.com")}, &got))
 	require.NotNil(t, got.Spec.ZoneRef)
 	require.Equal(t, "example-com", got.Spec.ZoneRef.Name)
 	require.Equal(t, "zone-ns", got.Spec.ZoneRef.Namespace)
@@ -157,7 +157,7 @@ func TestEmitDNSRecord_ZoneRefNamespace(t *testing.T) {
 		}}))
 	var got2 v2alpha1.CloudflareDNSRecord
 	require.NoError(t, c2.Get(context.Background(), client.ObjectKey{
-		Namespace: "ns", Name: emittedDNSRecordName("svc", "foo.example.com")}, &got2))
+		Namespace: "ns", Name: emittedDNSRecordName("foo.example.com")}, &got2))
 	require.NotNil(t, got2.Spec.ZoneRef)
 	require.Equal(t, "ns", got2.Spec.ZoneRef.Namespace)
 }
@@ -181,7 +181,7 @@ func TestEmitDNSRecord_ProxiedDefaultsTrue_NoAnnotation(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.NotNil(t, got.Spec.Proxied, "tunnel-emitted Spec.Proxied must be non-nil (default-true)")
 	require.True(t, *got.Spec.Proxied, "default proxied must be true; got false")
@@ -207,7 +207,7 @@ func TestEmitDNSRecord_ProxiedFalseOverride(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.NotNil(t, got.Spec.Proxied, "Spec.Proxied must be non-nil when annotation set")
 	require.False(t, *got.Spec.Proxied, "cloudflare.io/proxied=false must yield Spec.Proxied=&false")
@@ -231,7 +231,7 @@ func TestEmitDNSRecord_ProxiedTrueExplicit(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.NotNil(t, got.Spec.Proxied)
 	require.True(t, *got.Spec.Proxied, "explicit cloudflare.io/proxied=true must yield Spec.Proxied=&true")
@@ -257,7 +257,7 @@ func TestEmitDNSRecord_ProxiedMalformedFallsBackToDefault(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.NotNil(t, got.Spec.Proxied, "malformed annotation must NOT produce nil Spec.Proxied")
 	require.True(t, *got.Spec.Proxied, "malformed proxied annotation must fall back to default-true; got false")
@@ -281,7 +281,7 @@ func TestEmitDNSRecord_TTLAnnotationWired(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, 300, got.Spec.TTL, "cloudflare.io/ttl=300 must yield Spec.TTL=300")
 }
@@ -303,7 +303,7 @@ func TestEmitDNSRecord_TTLAbsentStaysZero(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, 0, got.Spec.TTL, "no TTL annotation must leave Spec.TTL=0 (auto)")
 }
@@ -328,7 +328,7 @@ func TestEmitDNSRecord_TTLMalformedSilentlyZero(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, 0, got.Spec.TTL, "malformed TTL annotation must fall back to 0")
 }
@@ -354,7 +354,7 @@ func TestEmitDNSRecord_TTLNegativeSilentlyZero(t *testing.T) {
 	}))
 
 	var got v2alpha1.CloudflareDNSRecord
-	name := emittedDNSRecordName("svc", "foo.example.com")
+	name := emittedDNSRecordName("foo.example.com")
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: "ns"}, &got))
 	require.Equal(t, 0, got.Spec.TTL, "negative TTL annotation must be rejected by n>=0 guard; Spec.TTL stays 0")
 }

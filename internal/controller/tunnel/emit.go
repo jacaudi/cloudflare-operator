@@ -83,7 +83,7 @@ func EmitDNSRecord(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			Kind:       "CloudflareDNSRecord",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      emittedDNSRecordName(opts.Owner.GetName(), opts.Hostname),
+			Name:      emittedDNSRecordName(opts.Hostname),
 			Namespace: opts.Owner.GetNamespace(),
 		},
 		Spec: v2alpha1.CloudflareDNSRecordSpec{
