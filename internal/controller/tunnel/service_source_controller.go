@@ -248,9 +248,8 @@ func (r *ServiceSourceReconciler) emitDNSRecord(ctx context.Context, svc *corev1
 // (correct: DNS is per-hostname; the CF-side record is shared either way).
 // The previous `<sourceName>-<sanitizedHost>-<hash>` shape produced visible
 // doubling for sources whose name already encoded the hostname (e.g. a
-// HTTPRoute named `jellyfin` emitting for `jellyfin.jacaudi.dev` →
-// `jellyfin-jellyfin-jacaudi-jellyfin-jacaudi-dev-<hash>`); see backlog
-// item #6 (2026-05-19).
+// HTTPRoute named `jellyfin` emitting for `jellyfin.example.com` →
+// `jellyfin-jellyfin-example-com-<hash>`); see backlog item #6 (2026-05-19).
 //
 // Output shape: "<sanitized-hostname-truncated>-<8-hex-hash>", ≤63 chars,
 // DNS-1123 valid (alphanumeric start/end, internal hyphens). The hash is

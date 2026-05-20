@@ -419,8 +419,8 @@ migration steps are required.
 
 **Effect on observability:** `kubectl get cloudflarednsrecord` listings are
 significantly less wordy; CRs like
-`jellyfin-jellyfin-jacaudi-jellyfin-jacaudi-dev-0e610722` collapse to
-`jellyfin-jacaudi-dev-0e610722`.
+`jellyfin-jellyfin-example-com-jellyfin-example-com-<hash>` collapse to
+`jellyfin-example-com-<hash>`.
 
 ---
 

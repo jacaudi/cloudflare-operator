@@ -28,17 +28,19 @@ import (
 // owner-name. Locks the new shape `<sanitizedHostname>-<8hex>` against
 // regression to the old `<owner>-<host>-<hash>` doubling.
 //
-// Cases mirror the real prod CRs from the 2026-05-19 post-mortem:
-//   - external.jacaudi.dev → external-jacaudi-dev-<8hex>
-//   - jellyfin.jacaudi.dev → jellyfin-jacaudi-dev-<8hex>
+// "external"/"jellyfin" cases mirror the original-source-name-already-
+// encodes-hostname motif that triggered the doubling (e.g. a Service
+// named "external" emitting for "external.example.com"):
+//   - external.example.com → external-example-com-<8hex>
+//   - jellyfin.example.com → jellyfin-example-com-<8hex>
 func TestEmittedDNSRecordName_NewShape_DropsOwnerName(t *testing.T) {
 	cases := []struct {
 		name     string
 		hostname string
 		want     *regexp.Regexp
 	}{
-		{"prod_external", "external.jacaudi.dev", regexp.MustCompile(`^external-jacaudi-dev-[0-9a-f]{8}$`)},
-		{"prod_jellyfin", "jellyfin.jacaudi.dev", regexp.MustCompile(`^jellyfin-jacaudi-dev-[0-9a-f]{8}$`)},
+		{"prod_external", "external.example.com", regexp.MustCompile(`^external-example-com-[0-9a-f]{8}$`)},
+		{"prod_jellyfin", "jellyfin.example.com", regexp.MustCompile(`^jellyfin-example-com-[0-9a-f]{8}$`)},
 		{"single_label", "foo", regexp.MustCompile(`^foo-[0-9a-f]{8}$`)},
 		{"already_hyphenated", "foo-bar.baz.example.com", regexp.MustCompile(`^foo-bar-baz-example-com-[0-9a-f]{8}$`)},
 	}
