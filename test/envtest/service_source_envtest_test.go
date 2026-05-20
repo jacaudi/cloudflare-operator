@@ -657,3 +657,101 @@ func TestServiceSourceEnvtest_S4_MigrationGCsOldFormCR(t *testing.T) {
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: newName}, &stillPresent),
 		"new-form CR %q must survive migration-GC", newName)
 }
+
+// TestServiceSourceEnvtest_S5_MigrationCascadeGCsOldCfPrefixTunnel closes
+// backlog #5 end-to-end. A pre-existing auto-created tunnel CR with the
+// legacy "cf-<ns>" shape sits in the apiserver. After S5 a Service with
+// the tunnel annotations is created; the source reconciler attaches to
+// the NEW-shape "<ns>" tunnel (creating it if absent). The OLD "cf-<ns>"
+// tunnel enters the P4 cascade-GC orphan state (no attached sources, no
+// owner refs) and self-deletes after the envtest-short grace window.
+// Locks the "free migration" property of S5 — no operator-side migration
+// code is required; the existing orphan→grace→self-delete pattern handles
+// the rename.
+func TestServiceSourceEnvtest_S5_MigrationCascadeGCsOldCfPrefixTunnel(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	f := setupServiceEnv(t, "")
+	ctx := context.Background()
+
+	// Pre-populate the legacy cf-<ns> tunnel CR as if it had been auto-
+	// created by the pre-S5 operator. Must carry the auto-created
+	// annotation so it's cascadeGCEligible. No OwnerReferences and no
+	// Status.AttachedSources means it's already orphan-state-ready once
+	// we don't attach any sources to it. To make the self-delete tick
+	// deterministic within envtest time, we stamp Status.LastOrphanedAt
+	// to ~5s ago (beyond the 3s PendingDeletionGrace) so the FIRST
+	// reconcile observes the grace as already elapsed.
+	oldTunnelName := "cf-" + f.ns
+	oldTunnel := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      oldTunnelName,
+			Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationAutoCreated: "true",
+			},
+		},
+		Spec: v2alpha1.CloudflareTunnelSpec{
+			Name: oldTunnelName,
+			Connector: v2alpha1.ConnectorSpec{
+				Replicas: 1, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+			},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, oldTunnel))
+
+	// Stamp LastOrphanedAt to 5 s ago so the FIRST reconcile that sees the
+	// old tunnel observes the grace as already elapsed and proceeds to
+	// self-delete. Use a retry loop around Get+StatusUpdate so that any
+	// resourceVersion conflict caused by a concurrent reconcile is handled
+	// transparently.
+	require.Eventually(t, func() bool {
+		if err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: oldTunnelName}, oldTunnel); err != nil {
+			return false
+		}
+		fiveSecondsAgo := metav1.NewTime(time.Now().Add(-5 * time.Second))
+		oldTunnel.Status.LastOrphanedAt = &fiveSecondsAgo
+		return f.c.Status().Update(ctx, oldTunnel) == nil
+	}, 5*time.Second, 50*time.Millisecond, "stamp LastOrphanedAt on old cf- tunnel")
+
+	// Create a Service annotated to attach to the per-namespace pool
+	// (no tunnel-name annotation → DeriveTunnelName -> "<ns>"). After
+	// S5 this attaches to f.ns (NOT "cf-"+f.ns).
+	zone := &v2alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
+		Spec: v2alpha1.CloudflareZoneSpec{
+			Name: "example.com", Type: "full", DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, zone))
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:    "true",
+				conventions.AnnotationHostnames: "svc.example.com",
+				conventions.AnnotationZoneRef:   "example-com",
+			},
+		},
+		Spec: corev1.ServiceSpec{
+			Type:  corev1.ServiceTypeClusterIP,
+			Ports: []corev1.ServicePort{{Port: 80}},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, svc))
+
+	// 1. The NEW-shape tunnel CR (named f.ns, no cf- prefix) must appear.
+	require.Eventually(t, func() bool {
+		var tn v2alpha1.CloudflareTunnel
+		return f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: f.ns}, &tn) == nil
+	}, 15*time.Second, 250*time.Millisecond, "new-shape tunnel CR %q created", f.ns)
+
+	// 2. The OLD "cf-"+f.ns tunnel CR must enter cascade-GC and self-delete.
+	require.Eventually(t, func() bool {
+		var tn v2alpha1.CloudflareTunnel
+		err := f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: oldTunnelName}, &tn)
+		return apierrors.IsNotFound(err)
+	}, 15*time.Second, 250*time.Millisecond, "old cf- tunnel CR %q was NOT cascade-GC'd", oldTunnelName)
+}
