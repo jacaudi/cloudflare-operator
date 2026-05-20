@@ -477,6 +477,37 @@ kubectl get cloudflaretunnel -A -o json | jq -r '
   "\(.metadata.namespace)/\(.metadata.name): check Cloudflare dashboard for originRequest values that may need to be expressed via Spec.Routing.OriginRequest or source annotations"'
 ```
 
+### Auto-created tunnel CRs drop the `cf-` prefix (S5 / #5, 2026-05)
+
+Operator-auto-created `CloudflareTunnel` CRs (per-namespace pool and named
+tunnels) are now derived as `<namespace>[-<tunnel-name>]` instead of the
+legacy `cf-<namespace>[-<tunnel-name>]`. The companion `cloudflared-<name>`
+Deployment and `cloudflared-token-<name>` Secret pick up the new shape
+automatically.
+
+**On upgrade:** the existing P4 cascade-GC machinery migrates each
+auto-created tunnel without any new operator-side migration code:
+
+1. Each source object reconciles after upgrade.
+2. The source reattaches to the new-shape tunnel (creating it if absent —
+   new Cloudflare tunnel UUID, new `cloudflared-<newname>` Deployment, new
+   `cloudflared-token-<newname>` Secret).
+3. The old `cf-<namespace>` tunnel loses all attached sources, enters the
+   P4 orphan-state grace window, and self-deletes.
+4. Kubernetes cascade-deletes the old `cloudflared-cf-<namespace>`
+   Deployment + token Secret via the tunnel CR's owner-refs.
+
+**Brief one-time connector flap during cutover:** the new connector
+registers with Cloudflare before the old one disconnects; most chains
+stay routed. Total window is bounded by the operator's
+`PendingDeletionGrace` (production default: 60 seconds; envtest: 3 seconds).
+
+**Direct-create (user-authored) tunnel CRs are NEVER renamed or GC'd.**
+The cascade-GC eligibility predicate (`cascadeGCEligible`) gates on the
+`cloudflare.io/auto-created: "true"` annotation OR the operator source
+labels — direct-create CRs carry neither and are invisible to the
+migration.
+
 ---
 
 ## Renovate tracking
