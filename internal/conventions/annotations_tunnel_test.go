@@ -52,6 +52,10 @@ func TestAnnotation_TunnelAutoMgmtFamily(t *testing.T) {
 	require.Equal(t, "cloudflare.io/auto-created", AnnotationAutoCreated)
 }
 
+func TestAnnotation_ForceReconcileFamily(t *testing.T) {
+	require.Equal(t, "cloudflare.io/reconcile-at", AnnotationReconcileAt)
+}
+
 func TestParseTruthy_Cases(t *testing.T) {
 	cases := []struct {
 		in   string

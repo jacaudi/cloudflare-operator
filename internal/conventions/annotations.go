@@ -82,6 +82,16 @@ const (
 	AnnotationAdopt            = "cloudflare.io/adopt"
 )
 
+// Force-reconcile family. Applies to any of the 5 CRD types.
+const (
+	// AnnotationReconcileAt is an opaque-token annotation that admins set
+	// to force a full re-check on the next reconcile of any of the 5 CRDs
+	// (Zone, ZoneConfig, DNSRecord, Ruleset, Tunnel). The operator never
+	// parses the value as a time; only string equality vs.
+	// status.lastReconcileToken is checked.
+	AnnotationReconcileAt = "cloudflare.io/reconcile-at"
+)
+
 // Tunnel auto-management family. Applied to CloudflareTunnel CRs themselves.
 const (
 	// AnnotationAutoCreated is stamped on CloudflareTunnel CRs that were created
