@@ -231,7 +231,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// other value silently falls through to the listener-derived path (no
 	// Warning event — keeps the scope tight; documented behavior).
 	schemeOverride := gw.Annotations[conventions.AnnotationScheme]
-	gwDefaults := defaultsFromAnnotations(gw.Annotations)
+	gwDefaults := defaultsFromAnnotations(gw.Annotations, tunnelsynth.DefaultsFor(tn))
 
 	type listenerProtos struct{ hasHTTP, hasHTTPS bool }
 	protoByHost := make(map[string]*listenerProtos, len(gw.Spec.Listeners))

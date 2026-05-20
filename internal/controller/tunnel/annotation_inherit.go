@@ -68,21 +68,22 @@ func inheritedAnnotations(routeAnnotations map[string]string, gw *gwv1.Gateway) 
 
 // defaultsFromAnnotations reads the originRequest-shaped annotations off a
 // merged annotation map (typically the output of inheritedAnnotations) and
-// returns a tunnelsynth.Defaults populated for the HTTPRoute/TLSRoute
-// translator call sites.
+// returns a tunnelsynth.Defaults populated for the translator call sites.
+// The spec parameter supplies tunnel-CR-spec fallback values that take
+// effect when the annotation map does not set the corresponding field.
+//
+// Precedence per field: annotation > spec > nil.
 //
 //   - cloudflare.io/no-tls-verify is parsed via conventions.ParseTruthy.
 //     Unrecognized values (per ParseTruthy: empty string, "1", arbitrary
-//     strings) leave NoTLSVerifyDefault nil — translators then fall back to
-//     the tunnel-level default. This matches the read-from-annotation contract
-//     documented on Defaults.NoTLSVerifyDefault.
+//     strings) leave NoTLSVerifyDefault at its spec value.
 //   - cloudflare.io/origin-server-name is read verbatim. Empty leaves the
-//     default nil.
-//   - CAPoolPath is intentionally NOT set here. It's tunnel-level state
-//     wired into Defaults at the Gateway-source layer (see gateway_source_*),
-//     not derivable from per-route annotations.
-func defaultsFromAnnotations(ann map[string]string) tunnelsynth.Defaults {
-	var d tunnelsynth.Defaults
+//     default at its spec value.
+//   - Other cloudflared originRequest fields (caPool, connectTimeoutSeconds,
+//     etc.) are deliberately not modeled. The operator's TunnelOriginRequest
+//     type was trimmed to the two fields actually plumbed end-to-end.
+func defaultsFromAnnotations(ann map[string]string, spec tunnelsynth.Defaults) tunnelsynth.Defaults {
+	d := spec // pointers in spec are unique per call (DefaultsFor deep-copies)
 	if v, err := conventions.ParseTruthy(ann[conventions.AnnotationNoTLSVerify]); err == nil {
 		d.NoTLSVerifyDefault = &v
 	}

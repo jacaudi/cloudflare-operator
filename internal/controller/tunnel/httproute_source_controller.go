@@ -172,7 +172,7 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 		Hostname: chainContent,
 		Service:  fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", scheme, gwSvc.Name, gwSvc.Namespace, port),
 	}
-	contribs, warns := tunnelsynth.TranslateHTTPRoute(&rt, gwOrigin, defaultsFromAnnotations(mergedAnns))
+	contribs, warns := tunnelsynth.TranslateHTTPRoute(&rt, gwOrigin, defaultsFromAnnotations(mergedAnns, tunnelsynth.DefaultsFor(tn)))
 
 	tunnelKey := tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name}
 

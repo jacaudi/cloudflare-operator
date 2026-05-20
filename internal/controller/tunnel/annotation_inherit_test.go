@@ -90,13 +90,12 @@ func TestInheritedAnnotations_PropagatesScheme(t *testing.T) {
 }
 
 // T1.11 — empty annotation map yields a zero-value Defaults (both pointer
-// fields nil, CAPoolPath untouched).
+// fields nil).
 func TestDefaultsFromAnnotations_EmptyIsZero(t *testing.T) {
-	got := defaultsFromAnnotations(map[string]string{})
+	got := defaultsFromAnnotations(map[string]string{}, tunnelsynth.Defaults{})
 	require.Equal(t, tunnelsynth.Defaults{}, got, "empty annotations -> zero Defaults")
 	require.Nil(t, got.NoTLSVerifyDefault)
 	require.Nil(t, got.OriginServerNameDefault)
-	require.Equal(t, "", got.CAPoolPath, "defaultsFromAnnotations must never set CAPoolPath")
 }
 
 // T1.12 — defaultsFromAnnotations parses truthy values via conventions.ParseTruthy.
@@ -104,27 +103,27 @@ func TestDefaultsFromAnnotations_EmptyIsZero(t *testing.T) {
 // strings) leave NoTLSVerifyDefault nil.
 func TestDefaultsFromAnnotations_ParsesNoTLSVerify(t *testing.T) {
 	t.Run("true", func(t *testing.T) {
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "true"})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "true"}, tunnelsynth.Defaults{})
 		require.NotNil(t, got.NoTLSVerifyDefault)
 		require.True(t, *got.NoTLSVerifyDefault)
 	})
 	t.Run("yes_case_insensitive", func(t *testing.T) {
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "YES"})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "YES"}, tunnelsynth.Defaults{})
 		require.NotNil(t, got.NoTLSVerifyDefault)
 		require.True(t, *got.NoTLSVerifyDefault)
 	})
 	t.Run("false", func(t *testing.T) {
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "false"})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "false"}, tunnelsynth.Defaults{})
 		require.NotNil(t, got.NoTLSVerifyDefault)
 		require.False(t, *got.NoTLSVerifyDefault)
 	})
 	t.Run("garbage_leaves_nil", func(t *testing.T) {
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "maybe"})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "maybe"}, tunnelsynth.Defaults{})
 		require.Nil(t, got.NoTLSVerifyDefault, "unparseable value must NOT populate the default")
 	})
 	t.Run("numeric_1_leaves_nil", func(t *testing.T) {
 		// ParseTruthy explicitly rejects "1"/"0" — see conventions.ParseTruthy doc.
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "1"})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationNoTLSVerify: "1"}, tunnelsynth.Defaults{})
 		require.Nil(t, got.NoTLSVerifyDefault)
 	})
 }
@@ -133,12 +132,89 @@ func TestDefaultsFromAnnotations_ParsesNoTLSVerify(t *testing.T) {
 // what the user typed). Empty string leaves the default nil.
 func TestDefaultsFromAnnotations_OriginServerNameVerbatim(t *testing.T) {
 	t.Run("verbatim", func(t *testing.T) {
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationOriginServerName: "external.example.com"})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationOriginServerName: "external.example.com"}, tunnelsynth.Defaults{})
 		require.NotNil(t, got.OriginServerNameDefault)
 		require.Equal(t, "external.example.com", *got.OriginServerNameDefault)
 	})
 	t.Run("empty_leaves_nil", func(t *testing.T) {
-		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationOriginServerName: ""})
+		got := defaultsFromAnnotations(map[string]string{conventions.AnnotationOriginServerName: ""}, tunnelsynth.Defaults{})
 		require.Nil(t, got.OriginServerNameDefault)
 	})
+}
+
+func TestDefaultsFromAnnotations_PrecedenceWithSpec(t *testing.T) {
+	annOSN := "ann.example.com"
+	specOSN := "spec.example.com"
+	annTrue := true
+	specFalse := false
+
+	cases := []struct {
+		name       string
+		ann        map[string]string
+		spec       tunnelsynth.Defaults
+		wantOSN    *string
+		wantNoTLSV *bool
+	}{
+		{
+			name:    "annotation OSN wins over spec OSN",
+			ann:     map[string]string{conventions.AnnotationOriginServerName: annOSN},
+			spec:    tunnelsynth.Defaults{OriginServerNameDefault: &specOSN},
+			wantOSN: &annOSN,
+		},
+		{
+			name:    "spec OSN used when no annotation",
+			ann:     nil,
+			spec:    tunnelsynth.Defaults{OriginServerNameDefault: &specOSN},
+			wantOSN: &specOSN,
+		},
+		{
+			name:       "annotation NoTLSVerify wins over spec",
+			ann:        map[string]string{conventions.AnnotationNoTLSVerify: "true"},
+			spec:       tunnelsynth.Defaults{NoTLSVerifyDefault: &specFalse},
+			wantNoTLSV: &annTrue,
+		},
+		{
+			name:       "spec NoTLSVerify used when no annotation",
+			ann:        nil,
+			spec:       tunnelsynth.Defaults{NoTLSVerifyDefault: &specFalse},
+			wantNoTLSV: &specFalse,
+		},
+		{
+			name:       "unparseable annotation falls through to spec",
+			ann:        map[string]string{conventions.AnnotationNoTLSVerify: "banana"},
+			spec:       tunnelsynth.Defaults{NoTLSVerifyDefault: &specFalse},
+			wantNoTLSV: &specFalse,
+		},
+		{
+			name: "empty annotation, empty spec → zero Defaults",
+			ann:  nil,
+			spec: tunnelsynth.Defaults{},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := defaultsFromAnnotations(c.ann, c.spec)
+			if c.wantOSN == nil {
+				require.Nil(t, got.OriginServerNameDefault)
+			} else {
+				require.NotNil(t, got.OriginServerNameDefault)
+				require.Equal(t, *c.wantOSN, *got.OriginServerNameDefault)
+			}
+			if c.wantNoTLSV == nil {
+				require.Nil(t, got.NoTLSVerifyDefault)
+			} else {
+				require.NotNil(t, got.NoTLSVerifyDefault)
+				require.Equal(t, *c.wantNoTLSV, *got.NoTLSVerifyDefault)
+			}
+		})
+	}
+}
+
+// Regression: if the spec-fallback layer is dropped, the "spec OSN used
+// when no annotation" case must fail.
+func TestDefaultsFromAnnotations_SpecFallbackIsLoadBearing(t *testing.T) {
+	specOSN := "spec.example.com"
+	got := defaultsFromAnnotations(nil, tunnelsynth.Defaults{OriginServerNameDefault: &specOSN})
+	require.NotNil(t, got.OriginServerNameDefault)
+	require.Equal(t, specOSN, *got.OriginServerNameDefault)
 }
