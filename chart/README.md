@@ -374,6 +374,28 @@ the delete cycle where the underlying Cloudflare record is also removed by
 the DNSRecord controller's finalizer path; self-heal restores both within
 one reconcile.
 
+### Tunnel-emitted records default `proxied=true` (S3 / #4, 2026-05)
+
+Tunnel-emitted `CloudflareDNSRecord` CRs (generated from annotated Service /
+Gateway / HTTPRoute / TLSRoute sources) now default to **proxied = true**
+(orange-clouded) on Cloudflare. Previously `Spec.Proxied` was left `nil` and
+Cloudflare's per-zone default applied; manual dashboard toggles persisted.
+Cloudflare-Tunnel `<uuid>.cfargotunnel.com` targets generally need to be
+proxied to route, so this matches the common-case expectation.
+
+**On upgrade:** existing tunnel-emitted records flip grey → orange on first
+reconcile after upgrade. The DNSRecord controller's drift check is now
+active for these records and will revert manual Cloudflare-dashboard
+toggles — the annotation is the control surface, not the dashboard.
+
+**Per-record override:** set `cloudflare.io/proxied: "false"` on the source
+object (Service / Gateway / HTTPRoute / TLSRoute) to produce a grey-clouded
+record.
+
+The new `cloudflare.io/ttl` annotation (accepts an integer) propagates to
+`Spec.TTL`. Absent or malformed values leave `Spec.TTL=0` (Cloudflare
+interprets 0 as automatic).
+
 ---
 
 ## Renovate tracking
