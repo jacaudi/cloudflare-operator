@@ -188,6 +188,7 @@ covering every CRD plus the annotation-driven attachment patterns
 | [docs/credentials.md](docs/credentials.md) | The `(API token, account ID)` model end-to-end: token Secret shape, the `part-of` label requirement, inline vs Secret-backed account ID, rotation semantics, common errors |
 | [docs/gateway-api.md](docs/gateway-api.md) | End-to-end Gateway-API integration: Gateway opt-in, HTTPRoute / TLSRoute attachment, per-Route overrides, cascade-GC, generated-object inventory, common gotchas |
 | [docs/reconciliation.md](docs/reconciliation.md) | Reconcile cadence, `Phase=Error` retry semantics, the `cloudflare.io/reconcile-at` force-reconcile annotation |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Field guide for diagnosing the operator: Status → Conditions → Logs → Events flow, the `Ready=False` reason vocabulary mapped to fixes, the verify-reconcile-actually-ran annotation-ack trick |
 
 ## Acknowledgements
 
