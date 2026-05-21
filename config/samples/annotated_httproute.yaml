@@ -1,0 +1,44 @@
+# Annotated HTTPRoute — canonical attachment to a tunnel-enabled Gateway.
+#
+# This HTTPRoute attaches to `example-gateway` via parentRefs. Because that
+# Gateway carries `cloudflare.io/tunnel: "true"`, the operator picks up
+# every hostname declared on attached Routes and emits a CloudflareDNSRecord
+# CR for each.
+#
+# IMPORTANT: the `cloudflare.io/tunnel` opt-in lives ONLY on the Gateway.
+# Routes do NOT need their own `cloudflare.io/tunnel` annotation; they
+# are picked up purely via the Gateway-API parentRef relationship.
+#
+# This sample demonstrates the INHERITANCE flow: the emitted DNSRecord
+# inherits `zone-ref`, `proxied`, `ttl`, etc. from `example-gateway` —
+# this Route doesn't need to set them. See annotated_httproute_override.yaml
+# for the per-Route override pattern.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: app-route
+  namespace: default
+  # No cloudflare.io annotations on the Route itself — everything is
+  # inherited from `example-gateway`.
+spec:
+  parentRefs:
+    - name: example-gateway
+      # Sectional refs are supported; omit `sectionName` to attach to all
+      # of the Gateway's listeners whose hostname allows this Route's
+      # hostnames.
+      # sectionName: https
+
+  # Hostnames this Route handles. Each one becomes a CloudflareDNSRecord
+  # CR pointing at the tunnel's CNAME (proxied per the Gateway default).
+  hostnames:
+    - app.example.com
+    - api.example.com
+
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: app-backend
+          port: 8080

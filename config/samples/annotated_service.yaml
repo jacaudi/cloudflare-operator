@@ -1,0 +1,56 @@
+# Annotated Service — opt a Kubernetes Service directly into a tunnel.
+#
+# Predates the Gateway-API path. Useful when you want a single Service
+# exposed via the tunnel without standing up a Gateway + HTTPRoute pair.
+# The operator's service-source controller watches Services carrying
+# `cloudflare.io/tunnel: "true"` and:
+#
+#   1. Ensures a CloudflareTunnel CR exists (auto-created if absent,
+#      named cf-<namespace>[-<tunnel-name>]).
+#   2. Emits a CloudflareDNSRecord CR for the hostname (either derived
+#      from the Service name or explicitly set via `cloudflare.io/dns-record`).
+#   3. Spawns the cloudflared dataplane targeting this Service's
+#      ClusterIP:port.
+#
+# Gateway-API is the recommended path for new deployments (more flexibility,
+# better HTTPRoute / TLSRoute composition), but the Service path is fully
+# supported and idiomatic for simple single-service exposure.
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp
+  namespace: default
+  annotations:
+    # OPT-IN — required.
+    cloudflare.io/tunnel: "true"
+
+    # Resolve the target zone.
+    cloudflare.io/zone-ref: example-com
+    # cloudflare.io/zone-ref-namespace: cloudflare-system
+
+    # Explicit emitted-DNSRecord name. When omitted, the operator derives
+    # it from the Service's name + namespace.
+    cloudflare.io/dns-record: webapp.example.com
+
+    # Explicit DNS target. When omitted, the operator routes through the
+    # tunnel's CNAME (<tunnel-id>.cfargotunnel.com). Setting this only
+    # makes sense when bypassing the tunnel for this specific record.
+    # cloudflare.io/dns-target: webapp.example.com.cfargotunnel.com
+
+    # Service port to forward via cloudflared. When omitted, the operator
+    # uses the Service's first port.
+    cloudflare.io/port: "8080"
+
+    # Standard inheritance defaults.
+    cloudflare.io/proxied: "true"
+    cloudflare.io/ttl: "1"
+    # cloudflare.io/no-tls-verify: "false"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: webapp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

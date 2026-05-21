@@ -1,0 +1,53 @@
+# Annotated HTTPRoute — per-Route override of the Gateway's inheritance.
+#
+# Same pattern as annotated_httproute.yaml — attached to a tunnel-enabled
+# Gateway via parentRefs — but this Route sets a couple of cloudflare.io
+# annotations on itself to OVERRIDE what it would otherwise inherit from
+# the Gateway.
+#
+# Use this pattern when one specific hostname needs different behavior
+# than the rest of the routes on the same Gateway. Common cases:
+#   - One subdomain is grey-cloud (proxied=false) for a tool that needs
+#     to see real client IPs (e.g. a SSH-over-WebSocket).
+#   - One backend uses a self-signed cert and needs noTLSVerify=true.
+#   - One hostname needs a longer TTL because clients negotiate it once.
+#
+# Order of precedence (most specific wins):
+#   Route annotation > Gateway annotation > operator default
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bypass-route
+  namespace: default
+  annotations:
+    # Override the Gateway's `proxied: true` default for THIS hostname.
+    # The emitted CloudflareDNSRecord will have spec.proxied=false
+    # (grey-cloud), exposing the origin's real IP to clients.
+    cloudflare.io/proxied: "false"
+
+    # Override the Gateway's TTL default for this Route's emitted records.
+    # 300 seconds = 5 minutes.
+    cloudflare.io/ttl: "300"
+
+    # Skip TLS verification to the origin. Useful when the backend uses
+    # a self-signed certificate that cloudflared can't verify.
+    # cloudflare.io/no-tls-verify: "true"
+
+    # If the operator's discovered origin SAN won't match what the backend
+    # certificate actually presents, set it explicitly.
+    # cloudflare.io/origin-server-name: "internal.example.com"
+spec:
+  parentRefs:
+    - name: example-gateway
+
+  hostnames:
+    - bypass.example.com
+
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: bypass-backend
+          port: 8080
