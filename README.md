@@ -1,4 +1,4 @@
-# Cloudflare Kubernetes Operator
+# Cloudflare Operator
 
 A Kubernetes operator for managing Cloudflare DNS records, Zones, Rulesets, and
 Cloudflare Tunnels declaratively using Custom Resources.
