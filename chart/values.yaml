@@ -1,75 +1,102 @@
 # Facade values for the cloudflare-operator chart. The HelmRelease author
 # sets these; templates/_helpers.tpl maps them onto the bjw-s common schema.
+
 image:
+  # -- Container image repository for the meta-operator.
   repository: ghcr.io/jacaudi/cloudflare-operator
-  tag: ""          # empty → .Chart.AppVersion
+  # -- Container image tag. Empty → use `.Chart.AppVersion`.
+  tag: ""
+  # -- Container image pull policy.
   pullPolicy: IfNotPresent
 
-# Override-only / informational. bjw-s common renders the ServiceAccount and
-# Deployment in .Release.Namespace, so that is the single source of truth for
-# the operator's namespace. Leave this empty (the intended path) and install
-# into the target namespace via `helm --namespace` / Flux HelmRelease
-# targetNamespace. If set non-empty it MUST equal the release namespace — a
-# divergent value fails the install fast (templates/common.yaml guard) rather
-# than silently binding RBAC to a non-existent ServiceAccount.
+# -- Override-only / informational. bjw-s common renders the ServiceAccount
+# and Deployment in `.Release.Namespace`, so that is the single source of
+# truth for the operator's namespace. Leave this empty (the intended path)
+# and install into the target namespace via `helm --namespace` /
+# Flux HelmRelease `targetNamespace`. If set non-empty it MUST equal the
+# release namespace — a divergent value fails the install fast
+# (templates/common.yaml guard).
 namespace: ""
 
-# CRD lifecycle. install: render the 5 bundle CRDs as chart templates at all.
-# keep: stamp helm.sh/resource-policy: keep so they survive `helm uninstall`
-# (data-safety default — matches design §4's original hard-coded behavior).
 crds:
+  # -- Whether to render the 5 bundle CRDs as chart templates at all.
   install: true
+  # -- Stamp `helm.sh/resource-policy: keep` on every CRD so they survive
+  # `helm uninstall` (data-safety default).
   keep: true
 
-# Which bundle controllers the meta-operator spawns.
+# Which bundle controllers the meta-operator spawns. Each controller is a
+# sub-operator; the meta-operator manages their lifecycle.
 controllers:
   zone:
+    # -- Enable the zone controller bundle (manages CloudflareZone,
+    # CloudflareZoneConfig, CloudflareRuleset, CloudflareDNSRecord).
     enabled: true
+    # -- Replica count for the zone controller Deployment.
     replicas: 1
+    # -- Log level for the zone controller. One of `debug` / `info` / `warn`
+    # / `error`.
     logLevel: info
   tunnel:
+    # -- Enable the tunnel controller bundle (manages CloudflareTunnel +
+    # source controllers for Service / Gateway / HTTPRoute / TLSRoute).
     enabled: false
+    # -- Replica count for the tunnel controller Deployment.
     replicas: 1
+    # -- Log level for the tunnel controller. One of `debug` / `info` /
+    # `warn` / `error`.
     logLevel: info
-    # cloudflared connector resources seeded into every CloudflareTunnel this
-    # operator auto-creates from a Gateway annotation (standard k8s
-    # ResourceRequirements). Empty {} (default) = no requests/limits — exact
-    # current behavior. Manually-declared CloudflareTunnel CRs are unaffected.
     connector:
+      # -- Cloudflared connector resources seeded into every CloudflareTunnel
+      # this operator auto-creates from a Gateway annotation (standard k8s
+      # `ResourceRequirements`). Empty `{}` = no requests/limits.
+      # Manually-declared CloudflareTunnel CRs are unaffected.
       resources: {}
-      # cloudflared connector image override for tunnels this operator
-      # auto-creates. Empty {} = use the operator's Renovate-tracked
+      # -- Cloudflared connector image override for tunnels this operator
+      # auto-creates. Empty `{}` = use the operator's Renovate-tracked
       # compile-time pin. Per-axis: set only `repository` to use a mirror /
       # ECR pull-through cache (inherits the pinned tag) — the recommended
       # Docker Hub rate-limit mitigation. Manually-declared CloudflareTunnel
-      # CRs are unaffected (use spec.connector.image).
+      # CRs are unaffected (use `spec.connector.image`).
       image: {}
       # image:
       #   repository: <your-registry>/cloudflare/cloudflared
       #   tag: "2026.5.0"
 
-# Operator-level default credentials — meta-operator env (CLOUDFLARE_API_TOKEN
-# / CLOUDFLARE_ACCOUNT_ID) and the coordinates it propagates to spawned
-# controllers, all via valueFrom.secretKeyRef from this existing Secret.
+# Operator-level default credentials — meta-operator env
+# (`CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`) and the coordinates it
+# propagates to spawned controllers, all via `valueFrom.secretKeyRef` from
+# this existing Secret. The Secret must carry the
+# `app.kubernetes.io/part-of: cloudflare-operator` label.
 credentials:
+  # -- Name of the pre-existing Secret carrying the Cloudflare API token +
+  # account ID. Empty disables operator-level defaults; per-CR overrides
+  # remain available.
   existingSecret: ""
+  # -- Secret key under which the Cloudflare API token is stored.
   tokenKey: token
+  # -- Secret key under which the Cloudflare account ID is stored.
   accountIDKey: accountID
 
-# Meta-operator Deployment replica count. Default 1. >1 requires
-# leaderElection.enabled (the chart wires --leader-election) so only one
+# -- Meta-operator Deployment replica count. `>1` requires
+# `leaderElection.enabled` (the chart wires `--leader-election`) so only one
 # replica actively reconciles; the others are warm standby (HA).
 replicas: 1
 
-# Controller-manager leader election (controller-runtime Lease-based HA).
 leaderElection:
+  # -- Controller-manager leader election (controller-runtime Lease-based
+  # HA). Required when `replicas > 1`.
   enabled: true
 
 observability:
   metrics:
     serviceMonitor:
+      # -- Render a Prometheus-Operator `ServiceMonitor` scraping the
+      # operator's `/metrics` endpoint. Requires Prometheus Operator's
+      # `monitoring.coreos.com/v1` CRDs to be installed in the cluster.
       enabled: false
 
+# -- Resource requests + limits for the meta-operator container.
 resources:
   requests:
     cpu: 100m
