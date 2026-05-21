@@ -3,20 +3,13 @@
 A Kubernetes operator for managing Cloudflare DNS records, Zones, Rulesets, and
 Cloudflare Tunnels declaratively using Custom Resources.
 
-> **Status — alpha.** Active development on the `refactor/total` branch.
-> The current v2alpha1 API is the stable target; CRD names and shapes are
-> settled. Tagged releases will land once `refactor/total` lands on `main`.
-
 ## Features
 
-- Declarative Cloudflare DNS + Zone + Ruleset management as Kubernetes resources
-- Cloudflare Tunnel lifecycle: tunnel CR + cloudflared Deployment + remote-config
-- Annotation-driven tunnel attachment from Gateways, HTTPRoutes, TLSRoutes, and Services
-- Per-CR credential override (paired API token + account ID)
-- Adopt + Observe modes for safe migration from existing Cloudflare state
-- TXT registry for ownership marking (plaintext or AES-GCM)
-- Restart-immune force-reconcile via the `cloudflare.io/reconcile-at` annotation
-- Per-CR change-detection short-circuit + hash-gated dataplane patches (low API + apiserver pressure)
+- Manage Cloudflare DNS, Zones, and Rulesets as Kubernetes resources
+- Spin up Cloudflare Tunnels (tunnel + cloudflared pods + remote routing) from a single CR
+- Attach tunnels to Gateway API objects and Services by adding one annotation
+- Each CR can use its own Cloudflare credentials
+- Adopt existing Cloudflare records safely (Observe mode reads, Managed mode writes)
 
 ## Custom Resources
 
@@ -63,7 +56,7 @@ After the operator is installed:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: cloudflare-api-token
+  name: cloudflare-credentials
   namespace: cloudflare-system
   # Required from v0.x onward: the operator's Secret cache is label-scoped.
   labels:
@@ -71,6 +64,7 @@ metadata:
 type: Opaque
 stringData:
   token: "your-cloudflare-api-token"
+  accountID: "your-cloudflare-account-id"
 ```
 
 > **Why the label?** Slice 2 (finding C) scoped the operator's Secret cache to
@@ -88,16 +82,19 @@ metadata:
   name: example
   namespace: default
 spec:
-  name: example.com
+  name: app.example.com
   type: CNAME
-  content: app.svc.cluster.local
+  content: origin.example.net
   proxied: true
   cloudflare:
     tokenSecretRef:
-      name: cloudflare-api-token
+      name: cloudflare-credentials
       namespace: cloudflare-system
       key: token
-    accountID: "REPLACE_WITH_ACCOUNT_ID"
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
 ```
 
 ### 3. (Optional) Declare a Cloudflare Tunnel
@@ -112,10 +109,13 @@ spec:
   name: example-tunnel
   cloudflare:
     tokenSecretRef:
-      name: cloudflare-api-token
+      name: cloudflare-credentials
       namespace: cloudflare-system
       key: token
-    accountID: "REPLACE_WITH_ACCOUNT_ID"
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
   connector:
     replicas: 2
     protocol: auto
