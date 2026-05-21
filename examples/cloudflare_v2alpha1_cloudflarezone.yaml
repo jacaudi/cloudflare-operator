@@ -1,13 +1,28 @@
 # CloudflareZone — onboard a domain as a Cloudflare zone.
 #
 # Applying this CR ensures the domain is registered as a zone on the
-# Cloudflare account referenced by `cloudflare.accountIDSecretRef`. The
-# zone's Cloudflare-assigned ID is published on Status once the loop
-# converges, where downstream CRs (CloudflareZoneConfig, CloudflareRuleset,
+# Cloudflare account configured for the operator. The zone's Cloudflare-
+# assigned ID is published on Status once the loop converges, where
+# downstream CRs (CloudflareZoneConfig, CloudflareRuleset,
 # CloudflareDNSRecord) can resolve it via `zoneRef.name`.
 #
 # DeletionPolicy is the safety knob: "Retain" (default) leaves the zone in
 # Cloudflare when the CR is deleted; "Delete" actively removes it.
+#
+# === Credentials (operator-level default) ===
+# This example omits `spec.cloudflare` and inherits the operator-level
+# default credentials configured at chart install time:
+#
+#   credentials:
+#     existingSecret: cloudflare-operator-credentials
+#     tokenKey: apiToken
+#     accountIDKey: accountID
+#
+# The Secret must carry the `app.kubernetes.io/part-of: cloudflare-operator`
+# label and store the API token + account ID under the configured keys. To
+# override credentials per-CR instead, see the `spec.cloudflare` block in
+# `cloudflare_v2alpha1_cloudflarednsrecord.yaml`. The full resolution order
+# lives in `docs/credentials.md`.
 apiVersion: cloudflare.io/v2alpha1
 kind: CloudflareZone
 metadata:
@@ -30,16 +45,3 @@ spec:
   # Reconciliation interval. Drives drift detection between this CR and
   # the live zone state in Cloudflare.
   interval: 30m
-
-  # Per-CR credential override. Omit entirely to inherit the operator-level
-  # default. The API token and account ID are treated as a paired unit and
-  # must both be supplied via the same CloudflareCredentialRef block.
-  cloudflare:
-    tokenSecretRef:
-      name: cloudflare-credentials
-      namespace: cloudflare-system
-      key: token
-    accountIDSecretRef:
-      name: cloudflare-credentials
-      namespace: cloudflare-system
-      key: accountID

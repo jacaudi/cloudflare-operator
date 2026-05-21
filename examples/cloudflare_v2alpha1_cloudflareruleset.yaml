@@ -8,6 +8,19 @@
 # on the next reconcile.
 #
 # Resolve the target zone via `zoneRef.name` (preferred) or `zoneID`.
+#
+# === Credentials (operator-level default) ===
+# This example omits `spec.cloudflare` and inherits the operator-level
+# default credentials configured at chart install time:
+#
+#   credentials:
+#     existingSecret: cloudflare-operator-credentials
+#     tokenKey: apiToken
+#     accountIDKey: accountID
+#
+# To override credentials per-CR instead, see the `spec.cloudflare` block in
+# `cloudflare_v2alpha1_cloudflarednsrecord.yaml`. The full resolution order
+# lives in `docs/credentials.md`.
 apiVersion: cloudflare.io/v2alpha1
 kind: CloudflareRuleset
 metadata:
@@ -16,16 +29,6 @@ metadata:
 spec:
   zoneRef:
     name: example-com
-
-  cloudflare:
-    tokenSecretRef:
-      name: cloudflare-credentials
-      namespace: cloudflare-system
-      key: token
-    accountIDSecretRef:
-      name: cloudflare-credentials
-      namespace: cloudflare-system
-      key: accountID
 
   # Human-readable ruleset name. Surfaced in the Cloudflare dashboard.
   name: "example.com custom WAF"

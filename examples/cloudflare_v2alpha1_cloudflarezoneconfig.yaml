@@ -8,6 +8,19 @@
 # Resolve the target zone via either `zoneRef.name` (an in-namespace
 # CloudflareZone CR) or `zoneID` (a literal Cloudflare zone ID). Exactly
 # one must be set.
+#
+# === Credentials (operator-level default) ===
+# This example omits `spec.cloudflare` and inherits the operator-level
+# default credentials configured at chart install time:
+#
+#   credentials:
+#     existingSecret: cloudflare-operator-credentials
+#     tokenKey: apiToken
+#     accountIDKey: accountID
+#
+# To override credentials per-CR instead, see the `spec.cloudflare` block in
+# `cloudflare_v2alpha1_cloudflarednsrecord.yaml`. The full resolution order
+# lives in `docs/credentials.md`.
 apiVersion: cloudflare.io/v2alpha1
 kind: CloudflareZoneConfig
 metadata:
@@ -19,17 +32,7 @@ spec:
   zoneRef:
     name: example-com
 
-  # Per-CR credential override (omit to inherit the operator-level default).
-  cloudflare:
-    tokenSecretRef:
-      name: cloudflare-credentials
-      namespace: cloudflare-system
-      key: token
-    accountIDSecretRef:
-      name: cloudflare-credentials
-      namespace: cloudflare-system
-      key: accountID
-
+  # Reconciliation interval (drift detection cadence).
   interval: 30m
 
   # SSL/TLS. All fields are pointers — omit to leave the corresponding
