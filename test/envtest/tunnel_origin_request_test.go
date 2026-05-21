@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -655,16 +656,33 @@ func minimalService(name, ns string, port int32) *corev1.Service {
 
 // nudgeTunnel annotates the tunnel CR to trigger an extra reconcile without
 // changing any spec. The annotation key is test-scoped.
+//
+// Retries on conflict: the tunnel controller (simplify H) writes new
+// ObservedDataplane*Hash status fields on every reconcile that changes those
+// hashes, bumping the resource version. A concurrent status write between our
+// Get and Update would cause a 409 Conflict that is safe to retry.
 func nudgeTunnel(t *testing.T, c client.Client, ctx context.Context, tn *v2alpha1.CloudflareTunnel) {
 	t.Helper()
-	// Re-fetch to avoid stale-resource-version errors.
-	var latest v2alpha1.CloudflareTunnel
-	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: tn.Namespace, Name: tn.Name}, &latest))
-	if latest.Annotations == nil {
-		latest.Annotations = map[string]string{}
-	}
-	latest.Annotations["test.cloudflare.io/nudge"] = "1"
-	require.NoError(t, c.Update(ctx, &latest))
+	require.Eventually(t, func() bool {
+		// Re-fetch on every attempt to pick up the latest resource version.
+		var latest v2alpha1.CloudflareTunnel
+		if err := c.Get(ctx, types.NamespacedName{Namespace: tn.Namespace, Name: tn.Name}, &latest); err != nil {
+			return false
+		}
+		if latest.Annotations == nil {
+			latest.Annotations = map[string]string{}
+		}
+		latest.Annotations["test.cloudflare.io/nudge"] = "1"
+		err := c.Update(ctx, &latest)
+		if err == nil {
+			return true
+		}
+		if apierrors.IsConflict(err) {
+			return false // retry with fresh resource version
+		}
+		require.NoError(t, err) // fail fast on unexpected errors
+		return false
+	}, 5*time.Second, 50*time.Millisecond, "nudge tunnel CR %s/%s", tn.Namespace, tn.Name)
 }
 
 // mustGetTunnelID returns the Cloudflare-assigned TunnelID from the tunnel CR's

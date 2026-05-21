@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
@@ -77,12 +78,20 @@ func TestEnvtest_TunnelDriftDetection(t *testing.T) {
 		}})
 	require.NoError(t, err)
 
-	// Trigger a fresh reconcile via an annotation touch (no spec change).
+	// Trigger a fresh reconcile. We also change Spec.Routing.Fallback so that
+	// the next reconcile's wantSnap (catch-all becomes http_status:503) differs
+	// from Status.ObservedIngress (still http_status:404 from the settled
+	// baseline). This satisfies the simplify-G gate
+	// (!reflect.DeepEqual(wantSnap, ObservedIngress)) so GetConfiguration is
+	// called and the out-of-band rogue config is detected.
 	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Name: "tnl", Namespace: f.ns}, &got))
 	if got.Annotations == nil {
 		got.Annotations = map[string]string{}
 	}
 	got.Annotations["trigger"] = "drift"
+	got.Spec.Routing = &v2alpha1.TunnelRoutingSpec{
+		Fallback: &v2alpha1.TunnelFallback{HTTPStatus: ptr.To(int32(503))},
+	}
 	require.NoError(t, f.c.Update(ctx, &got))
 
 	// The reconcile must record a DriftDetected Warning Event on the tunnel
