@@ -190,6 +190,7 @@ covering every CRD plus the annotation-driven attachment patterns
 | [docs/reconciliation.md](docs/reconciliation.md) | Reconcile cadence, `Phase=Error` retry semantics, the `cloudflare.io/reconcile-at` force-reconcile annotation |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Field guide for diagnosing the operator: Status → Conditions → Logs → Events flow, the `Ready=False` reason vocabulary mapped to fixes, the verify-reconcile-actually-ran annotation-ack trick |
 | [docs/tunnels.md](docs/tunnels.md) | `CloudflareTunnel` deep-dive: direct-create vs auto-created, the 52-char naming budget, the cloudflared dataplane sizing knobs, the cloudflared image override precedence chain, the Status surface, cascade-GC rules |
+| [docs/txt-registry.md](docs/txt-registry.md) | TXT companion ownership-marking: the `cf-txt.<hostname>` companion shape, the JSON payload format (or AES-256-GCM `v1:nonce:ciphertext` envelope), enabling encryption via `TxtRegistryKeySecretRef`, rolling between plaintext + AES, the engineering migration procedure |
 
 ## Acknowledgements
 
