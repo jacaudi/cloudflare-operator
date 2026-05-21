@@ -19,6 +19,8 @@ sources:
   - https://github.com/jacaudi/cloudflare-operator
 maintainers:
   - name: jacaudi
+annotations:
+  artifacthub.io/license: MIT
 dependencies:
   - name: common
     repository: https://bjw-s-labs.github.io/helm-charts/
