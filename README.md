@@ -12,6 +12,13 @@ official [cloudflare/cloudflare-go](https://github.com/cloudflare/cloudflare-go)
 Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc.
 Use at your own discretion.
 
+**Agentically generated.** This codebase was produced through agentic,
+spec-driven development: each feature began as a written design and
+implementation spec, then a coding agent executed the plan under human
+review. Tests, code review, and CI gates apply as they would for any
+project, but the authorship pattern is not a single human contributor —
+keep that in mind when evaluating fit for your environment.
+
 ## Features
 
 - Manage Cloudflare DNS, Zones, and Rulesets as Kubernetes resources
