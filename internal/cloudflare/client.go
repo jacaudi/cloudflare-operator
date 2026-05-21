@@ -32,7 +32,13 @@ type Client struct {
 	accountID string
 }
 
-// NewClient builds a cloudflare-go client from resolved credentials.
+// NewClient returns a *Client for creds, reusing a cached instance when
+// available.  Two reconciles using identical credentials share the same
+// *Client and its underlying HTTP/2 connection pool.
+//
+// Cache-miss builds a fresh client via buildClient and stores it.  The cache
+// is a 32-entry LRU with a 30-minute absolute TTL (measured from insertion,
+// not last use); see clientcache.go.
 func NewClient(creds Credentials) (*Client, error) {
 	if creds.Token == "" {
 		return nil, fmt.Errorf("token required")
@@ -40,6 +46,21 @@ func NewClient(creds Credentials) (*Client, error) {
 	if creds.AccountID == "" {
 		return nil, fmt.Errorf("accountID required")
 	}
+	key := cacheKey(creds)
+	if c, ok := clientCache.Get(key); ok {
+		return c, nil
+	}
+	c, err := buildClient(creds)
+	if err != nil {
+		return nil, err
+	}
+	clientCache.Add(key, c)
+	return c, nil
+}
+
+// buildClient constructs a fresh *Client from resolved credentials without
+// consulting the cache.  Called on cache-miss by NewClient.
+func buildClient(creds Credentials) (*Client, error) {
 	// MaxRetries caps the SDK's internal retry budget (default 10) to 3 so a
 	// stuck Cloudflare endpoint fails fast and lets controller-runtime requeue
 	// rather than blocking a reconciler worker for minutes. Retry-After
