@@ -27,7 +27,7 @@ Use at your own discretion.
 | `CloudflareZone` | Cloudflare zone settings + zone-level metadata |
 | `CloudflareZoneConfig` | Per-zone configuration knobs (security, performance, TLS) |
 | `CloudflareRuleset` | WAF / transform / redirect / origin rulesets |
-| `CloudflareDNSRecord` | DNS records (A / AAAA / CNAME / TXT / …) with adopt + observe |
+| `CloudflareDNSRecord` | DNS records (A / AAAA / CNAME / TXT / …) with Observe + Managed modes |
 | `CloudflareTunnel` | Cloudflare Tunnel + cloudflared dataplane Deployment |
 
 ## Installation
@@ -35,15 +35,15 @@ Use at your own discretion.
 ### Helm (recommended)
 
 ```bash
-# Install from OCI registry.
+# Replace <version> with a tagged chart release (e.g. 0.1.0).
 helm install cloudflare-operator oci://ghcr.io/jacaudi/charts/cloudflare-operator \
+  --version <version> \
   --namespace cloudflare-system \
   --create-namespace
 ```
 
-The chart ships the meta-operator (which manages zone + tunnel controllers as
-sub-operators) and the v2alpha1 CRDs. See [`chart/README.md`](chart/README.md)
-for the full value reference + behavior-change notes.
+The chart ships the operator and the v2alpha1 CRDs. See
+[`chart/README.md`](chart/README.md) for the full value reference.
 
 ### Local development
 
@@ -67,7 +67,7 @@ kind: Secret
 metadata:
   name: cloudflare-credentials
   namespace: cloudflare-system
-  # Required from v0.x onward: the operator's Secret cache is label-scoped.
+  # Required: the operator's Secret cache is label-scoped.
   labels:
     app.kubernetes.io/part-of: cloudflare-operator
 type: Opaque
@@ -76,11 +76,11 @@ stringData:
   accountID: "your-cloudflare-account-id"
 ```
 
-> **Why the label?** Slice 2 (finding C) scoped the operator's Secret cache to
-> objects carrying `app.kubernetes.io/part-of: cloudflare-operator`. Unlabeled
-> credential Secrets become invisible to the operator and credential resolution
-> fails with `ErrSecretNotFound`. See
-> [`chart/README.md`](chart/README.md#cost-reductions-simplify-slice-2--c-e-f-g-h-2026-05).
+> **Why the label?** The operator's Secret cache is label-scoped to objects
+> carrying `app.kubernetes.io/part-of: cloudflare-operator` so it avoids a
+> cluster-wide LIST/WATCH on every Secret. Unlabeled credential Secrets are
+> invisible to the operator and credential resolution fails with
+> `ErrSecretNotFound`.
 
 ### 2. Declare a DNS record
 
@@ -130,7 +130,7 @@ spec:
     protocol: auto
   routing:
     fallback:
-      httpStatus: 404
+      httpStatus: 404      # served when no source matches
 ```
 
 ### 4. Apply + check
@@ -160,8 +160,8 @@ and the other levers available.
 
 ## Examples
 
-See the [`config/samples/`](config/samples/) directory for complete CR
-examples covering each CRD's full surface.
+See the [`config/samples/`](config/samples/) directory for example CR
+manifests.
 
 ---
 
@@ -183,4 +183,4 @@ This project stands on the shoulders of giants:
 
 ## License
 
-Apache 2.0
+Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
