@@ -583,6 +583,65 @@ slice, Routes attached to a tunnel re-reconcile within seconds of the
 tunnel's `Status.TunnelCNAME` populating. No user-visible action
 required — first-time tunnel setup latency improves.
 
+### Cost reductions (simplify slice 2 / C, E, F, G, H, 2026-05)
+
+#### Secret cache now label-scoped (C) — MIGRATION REQUIRED
+
+The operator now scopes its Kubernetes Secret cache to objects
+carrying the `app.kubernetes.io/part-of: cloudflare-operator`
+label. Operator-managed Secrets (e.g. the cloudflared connector
+token Secret built by the tunnel controller) carry this label
+automatically.
+
+**User-credential Secrets MUST also carry this label going
+forward.** For existing deploys, label each Cloudflare-credentials
+Secret the operator should be able to read:
+
+```
+kubectl label secret -n <ns> <name> \
+  app.kubernetes.io/part-of=cloudflare-operator
+```
+
+Unlabeled credential Secrets become invisible to the operator's
+cache and credential resolution will fail with `ErrSecretNotFound`.
+
+#### Cloudflare client connection reuse (E)
+
+Internal change: the operator now reuses `*cfgo.Client` instances
+(and their underlying HTTP/2 connection pools) across reconciles
+for the same `(token, accountID)` pair. 32-entry LRU with a
+30-minute absolute TTL (`golang-lru/v2/expirable.Get` does not
+refresh the entry on lookup, so even an actively-used client is
+rebuilt at most every 30 minutes — capping any stale-state
+exposure and ensuring credential rotation propagates promptly).
+No user-visible change.
+
+#### Apiserver write-amplification fix (F)
+
+`HTTPRoute` and `TLSRoute` source controllers now skip their
+`Status().Update` when no condition has changed (semantic compare
+ignoring `LastTransitionTime`). No user-visible change beyond
+reduced apiserver round-trips per reconcile.
+
+#### Tunnel drift detection slightly less eager (G)
+
+The Cloudflare `GetConfiguration` call inside `applyRemoteConfig`
+is now skipped when the operator's desired snapshot matches the
+last-observed remote ingress snapshot. Out-of-band edits to the
+remote tunnel config take one full reconcile interval longer to
+surface as `DriftDetected` Events — for typical deploys the
+30-minute default interval. Set the `cloudflare.io/reconcile-at`
+annotation (introduced in S6) to force an immediate re-check.
+
+#### Tunnel dataplane patches hash-gated (H)
+
+The cloudflared Deployment and metrics Service are no longer
+re-applied via SSA on every tunnel reconcile when nothing has
+changed. Hash-gating uses two new optional Status fields:
+`observedDataplaneDeploymentHash` and `observedDataplaneServiceHash`.
+No user-visible change. Matches the spec-hash short-circuit pattern
+that `CloudflareZoneConfig` already uses.
+
 ---
 
 ## Renovate tracking
