@@ -366,8 +366,30 @@ func tunnelToGateways(mgr manager.Manager) handler.MapFunc {
 	}
 }
 
-// tunnelToHTTPRoutes enqueues every HTTPRoute in the tunnel's namespace
-// annotated with cloudflare.io/tunnel=true.
+// TunnelToHTTPRoutesFunc is the exported entry-point for the
+// tunnelToHTTPRoutes MapFunc. Exposed for envtest fixtures that wire the
+// CloudflareTunnel watch directly against the production implementation.
+func TunnelToHTTPRoutesFunc(mgr manager.Manager) handler.MapFunc {
+	return tunnelToHTTPRoutes(mgr)
+}
+
+// TunnelToTLSRoutesFunc is the exported entry-point for the
+// tunnelToTLSRoutes MapFunc. Exposed for envtest fixtures that wire the
+// CloudflareTunnel watch directly against the production implementation.
+func TunnelToTLSRoutesFunc(mgr manager.Manager) handler.MapFunc {
+	return tunnelToTLSRoutes(mgr)
+}
+
+// tunnelToHTTPRoutes enqueues every HTTPRoute in the tunnel's namespace when
+// the tunnel changes (e.g. Status.TunnelCNAME populates). Routes whose parent
+// Gateway is not opted in short-circuit cleanly via DeriveTunnelName in the
+// Route's own Reconcile (microsecond no-op, no CF or apiserver writes).
+//
+// The previous implementation filtered by cloudflare.io/tunnel=true on the
+// Route itself — but that annotation lives on Gateways (the opt-in signal),
+// not on Routes. Routes inherit the opt-in via their parentRefs. The filter
+// matched zero Routes; the watch was a no-op and Routes did not re-reconcile
+// when the tunnel CNAME populated.
 func tunnelToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
@@ -378,20 +400,25 @@ func tunnelToHTTPRoutes(mgr manager.Manager) handler.MapFunc {
 		if err := mgr.GetClient().List(ctx, &routes, client.InNamespace(tn.Namespace)); err != nil {
 			return nil
 		}
-		out := make([]reconcile.Request, 0)
+		out := make([]reconcile.Request, 0, len(routes.Items))
 		for _, rt := range routes.Items {
-			if rt.Annotations[conventions.AnnotationTunnel] == "true" {
-				out = append(out, reconcile.Request{
-					NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
-				})
-			}
+			out = append(out, reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
+			})
 		}
 		return out
 	}
 }
 
-// tunnelToTLSRoutes enqueues every TLSRoute in the tunnel's namespace
-// annotated with cloudflare.io/tunnel=true.
+// tunnelToTLSRoutes enqueues every TLSRoute in the tunnel's namespace when
+// the tunnel changes. Mirrors tunnelToHTTPRoutes but for v1alpha2.TLSRoute.
+// Routes whose parent Gateway is not opted in short-circuit cleanly via
+// DeriveTunnelName in the Route's own Reconcile (microsecond no-op, no CF or
+// apiserver writes).
+//
+// The previous implementation filtered by cloudflare.io/tunnel=true on the
+// Route itself — but that annotation lives on Gateways, not on Routes. The
+// filter matched zero Routes; the watch was a no-op.
 func tunnelToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		tn, ok := obj.(*v2alpha1.CloudflareTunnel)
@@ -402,13 +429,11 @@ func tunnelToTLSRoutes(mgr manager.Manager) handler.MapFunc {
 		if err := mgr.GetClient().List(ctx, &routes, client.InNamespace(tn.Namespace)); err != nil {
 			return nil
 		}
-		out := make([]reconcile.Request, 0)
+		out := make([]reconcile.Request, 0, len(routes.Items))
 		for _, rt := range routes.Items {
-			if rt.Annotations[conventions.AnnotationTunnel] == "true" {
-				out = append(out, reconcile.Request{
-					NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
-				})
-			}
+			out = append(out, reconcile.Request{
+				NamespacedName: types.NamespacedName{Namespace: rt.Namespace, Name: rt.Name},
+			})
 		}
 		return out
 	}
