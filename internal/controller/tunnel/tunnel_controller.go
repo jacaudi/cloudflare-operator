@@ -321,26 +321,23 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			"orphaned but not operator-managed; operator will not auto-GC it — adopt/label it or delete it manually")
 	}
 
-	// Feature F: ack a completed force-reconcile before the status write so
-	// the same write carries the token.  Only assigned on a successful path —
-	// any earlier error return leaves the ack empty, keeping the trigger live.
-	if forceReconcile {
-		tn.Status.LastReconcileToken = tn.Annotations[conventions.AnnotationReconcileAt]
-	}
-
-	// Only persist status when something material changed or spec generation
-	// advanced. Mask LastSyncedAt and ObservedGeneration from the comparison
-	// since they would otherwise force a write every pass.
-	candidate := tn.Status.DeepCopy()
-	candidate.LastSyncedAt = originalStatus.LastSyncedAt
-	candidate.ObservedGeneration = originalStatus.ObservedGeneration
-	if tn.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
-		now := metav1.Time{Time: time.Now()}
-		tn.Status.LastSyncedAt = &now
-		tn.Status.ObservedGeneration = tn.Generation
-		if err := r.Status().Update(ctx, &tn); err != nil {
-			return ctrl.Result{}, err
-		}
+	_, uerr := reconcilelib.UpdateStatusIfChanged(
+		ctx,
+		r.Client,
+		&tn,
+		&tn.Status,
+		originalStatus,
+		forceReconcile,
+		tn.Annotations[conventions.AnnotationReconcileAt],
+		func() bool {
+			candidate := tn.Status.DeepCopy()
+			candidate.LastSyncedAt = originalStatus.LastSyncedAt
+			candidate.ObservedGeneration = originalStatus.ObservedGeneration
+			return !equality.Semantic.DeepEqual(originalStatus, candidate)
+		},
+	)
+	if uerr != nil {
+		return ctrl.Result{}, uerr
 	}
 
 	interval := reconcilelib.ResolveInterval(tn.Spec.Interval, defaultTunnelInterval)
