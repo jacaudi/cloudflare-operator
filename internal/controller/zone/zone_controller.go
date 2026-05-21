@@ -231,26 +231,23 @@ func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		z.Status.Phase = v2alpha1.PhasePending
 	}
 
-	// Feature F: ack a completed force-reconcile before the status write so
-	// the same write carries the token.  Only assigned on a successful path —
-	// any earlier error return leaves the ack empty, keeping the trigger live.
-	if forceReconcile {
-		z.Status.LastReconcileToken = z.Annotations[conventions.AnnotationReconcileAt]
-	}
-
-	candidate := z.Status.DeepCopy()
-	candidate.LastSyncedAt = originalStatus.LastSyncedAt
-	candidate.ObservedGeneration = originalStatus.ObservedGeneration
-	if z.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
-		if err := r.Status().Update(ctx, &z); err != nil {
-			return ctrl.Result{}, err
-		}
-	} else {
-		// No material change: roll back the LastSyncedAt + ObservedGeneration
-		// stamps reflectZoneStatus applied so the in-memory status mirrors what
-		// is in etcd.
-		z.Status.LastSyncedAt = originalStatus.LastSyncedAt
-		z.Status.ObservedGeneration = originalStatus.ObservedGeneration
+	_, uerr := reconcile.UpdateStatusIfChanged(
+		ctx,
+		r.Client,
+		&z,
+		&z.Status,
+		originalStatus,
+		forceReconcile,
+		z.Annotations[conventions.AnnotationReconcileAt],
+		func() bool {
+			candidate := z.Status.DeepCopy()
+			candidate.LastSyncedAt = originalStatus.LastSyncedAt
+			candidate.ObservedGeneration = originalStatus.ObservedGeneration
+			return !equality.Semantic.DeepEqual(originalStatus, candidate)
+		},
+	)
+	if uerr != nil {
+		return ctrl.Result{}, uerr
 	}
 
 	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(z.Spec.Interval, defaultZoneInterval)}, nil
