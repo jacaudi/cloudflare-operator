@@ -200,6 +200,16 @@ type CloudflareTunnelStatus struct {
 	// +optional
 	ObservedIngress []IngressEntrySnapshot `json:"observedIngress,omitempty"`
 
+	// ObservedDataplaneDeploymentHash is the sha256 of the last successfully
+	// applied dataplane Deployment's SSA-relevant fields. ensureDataplane
+	// skips the Apply when the computed hash matches.
+	// +optional
+	ObservedDataplaneDeploymentHash string `json:"observedDataplaneDeploymentHash,omitempty"`
+
+	// ObservedDataplaneServiceHash is the analogous hash for the metrics Service.
+	// +optional
+	ObservedDataplaneServiceHash string `json:"observedDataplaneServiceHash,omitempty"`
+
 	// AttachedSources lists every source object currently contributing to
 	// this tunnel's ingress. Informational; the lexicographically-first entry
 	// is the owner-reference target (or the original owner if still present).

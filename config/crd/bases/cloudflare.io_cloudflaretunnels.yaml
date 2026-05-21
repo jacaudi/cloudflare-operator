@@ -1628,6 +1628,16 @@ spec:
                   reconcile (drift check + remote-config PUT, even if a no-op).
                 format: date-time
                 type: string
+              observedDataplaneDeploymentHash:
+                description: |-
+                  ObservedDataplaneDeploymentHash is the sha256 of the last successfully
+                  applied dataplane Deployment's SSA-relevant fields. ensureDataplane
+                  skips the Apply when the computed hash matches.
+                type: string
+              observedDataplaneServiceHash:
+                description: ObservedDataplaneServiceHash is the analogous hash for
+                  the metrics Service.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the .metadata.generation last reconciled.
                 format: int64

@@ -18,6 +18,9 @@ package tunnel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -504,19 +507,53 @@ func (r *CloudflareTunnelReconciler) ensureTokenSecret(
 // ensureDataplane SSAs the cloudflared Deployment + metrics Service. All
 // owner-reffed to the tunnel so cascade delete cleans them up if the
 // finalizer drain is short-circuited.
+//
+// Hash-gate (simplify H): sha256 is computed over the fully-rendered object
+// (including owner ref, which is stable for a given tunnel CR). When the hash
+// matches the previously-stamped Status field, the SSA patch round-trip is
+// skipped. The Status field is only updated AFTER a successful Apply so that a
+// failed Apply leaves the previous hash in place and the next reconcile retries.
 func (r *CloudflareTunnelReconciler) ensureDataplane(ctx context.Context, tn *v2alpha1.CloudflareTunnel) error {
 	dep := BuildDeployment(tn, r.resolvedDefaultImage())
 	if err := reconcilelib.SetControllerOwner(tn, dep, r.Scheme); err != nil {
 		return err
 	}
-	if err := reconcilelib.Apply(ctx, r.Client, dep); err != nil {
-		return err
+	depHash := hashDataplaneObject(dep)
+	if depHash != tn.Status.ObservedDataplaneDeploymentHash {
+		if err := reconcilelib.Apply(ctx, r.Client, dep); err != nil {
+			return err
+		}
+		tn.Status.ObservedDataplaneDeploymentHash = depHash
 	}
+
 	svc := BuildMetricsService(tn.Name, tn.Namespace)
 	if err := reconcilelib.SetControllerOwner(tn, svc, r.Scheme); err != nil {
 		return err
 	}
-	return reconcilelib.Apply(ctx, r.Client, svc)
+	svcHash := hashDataplaneObject(svc)
+	if svcHash != tn.Status.ObservedDataplaneServiceHash {
+		if err := reconcilelib.Apply(ctx, r.Client, svc); err != nil {
+			return err
+		}
+		tn.Status.ObservedDataplaneServiceHash = svcHash
+	}
+	return nil
+}
+
+// hashDataplaneObject returns a sha256 hex digest over the JSON-marshalled
+// client.Object. Used for the ensureDataplane hash-gate (simplify H). The hash
+// is computed after SetControllerOwner so the owner reference is included in
+// the canonical form. json.Marshal is deterministic for Go structs (map keys
+// are sorted alphabetically by encoding/json). Mirrors the hashZoneConfigSpec
+// pattern in internal/controller/zone/zoneconfig_controller.go.
+func hashDataplaneObject(obj client.Object) string {
+	b, err := json.Marshal(obj)
+	if err != nil {
+		// Marshalling plain Kubernetes structs cannot fail at runtime.
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // applyRemoteConfig: compute effective ingress from the shared cache, append
