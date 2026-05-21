@@ -73,7 +73,7 @@ func CanonicalizeTXT(raw string) string {
 					if val > 255 {
 						return raw
 					}
-					b.WriteByte(byte(val))
+					b.WriteByte(byte(val)) //nolint:gosec // G115: bounds-checked above (val <= 255)
 					i += 4
 					continue
 				}

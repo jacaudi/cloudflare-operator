@@ -1129,8 +1129,8 @@ func TestReconcile_PreP4Tunnel_StampPatchFails_StillCascadeGCd(t *testing.T) {
 	// client wrapping differs.
 	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "tnl",
-			Namespace: "ns",
+			Name:       "tnl",
+			Namespace:  "ns",
 			Finalizers: []string{conventions.FinalizerName},
 			Labels: map[string]string{
 				conventions.LabelSourceKind:      "Service",

@@ -129,7 +129,7 @@ func TestMain(m *testing.M) {
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths: append(
-			[]string{filepath.Join("..", "..", "config", "crd", "bases")},
+			[]string{filepath.Join("..", "..", "bin", "crd-staging")},
 			gwCRDPaths...,
 		),
 		ErrorIfCRDPathMissing: true,

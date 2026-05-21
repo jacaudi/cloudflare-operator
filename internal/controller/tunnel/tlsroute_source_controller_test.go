@@ -1004,7 +1004,7 @@ func TestTLSRouteChain_WildcardOnly_NoOverride_BlockedNoEmit(t *testing.T) {
 	// TLSRoute always emits a ClientSideClientRequired warning first (translator),
 	// so drain all available events and assert at least one carries GatewayApexRequired.
 	var allEvents []string
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case ev := <-rec.Events:
