@@ -160,8 +160,9 @@ and the other levers available.
 
 ## Examples
 
-See the [`config/samples/`](config/samples/) directory for example CR
-manifests.
+See the [`examples/`](examples/) directory for ready-to-apply CR manifests
+covering every CRD plus the annotation-driven attachment patterns
+(Gateway, HTTPRoute, Service).
 
 ---
 
