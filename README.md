@@ -185,6 +185,7 @@ covering every CRD plus the annotation-driven attachment patterns
 | [chart/README.md](chart/README.md) | Helm chart value reference + chronological behavior-change notes from every shipped slice |
 | [docs/annotations.md](docs/annotations.md) | Full operator-read annotation reference: every `cloudflare.io/*` annotation, where it's settable, the inheritance precedence chain, truthy-value vocabulary |
 | [docs/credentials.md](docs/credentials.md) | The `(API token, account ID)` model end-to-end: token Secret shape, the `part-of` label requirement, inline vs Secret-backed account ID, rotation semantics, common errors |
+| [docs/gateway-api.md](docs/gateway-api.md) | End-to-end Gateway-API integration: Gateway opt-in, HTTPRoute / TLSRoute attachment, per-Route overrides, cascade-GC, generated-object inventory, common gotchas |
 | [docs/reconciliation.md](docs/reconciliation.md) | Reconcile cadence, `Phase=Error` retry semantics, the `cloudflare.io/reconcile-at` force-reconcile annotation |
 
 ## Acknowledgements
