@@ -197,7 +197,12 @@ func gatewayToTLSRoutesTestMapFunc(mgr ctrl.Manager) handler.MapFunc {
 // per the design lock — no label fallback. The plan literal's label-based
 // fallback example predates the design lock; see the tlsroute reconciler
 // docstring (lines 67–68) for the authoritative contract.
-func createTLSGatewayForRouteTest(t *testing.T, f *tlsRouteEnvFixture) {
+//
+// gatewayApex sets the cloudflare.io/gateway-apex annotation when non-empty,
+// flipping chainContentFor (apex.go) onto its override branch so emitted
+// chain CNAMEs anchor at the supplied apex instead of the tunnel's own CNAME.
+// Pass "" to exercise the default concrete-listener-no-override behavior.
+func createTLSGatewayForRouteTest(t *testing.T, f *tlsRouteEnvFixture, gatewayApex string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -210,15 +215,21 @@ func createTLSGatewayForRouteTest(t *testing.T, f *tlsRouteEnvFixture) {
 	}
 	require.NoError(t, f.c.Create(ctx, gwSvc))
 
+	gwAnnotations := map[string]string{
+		conventions.AnnotationTunnel:         "true",
+		conventions.AnnotationTunnelName:     "edge",
+		conventions.AnnotationGatewayService: f.ns + "/gw-svc",
+	}
+	if gatewayApex != "" {
+		gwAnnotations[conventions.AnnotationGatewayApex] = gatewayApex
+	}
+
 	h := gwv1.Hostname("ext.example.com")
 	gw := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "gw", Namespace: f.ns,
-			Annotations: map[string]string{
-				conventions.AnnotationTunnel:         "true",
-				conventions.AnnotationTunnelName:     "edge",
-				conventions.AnnotationGatewayService: f.ns + "/gw-svc",
-			},
+			Name:        "gw",
+			Namespace:   f.ns,
+			Annotations: gwAnnotations,
 		},
 		Spec: gwv1.GatewaySpec{
 			// GatewayClassName is a required string but envtest's apiserver
@@ -268,7 +279,19 @@ func TestTLSRouteSourceEnvtest_AttachedEmitsTCPIngressAndClientSideClientRequire
 	}
 	require.NoError(t, f.c.Create(ctx, zone))
 
-	createTLSGatewayForRouteTest(t, f)
+	createTLSGatewayForRouteTest(t, f, "")
+
+	// Capture the parent tunnel's CNAME for the chain-content assertion below.
+	// For Gateways without an explicit cloudflare.io/gateway-apex annotation,
+	// chainContentFor (apex.go) returns tn.Status.TunnelCNAME directly — the
+	// route's per-hostname CNAME hops straight to the tunnel, skipping any
+	// implicit "listener hostname is the apex" interpretation. The
+	// gateway-apex override path is covered by a sibling test.
+	var parentTunnel v2alpha1.CloudflareTunnel
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: f.ns + "-edge"}, &parentTunnel))
+	require.NotEmpty(t, parentTunnel.Status.TunnelCNAME,
+		"createTLSGatewayForRouteTest should leave Status.TunnelCNAME populated")
+	expectedChainContent := parentTunnel.Status.TunnelCNAME
 
 	// TLSRoute attached to the tunnel-targeted Gateway in the same namespace.
 	// Cross-namespace ParentRef is exercised by the unit tests; here we keep
@@ -295,7 +318,7 @@ func TestTLSRouteSourceEnvtest_AttachedEmitsTCPIngressAndClientSideClientRequire
 	}
 	require.NoError(t, f.c.Create(ctx, rt))
 
-	// Chain CNAME: tls.example.com → ext.example.com (the Gateway apex).
+	// Chain CNAME: tls.example.com → <tunnel CNAME>.
 	require.Eventually(t, func() bool {
 		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
@@ -303,12 +326,12 @@ func TestTLSRouteSourceEnvtest_AttachedEmitsTCPIngressAndClientSideClientRequire
 		}
 		for _, dr := range list.Items {
 			if dr.Spec.Type == "CNAME" && dr.Spec.Name == "tls.example.com" &&
-				dr.Spec.Content != nil && *dr.Spec.Content == "ext.example.com" {
+				dr.Spec.Content != nil && *dr.Spec.Content == expectedChainContent {
 				return true
 			}
 		}
 		return false
-	}, 15*time.Second, 250*time.Millisecond, "chain DNSRecord tls.example.com → ext.example.com emitted")
+	}, 15*time.Second, 250*time.Millisecond, "chain DNSRecord tls.example.com → %q emitted", expectedChainContent)
 
 	// Parent-status: Accepted=True/TunnelAttached AND PartiallyInvalid=True/
 	// ClientSideClientRequired (the warning is ALWAYS stamped for TLSRoute).
@@ -364,4 +387,63 @@ func TestTLSRouteSourceEnvtest_AttachedEmitsTCPIngressAndClientSideClientRequire
 		return false
 	}, 15*time.Second, 250*time.Millisecond,
 		"tls.example.com appears in cloudflared ingress with tcp:// service URL")
+}
+
+// TestTLSRouteSourceEnvtest_AttachedWithGatewayApexOverride_EmitsChainToApex
+// covers the override branch of chainContentFor for TLSRoute: when the parent
+// Gateway carries a valid cloudflare.io/gateway-apex annotation, the chain
+// CNAME's content is the override hostname verbatim. Sibling to the default-
+// path test above, which covers the no-override / concrete-listener branch.
+func TestTLSRouteSourceEnvtest_AttachedWithGatewayApexOverride_EmitsChainToApex(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	f := setupTLSRouteEnv(t)
+	ctx := context.Background()
+
+	zone := &v2alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
+		Spec: v2alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, zone))
+
+	const apex = "apex.example.com"
+	createTLSGatewayForRouteTest(t, f, apex)
+
+	nsRef := gwv1.Namespace(f.ns)
+	rt := &gwv1a2.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationZoneRef: "example-com",
+			},
+		},
+		Spec: gwv1a2.TLSRouteSpec{
+			Hostnames: []gwv1.Hostname{"tls.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
+			},
+			Rules: []gwv1a2.TLSRouteRule{{}},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, rt))
+
+	// Chain CNAME: tls.example.com → apex.example.com (the override wins).
+	require.Eventually(t, func() bool {
+		var list v2alpha1.CloudflareDNSRecordList
+		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
+			return false
+		}
+		for _, dr := range list.Items {
+			if dr.Spec.Type == "CNAME" && dr.Spec.Name == "tls.example.com" &&
+				dr.Spec.Content != nil && *dr.Spec.Content == apex {
+				return true
+			}
+		}
+		return false
+	}, 15*time.Second, 250*time.Millisecond, "chain DNSRecord tls.example.com → %q emitted", apex)
 }

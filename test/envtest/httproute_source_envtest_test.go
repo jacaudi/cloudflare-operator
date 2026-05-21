@@ -189,7 +189,12 @@ func gatewayToHTTPRoutesTestMapFunc(mgr ctrl.Manager) handler.MapFunc {
 // Gateway in the fixture namespace and waits for the auto-created tunnel CR
 // to populate Status.TunnelCNAME — so HTTPRoutes attached afterwards see a
 // ready tunnel and can emit DNSRecords on the first reconcile pass.
-func createGatewayForRouteTest(t *testing.T, f *httpRouteEnvFixture) {
+//
+// gatewayApex sets the cloudflare.io/gateway-apex annotation when non-empty,
+// flipping chainContentFor (apex.go) onto its override branch so emitted
+// chain CNAMEs anchor at the supplied apex instead of the tunnel's own CNAME.
+// Pass "" to exercise the default concrete-listener-no-override behavior.
+func createGatewayForRouteTest(t *testing.T, f *httpRouteEnvFixture, gatewayApex string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -202,15 +207,21 @@ func createGatewayForRouteTest(t *testing.T, f *httpRouteEnvFixture) {
 	}
 	require.NoError(t, f.c.Create(ctx, gwSvc))
 
+	gwAnnotations := map[string]string{
+		conventions.AnnotationTunnel:         "true",
+		conventions.AnnotationTunnelName:     "edge",
+		conventions.AnnotationGatewayService: f.ns + "/gw-svc",
+	}
+	if gatewayApex != "" {
+		gwAnnotations[conventions.AnnotationGatewayApex] = gatewayApex
+	}
+
 	h := gwv1.Hostname("ext.example.com")
 	gw := &gwv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "gw", Namespace: f.ns,
-			Annotations: map[string]string{
-				conventions.AnnotationTunnel:         "true",
-				conventions.AnnotationTunnelName:     "edge",
-				conventions.AnnotationGatewayService: f.ns + "/gw-svc",
-			},
+			Name:        "gw",
+			Namespace:   f.ns,
+			Annotations: gwAnnotations,
 		},
 		Spec: gwv1.GatewaySpec{
 			GatewayClassName: "any-class",
@@ -254,7 +265,19 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 	}
 	require.NoError(t, f.c.Create(ctx, zone))
 
-	createGatewayForRouteTest(t, f)
+	createGatewayForRouteTest(t, f, "")
+
+	// Capture the parent tunnel's CNAME for the chain-content assertion below.
+	// For Gateways without an explicit cloudflare.io/gateway-apex annotation,
+	// chainContentFor (apex.go) returns tn.Status.TunnelCNAME directly — the
+	// route's per-hostname CNAME hops straight to the tunnel, skipping any
+	// implicit "listener hostname is the apex" interpretation. The
+	// gateway-apex override path is covered by a sibling test.
+	var parentTunnel v2alpha1.CloudflareTunnel
+	require.NoError(t, f.c.Get(ctx, types.NamespacedName{Namespace: f.ns, Name: f.ns + "-edge"}, &parentTunnel))
+	require.NotEmpty(t, parentTunnel.Status.TunnelCNAME,
+		"createGatewayForRouteTest should leave Status.TunnelCNAME populated")
+	expectedChainContent := parentTunnel.Status.TunnelCNAME
 
 	// HTTPRoute attached to the tunnel-targeted Gateway in the same namespace.
 	// (Cross-namespace ParentRef is exercised by the unit-tests; here we keep
@@ -277,7 +300,7 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 	}
 	require.NoError(t, f.c.Create(ctx, rt))
 
-	// Chain CNAME: notes.example.com → ext.example.com (Spec.Content is *string).
+	// Chain CNAME: notes.example.com → <tunnel CNAME> (Spec.Content is *string).
 	require.Eventually(t, func() bool {
 		var list v2alpha1.CloudflareDNSRecordList
 		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
@@ -285,12 +308,12 @@ func TestHTTPRouteSourceEnvtest_AttachedEmitsChainCNAMEAndIngress(t *testing.T) 
 		}
 		for _, dr := range list.Items {
 			if dr.Spec.Type == "CNAME" && dr.Spec.Name == "notes.example.com" &&
-				dr.Spec.Content != nil && *dr.Spec.Content == "ext.example.com" {
+				dr.Spec.Content != nil && *dr.Spec.Content == expectedChainContent {
 				return true
 			}
 		}
 		return false
-	}, 15*time.Second, 250*time.Millisecond, "chain DNSRecord notes.example.com → ext.example.com emitted")
+	}, 15*time.Second, 250*time.Millisecond, "chain DNSRecord notes.example.com → %q emitted", expectedChainContent)
 
 	// Nudge the tunnel CR so the tunnel reconciler re-reads the cache. The
 	// HTTPRoute source writes to the cache but does NOT touch the tunnel CR;
@@ -345,7 +368,7 @@ func TestHTTPRouteSourceEnvtest_FilterRejected_AcceptedFalse(t *testing.T) {
 	}
 	require.NoError(t, f.c.Create(ctx, zone))
 
-	createGatewayForRouteTest(t, f)
+	createGatewayForRouteTest(t, f, "")
 
 	nsRef := gwv1.Namespace(f.ns)
 	rt := &gwv1.HTTPRoute{
@@ -390,4 +413,64 @@ func TestHTTPRouteSourceEnvtest_FilterRejected_AcceptedFalse(t *testing.T) {
 		}
 		return false
 	}, 15*time.Second, 250*time.Millisecond, "parent-status carries Accepted=False/IncompatibleFilters")
+}
+
+// TestHTTPRouteSourceEnvtest_AttachedWithGatewayApexOverride_EmitsChainToApex
+// covers the override branch of chainContentFor: when the parent Gateway
+// carries a valid cloudflare.io/gateway-apex annotation, the chain CNAME's
+// content is the override hostname verbatim (decoupling the route's per-
+// hostname record from the tunnel's own CNAME). Sibling to the default-path
+// test above, which covers the no-override / concrete-listener branch.
+func TestHTTPRouteSourceEnvtest_AttachedWithGatewayApexOverride_EmitsChainToApex(t *testing.T) {
+	if sharedConfig == nil {
+		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")
+	}
+	f := setupHTTPRouteEnv(t)
+	ctx := context.Background()
+
+	zone := &v2alpha1.CloudflareZone{
+		ObjectMeta: metav1.ObjectMeta{Name: "example-com", Namespace: f.ns},
+		Spec: v2alpha1.CloudflareZoneSpec{
+			Name:           "example.com",
+			Type:           "full",
+			DeletionPolicy: "Retain",
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, zone))
+
+	const apex = "apex.example.com"
+	createGatewayForRouteTest(t, f, apex)
+
+	nsRef := gwv1.Namespace(f.ns)
+	rt := &gwv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "r", Namespace: f.ns,
+			Annotations: map[string]string{
+				conventions.AnnotationZoneRef: "example-com",
+			},
+		},
+		Spec: gwv1.HTTPRouteSpec{
+			Hostnames: []gwv1.Hostname{"notes.example.com"},
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
+			},
+			Rules: []gwv1.HTTPRouteRule{{}},
+		},
+	}
+	require.NoError(t, f.c.Create(ctx, rt))
+
+	// Chain CNAME: notes.example.com → apex.example.com (the override wins).
+	require.Eventually(t, func() bool {
+		var list v2alpha1.CloudflareDNSRecordList
+		if err := f.c.List(ctx, &list, client.InNamespace(f.ns)); err != nil {
+			return false
+		}
+		for _, dr := range list.Items {
+			if dr.Spec.Type == "CNAME" && dr.Spec.Name == "notes.example.com" &&
+				dr.Spec.Content != nil && *dr.Spec.Content == apex {
+				return true
+			}
+		}
+		return false
+	}, 15*time.Second, 250*time.Millisecond, "chain DNSRecord notes.example.com → %q emitted", apex)
 }
