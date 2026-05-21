@@ -208,23 +208,23 @@ func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// the new status against the snapshot taken before this pass.
 	r.emitGroupTransitionEvents(&cfg, prior, results)
 
-	// Feature F: ack a completed force-reconcile before the status write so
-	// the same write carries the token.  Only assigned on a successful path —
-	// any earlier error return leaves the ack empty, keeping the trigger live.
-	if forceReconcile {
-		cfg.Status.LastReconcileToken = cfg.Annotations[conventions.AnnotationReconcileAt]
-	}
-
-	candidate := cfg.Status.DeepCopy()
-	candidate.LastSyncedAt = originalStatus.LastSyncedAt
-	candidate.ObservedGeneration = originalStatus.ObservedGeneration
-	if cfg.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
-		now := metav1.Now()
-		cfg.Status.LastSyncedAt = &now
-		cfg.Status.ObservedGeneration = cfg.Generation
-		if err := r.Status().Update(ctx, &cfg); err != nil {
-			return ctrl.Result{}, err
-		}
+	_, uerr := reconcile.UpdateStatusIfChanged(
+		ctx,
+		r.Client,
+		&cfg,
+		&cfg.Status,
+		originalStatus,
+		forceReconcile,
+		cfg.Annotations[conventions.AnnotationReconcileAt],
+		func() bool {
+			candidate := cfg.Status.DeepCopy()
+			candidate.LastSyncedAt = originalStatus.LastSyncedAt
+			candidate.ObservedGeneration = originalStatus.ObservedGeneration
+			return !equality.Semantic.DeepEqual(originalStatus, candidate)
+		},
+	)
+	if uerr != nil {
+		return ctrl.Result{}, uerr
 	}
 
 	return ctrl.Result{RequeueAfter: interval}, nil
