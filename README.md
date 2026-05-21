@@ -183,6 +183,7 @@ covering every CRD plus the annotation-driven attachment patterns
 | Page | Covers |
 |------|--------|
 | [chart/README.md](chart/README.md) | Helm chart value reference + chronological behavior-change notes from every shipped slice |
+| [docs/credentials.md](docs/credentials.md) | The `(API token, account ID)` model end-to-end: token Secret shape, the `part-of` label requirement, inline vs Secret-backed account ID, rotation semantics, common errors |
 | [docs/reconciliation.md](docs/reconciliation.md) | Reconcile cadence, `Phase=Error` retry semantics, the `cloudflare.io/reconcile-at` force-reconcile annotation |
 
 ## Acknowledgements
