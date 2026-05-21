@@ -32,11 +32,14 @@ import (
 	"go.uber.org/zap/zapcore"
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	rest "k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -228,20 +231,41 @@ func main() {
 	}
 }
 
+// buildManagerOptions constructs the ctrl.Options for this mode, including
+// the label-scoped Secret cache (simplify C). Extracted so it can be unit-
+// tested without a cluster.
+//
+// Secret cache scoping: the operator caches only Secrets carrying
+// "app.kubernetes.io/part-of: cloudflare-operator". Operator-managed Secrets
+// (e.g. cloudflared connector token Secrets) already carry this label.
+// User-credential Secrets MUST also carry this label — see chart/README.md.
+func buildManagerOptions(opts Options, scheme *runtime.Scheme) ctrl.Options {
+	leaderID := "cloudflare-operator-" + string(opts.Mode)
+	return ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
+		HealthProbeBindAddress: opts.HealthAddress,
+		LeaderElection:         opts.LeaderElection,
+		LeaderElectionID:       leaderID,
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {
+					Label: labels.SelectorFromSet(labels.Set{
+						"app.kubernetes.io/part-of": "cloudflare-operator",
+					}),
+				},
+			},
+		},
+	}
+}
+
 // startManager builds a controller-runtime manager from cfg, runs register
 // to wire the mode-specific reconcilers, adds the health/ready probes, and
 // blocks on Start. Returns the first error (wrapped) instead of os.Exit so
 // callers control fatal reporting. cfg is a parameter (not GetConfigOrDie
 // internally) so the register/wiring path is unit-testable without a cluster.
 func startManager(opts Options, scheme *runtime.Scheme, cfg *rest.Config, register func(ctrl.Manager) error) error {
-	leaderID := "cloudflare-operator-" + string(opts.Mode)
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: opts.MetricsAddress},
-		HealthProbeBindAddress: opts.HealthAddress,
-		LeaderElection:         opts.LeaderElection,
-		LeaderElectionID:       leaderID,
-	})
+	mgr, err := ctrl.NewManager(cfg, buildManagerOptions(opts, scheme))
 	if err != nil {
 		return fmt.Errorf("create manager: %w", err)
 	}

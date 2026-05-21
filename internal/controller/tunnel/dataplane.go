@@ -190,12 +190,16 @@ func TokenSecretName(tunnelName string) string {
 // The Secret's Data["token"] is the connector-join token returned by
 // GET /cfd_tunnel/{id}/token — opaque, never logged. The tunnelID is stamped
 // as an annotation so ensureTokenSecret can detect rotation.
+//
+// The "app.kubernetes.io/part-of: cloudflare-operator" label is required so
+// the manager's label-scoped Secret cache (simplify C) can see this Secret.
 func BuildTokenSecret(tunnelName, namespace, token, tunnelID string) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        TokenSecretName(tunnelName),
 			Namespace:   namespace,
+			Labels:      map[string]string{"app.kubernetes.io/part-of": "cloudflare-operator"},
 			Annotations: map[string]string{annotationTokenTunnelID: tunnelID},
 		},
 		Type: corev1.SecretTypeOpaque,

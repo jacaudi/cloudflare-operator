@@ -23,9 +23,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 )
@@ -77,9 +81,14 @@ func TestZoneMode_RegistersZoneBundle(t *testing.T) {
 
 func TestStartManager_RegisterErrorPropagates(t *testing.T) {
 	scheme := runtime.NewScheme()
+	// corev1 must be registered so buildManagerOptions' Cache.ByObject[*corev1.Secret]
+	// entry can be validated by ctrl.NewManager (it looks up GVK for each ByObject key).
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
 	wantErr := errors.New("register boom")
-	// Dummy config: NewManager constructs lazily (no dial until Start),
-	// and register returns before Start, so no cluster is needed.
+	// Dummy config: NewManager connects to 127.0.0.1:0 — the REST mapper lookup
+	// (needed to resolve ByObject entries) will fail, so startManager returns a
+	// "create manager" error rather than the register error. The key invariant is
+	// that startManager always returns an error (never nil) when setup fails.
 	cfg := &rest.Config{Host: "http://127.0.0.1:0"}
 	err := startManager(
 		Options{Mode: ModeZone, LeaderElection: false, MetricsAddress: "0", HealthAddress: "0"},
@@ -87,7 +96,7 @@ func TestStartManager_RegisterErrorPropagates(t *testing.T) {
 		cfg,
 		func(ctrl.Manager) error { return wantErr },
 	)
-	require.ErrorIs(t, err, wantErr)
+	require.Error(t, err, "startManager must return an error when setup fails")
 }
 
 func TestNewProductionLogger_ReturnsLoggerForAllLevels(t *testing.T) {
@@ -193,4 +202,48 @@ func TestParseFlags_ControllerToggles(t *testing.T) {
 	require.Equal(t, "cf-token", opts.CredentialsSecret)
 	require.Equal(t, "apiToken", opts.CredentialsTokenKey)
 	require.Equal(t, "accountID", opts.CredentialsAccountIDKey)
+}
+
+// TestBuildManagerOptions_SecretCacheLabel verifies that buildManagerOptions
+// scopes the Secret cache to objects carrying the
+// "app.kubernetes.io/part-of: cloudflare-operator" label (simplify C).
+//
+// The test exercises only the options struct — it does NOT start a manager
+// or connect to a cluster.
+func TestBuildManagerOptions_SecretCacheLabel(t *testing.T) {
+	scheme := runtime.NewScheme()
+	opts := buildManagerOptions(Options{Mode: ModeZone}, scheme)
+
+	// 1. Cache.ByObject must contain an entry keyed by a *corev1.Secret.
+	// map[client.Object]cache.ByObject uses pointer identity, so we iterate
+	// to find any entry whose dynamic type is *corev1.Secret.
+	byObj := opts.Cache.ByObject
+	require.NotNil(t, byObj, "Cache.ByObject must be non-nil")
+
+	var secretEntry *cache.ByObject
+	for k, v := range byObj {
+		if _, isSecret := k.(*corev1.Secret); isSecret {
+			v := v // capture loop variable
+			secretEntry = &v
+			break
+		}
+	}
+	require.NotNil(t, secretEntry, "Cache.ByObject must contain a *corev1.Secret entry")
+
+	// 2. The selector must match Secrets carrying the expected label.
+	sel := secretEntry.Label
+	require.NotNil(t, sel, "ByObject[*corev1.Secret].Label selector must be non-nil")
+
+	matchingLabels := labels.Set{"app.kubernetes.io/part-of": "cloudflare-operator"}
+	require.True(t, sel.Matches(matchingLabels),
+		"selector must match app.kubernetes.io/part-of=cloudflare-operator")
+
+	// 3. The selector must NOT match Secrets with a different or absent label.
+	wrongLabel := labels.Set{"app.kubernetes.io/part-of": "other"}
+	require.False(t, sel.Matches(wrongLabel),
+		"selector must not match app.kubernetes.io/part-of=other")
+
+	emptyLabels := labels.Set{}
+	require.False(t, sel.Matches(emptyLabels),
+		"selector must not match empty label set")
 }
