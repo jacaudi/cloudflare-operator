@@ -146,7 +146,7 @@ func TestGCLegacyCompanion_DeletesProvablyOwnOnly(t *testing.T) {
 	})
 	require.NoError(t, cerr)
 
-	gcLegacyCompanion(context.Background(), m.DNS, zoneID, zoneDomain, host,
+	_, _ = gcLegacyCompanion(context.Background(), m.DNS, zoneID, zoneDomain, host,
 		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
 
 	got, _ := m.DNS.ListRecordsByNameAndType(context.Background(), zoneID, oldName, "TXT")
@@ -168,7 +168,7 @@ func TestGCLegacyCompanion_LeavesForeignAndUndecodable(t *testing.T) {
 	})
 	require.NoError(t, cerr)
 
-	gcLegacyCompanion(context.Background(), m.DNS, zoneID, zoneDomain, host,
+	_, _ = gcLegacyCompanion(context.Background(), m.DNS, zoneID, zoneDomain, host,
 		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
 
 	got, _ := m.DNS.ListRecordsByNameAndType(context.Background(), zoneID, oldName, "TXT")
@@ -179,7 +179,7 @@ func TestGCLegacyCompanion_NoopWhenZoneDomainEmpty(t *testing.T) {
 	m := mock.New()
 	enc := cloudflare.NewPlaintextCodec()
 	// zoneDomain "" models the literal-Spec.ZoneID path: must skip silently.
-	gcLegacyCompanion(context.Background(), m.DNS, "z1", "", "external.jacaudi.dev",
+	_, _ = gcLegacyCompanion(context.Background(), m.DNS, "z1", "", "external.jacaudi.dev",
 		"network", "rec1", cloudflare.NewAutoDetectingCodec(enc))
 	require.Equal(t, 0, m.Calls("DNS.DeleteRecord"), "must not call DeleteRecord with empty zone domain")
 }
