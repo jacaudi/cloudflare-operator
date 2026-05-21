@@ -1,10 +1,8 @@
-docs/design/
-docs/plans/
-docs/prompt/
-docs/follow/
-docs/issues/
-docs/review/
-docs/summary/
+# Local-only working artifacts (design / planning / scratch / etc.).
+# Committable in-depth docs land as flat files at docs/<discrete-domain>.md.
+docs/appendix/
+
+# Worktrees + agent-managed dirs.
 .claude/worktrees/
 .worktrees/
 .private-journal/
