@@ -339,6 +339,11 @@ func (r *TLSRouteSourceReconciler) writeParentStatus(
 	}
 	live.Status.Parents[idx].ControllerName = tunnelControllerName
 
+	// Snapshot existing conditions for the conditionsEquivalent gate below.
+	// SetCondition modifies the slice elements in-place, so we capture before
+	// any mutation to preserve the as-fetched state for comparison.
+	existing := append([]metav1.Condition(nil), live.Status.Parents[idx].Conditions...)
+
 	// Accepted: True/TunnelAttached when contribs landed; False/
 	// NoListenerHostname when not (the only way contribs is empty here is no
 	// resolved hostname — the Route has no Spec.Hostnames and the Gateway's
@@ -373,6 +378,16 @@ func (r *TLSRouteSourceReconciler) writeParentStatus(
 		conds,
 		conventions.ConditionTypePartiallyInvalid, piStatus, piReason, piMsg,
 	)
+
+	// Gate: skip the Status.Update when computed conditions are semantically
+	// identical to the live conditions captured after the re-Get (simplify F).
+	// This avoids a redundant apiserver write on every reconcile when nothing
+	// has changed. The re-Get above already ran (out-of-band conditions from
+	// other controllers are captured); the gate only short-circuits OUR entry.
+	if conditionsEquivalent(existing, conds) {
+		return nil
+	}
+
 	live.Status.Parents[idx].Conditions = conds
 
 	return r.Status().Update(ctx, &live)

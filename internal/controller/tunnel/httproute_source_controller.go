@@ -487,6 +487,11 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 	}
 	live.Status.Parents[idx].ControllerName = tunnelControllerName
 
+	// Snapshot existing conditions for the conditionsEquivalent gate below.
+	// SetCondition modifies the slice elements in-place, so we capture before
+	// any mutation to preserve the as-fetched state for comparison.
+	existing := append([]metav1.Condition(nil), live.Status.Parents[idx].Conditions...)
+
 	// Decide Accepted reason / status. Default Accepted=True / TunnelAttached.
 	// Translator warnings override:
 	//   - IncompatibleFilters → Accepted=False, Reason=IncompatibleFilters
@@ -544,6 +549,16 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 		conds,
 		conventions.ConditionTypePartiallyInvalid, piStatus, piReason, partialMsg,
 	)
+
+	// Gate: skip the Status.Update when computed conditions are semantically
+	// identical to the live conditions captured after the re-Get (simplify F).
+	// This avoids a redundant apiserver write on every reconcile when nothing
+	// has changed. The re-Get above already ran (out-of-band conditions from
+	// other controllers are captured); the gate only short-circuits OUR entry.
+	if conditionsEquivalent(existing, conds) {
+		return nil
+	}
+
 	live.Status.Parents[idx].Conditions = conds
 
 	return r.Status().Update(ctx, &live)
