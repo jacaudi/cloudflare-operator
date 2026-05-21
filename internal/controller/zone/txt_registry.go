@@ -371,17 +371,26 @@ func legacyAffixName(prefix, name string) string {
 // name match — design §4.4). The caller is responsible for ensuring the
 // correctly-named replacement is already present before invoking this.
 //
+// Returns (legacyFound, err). legacyFound==true indicates that at least one
+// legacy companion existed for this record (ownership-verified against our
+// kind/namespace/name). The caller uses this to decide whether to stamp the
+// per-CR ack (Status.LegacyCompanionGCDone). legacyFound is set as soon as
+// the helper finds an ownership-verified hit, BEFORE attempting the delete;
+// so both the "deleted successfully" and "delete failed" paths return
+// legacyFound==true. Records that are present but do not pass ownership
+// verification (foreign/undecodable) leave legacyFound==false — they are not
+// ours to GC. If legacyFound==true AND err!=nil, the delete failed; the
+// caller MUST NOT stamp the ack so the next reconcile retries.
+//
 // zoneDomain "" models the literal-Spec.ZoneID path (no CloudflareZone CR
 // available to resolve the domain) — in that case we cannot construct the
 // zone-appended FQDN that Cloudflare stored under, so we skip silently. This
 // is the documented "literal-Spec.ZoneID legacy orphan stays" trade-off.
 //
-// Never deletes foreign / undecodable records; never returns an error (GC is
-// best-effort and must not block the reconcile). DeleteRecord failures are
-// swallowed (the next reconcile retries; an undeleted orphan is harmless).
-func gcLegacyCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID, zoneDomain, recordName, ourNS, ourName string, readCodec cloudflare.Codec) {
+// Never deletes foreign / undecodable records.
+func gcLegacyCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID, zoneDomain, recordName, ourNS, ourName string, readCodec cloudflare.Codec) (legacyFound bool, err error) {
 	if zoneDomain == "" {
-		return
+		return false, nil
 	}
 	newName := cloudflare.AffixName(txtAffix, recordName)
 	legacy := legacyAffixName(txtAffix, recordName)
@@ -394,14 +403,20 @@ func gcLegacyCompanion(ctx context.Context, dc cloudflare.DNSClient, zoneID, zon
 		if cand == newName {
 			continue // never touch the current-scheme companion
 		}
-		recs, err := dc.ListRecordsByNameAndType(ctx, zoneID, cand, "TXT")
-		if err != nil {
-			continue // best-effort
+		recs, lerr := dc.ListRecordsByNameAndType(ctx, zoneID, cand, "TXT")
+		if lerr != nil {
+			continue // best-effort on List: skip this candidate
 		}
 		for _, r := range recs {
 			if verifyTXTOwnership(r.Content, readCodec, "CloudflareDNSRecord", ourNS, ourName) == TxtOwnershipMatch {
-				_ = dc.DeleteRecord(ctx, zoneID, r.ID) // best-effort
+				// Set legacyFound BEFORE attempting delete so that both
+				// success and failure paths return legacyFound==true.
+				legacyFound = true
+				if derr := dc.DeleteRecord(ctx, zoneID, r.ID); derr != nil {
+					return true, derr
+				}
 			}
 		}
 	}
+	return legacyFound, nil
 }

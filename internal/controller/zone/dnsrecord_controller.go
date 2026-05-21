@@ -355,7 +355,7 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	case cout.ownershipOK:
 		rec.Status.TxtRecordID = cout.txtRecordID
 		rec.Status.TxtAffix = txtAffix
-		gcLegacyCompanion(ctx, dc, zoneID, zoneDomain, rec.Spec.Name, rec.Namespace, rec.Name, readCodec)
+		_, _ = gcLegacyCompanion(ctx, dc, zoneID, zoneDomain, rec.Spec.Name, rec.Namespace, rec.Name, readCodec) // returns wired in Task 3
 	default:
 		if r.Recorder != nil {
 			r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
