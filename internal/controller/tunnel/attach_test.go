@@ -373,7 +373,7 @@ func TestTransferOwnership_PicksLexSmallestLive(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svcA, svcB, svcC, tn).Build()
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	require.True(t, transferred)
 	var got v2alpha1.CloudflareTunnel
@@ -405,7 +405,7 @@ func TestTransferOwnership_SkipsCandidatesWithDeletionTimestamp(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svcA, svcB, tn).Build()
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	require.True(t, transferred)
 	var got v2alpha1.CloudflareTunnel
@@ -424,7 +424,7 @@ func TestTransferOwnership_AllCandidatesNotFound(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).Build()
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err, "all-NotFound is not an error; next reconcile retries with stable state")
 	require.False(t, transferred)
 	var got v2alpha1.CloudflareTunnel
@@ -442,7 +442,7 @@ func TestTransferOwnership_EmitsOwnerTransferredEvent(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
 	rec := record.NewFakeRecorder(10)
-	_, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	_, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	select {
 	case ev := <-rec.Events:
@@ -473,7 +473,7 @@ func TestTransferOwnership_ConflictReturnsFalseNil(t *testing.T) {
 		},
 	})
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err, "Conflict is the optimistic-lock contract, not an error")
 	require.False(t, transferred)
 }
@@ -495,7 +495,7 @@ func TestTransferOwnership_GenericPatchErrorPropagates(t *testing.T) {
 		},
 	})
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "patch ownerReferences")
 	require.False(t, transferred)
@@ -511,7 +511,7 @@ func TestTransferOwnership_NilRecorderNoPanic(t *testing.T) {
 			makeAttachedSource("Service", "ns", "a-svc")}},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, nil)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, nil)
 	require.NoError(t, err)
 	require.True(t, transferred)
 }
@@ -527,7 +527,7 @@ func TestTransferOwnership_UnknownKindErrors(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).Build()
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown source kind")
 	require.False(t, transferred)
@@ -549,7 +549,7 @@ func TestTransferOwnership_NotFoundSkipsToNextLive(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svcB, tn).Build()
 	rec := record.NewFakeRecorder(10)
-	transferred, err := TransferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
 	require.NoError(t, err)
 	require.True(t, transferred)
 	var got v2alpha1.CloudflareTunnel

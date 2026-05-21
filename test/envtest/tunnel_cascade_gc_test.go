@@ -106,7 +106,7 @@ func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v2alpha1.Cloudf
 // (direct-create) CloudflareTunnel CR must NEVER acquire a controller
 // OwnerReference, even while an annotated Service actively attaches to it.
 //
-// Why this matters: needsOwnerTransfer drives TransferOwnershipIfNeeded,
+// Why this matters: needsOwnerTransfer drives transferOwnershipIfNeeded,
 // which stamps a source as the tunnel CR's Controller+BlockOwnerDeletion
 // owner. If that fired for a direct-create CR, deleting the Service would
 // let Kubernetes GC cascade-delete the user's tunnel — exactly the §7
@@ -135,7 +135,7 @@ func bumpRetriggerTick(ctx context.Context, c client.Client, tn *v2alpha1.Cloudf
 // reconciler promotes the attaching Service to controller-owner within a
 // few reconciles → OwnerReferences becomes non-empty → require.Never trips.
 // With the isAutoCreated gate intact, needsOwnerTransfer is false for the
-// unannotated direct-create CR, TransferOwnershipIfNeeded is never called,
+// unannotated direct-create CR, transferOwnershipIfNeeded is never called,
 // and OwnerReferences stays empty for the full window.
 func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) {
 	if sharedConfig == nil {
@@ -277,9 +277,9 @@ func TestEnvtest_CascadeGC_DirectCreateNeverAcquiresControllerRef(t *testing.T) 
 //     so the test explicitly strips the deleted owner's ownerReference to
 //     emulate real-cluster GC. That strip is a Tunnel CR write, which itself
 //     retriggers the Tunnel reconciler (it Watches For(&CloudflareTunnel{})):
-//     needsOwnerTransfer then fires and TransferOwnershipIfNeeded promotes the
+//     needsOwnerTransfer then fires and transferOwnershipIfNeeded promotes the
 //     lex-smallest LIVE remaining source (the surviving Service; the deleted
-//     one is skipped as NotFound by TransferOwnershipIfNeeded's live-Get).
+//     one is skipped as NotFound by transferOwnershipIfNeeded's live-Get).
 //
 // setupServiceEnv is reused unmodified beyond its shared short-grace hook
 // (the owner-transfer path does not depend on the grace window — that's the
@@ -371,7 +371,7 @@ func TestEnvtest_CascadeGC_OwnerTransfer(t *testing.T) {
 	// Emulate real-cluster GC (absent in envtest): strip the deleted owner's
 	// dangling ownerReference from the tunnel CR. This both satisfies
 	// needsOwnerTransfer (len(OwnerReferences)==0) and — being a Tunnel CR
-	// write — retriggers the Tunnel reconciler. TransferOwnershipIfNeeded then
+	// write — retriggers the Tunnel reconciler. transferOwnershipIfNeeded then
 	// promotes the surviving Service (the deleted one is skipped: its live Get
 	// returns NotFound). Conflict-tolerant: a stale ResourceVersion just means
 	// the next poll iteration retries with a fresh Get.

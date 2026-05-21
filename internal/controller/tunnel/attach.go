@@ -217,7 +217,7 @@ func isOrphaned(tn *v2alpha1.CloudflareTunnel) bool {
 }
 
 // transferOwnershipMaxAttempts bounds how many AttachedSources candidates
-// TransferOwnershipIfNeeded will probe in a single call. The list is
+// transferOwnershipIfNeeded will probe in a single call. The list is
 // lex-sorted first, so the cap deterministically prefers the lex-smallest
 // candidates. A bound exists so a pathological AttachedSources list (many
 // stale entries that are all NotFound/terminating) cannot turn one reconcile
@@ -246,7 +246,7 @@ func getSourceObject(src v2alpha1.AttachedSource) (client.Object, error) {
 	}
 }
 
-// TransferOwnershipIfNeeded promotes the lex-smallest LIVE remaining source in
+// transferOwnershipIfNeeded promotes the lex-smallest LIVE remaining source in
 // tn.Status.AttachedSources to be the new controller-owner of tn, via a
 // MergeFromWithOptimisticLock Patch that carries tn.ResourceVersion so the
 // apiserver rejects a stale Patch with 409 Conflict. See design §4.2.
@@ -278,7 +278,7 @@ func getSourceObject(src v2alpha1.AttachedSource) (client.Object, error) {
 // guarantees zero pre-existing owner refs before this is ever called, so the
 // single-owner replace cannot collide with SetControllerReference's
 // "different controller already set" guard.
-func TransferOwnershipIfNeeded(
+func transferOwnershipIfNeeded(
 	ctx context.Context,
 	c client.Client,
 	scheme *runtime.Scheme,

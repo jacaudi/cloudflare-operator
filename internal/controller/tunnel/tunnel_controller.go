@@ -173,7 +173,7 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// work sees a valid OwnerReference. Successful transfer requeues
 	// immediately for a fresh, ownership-consistent view.
 	if needsOwnerTransfer(&tn) {
-		transferred, err := TransferOwnershipIfNeeded(ctx, r.Client, r.Scheme, &tn, r.Recorder)
+		transferred, err := transferOwnershipIfNeeded(ctx, r.Client, r.Scheme, &tn, r.Recorder)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
