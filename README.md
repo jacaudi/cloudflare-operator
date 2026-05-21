@@ -156,6 +156,15 @@ examples covering each CRD's full surface.
 
 ---
 
+## Status
+
+Active development on the `refactor/total` branch. The v2alpha1 API
+shape is the stable target — CRD names + field shapes are settled —
+but the operator has not yet cut a stable tagged release. Tagged
+releases will follow once `refactor/total` lands on `main`. Until
+then, pin the OCI chart to a specific `v0.0.0-alpha.refactor-total.<sha>`
+build for reproducibility.
+
 ## Documentation
 
 | Page | Covers |
