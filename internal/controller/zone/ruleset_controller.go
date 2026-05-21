@@ -204,23 +204,23 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		conventions.ReasonReady, "ruleset synced")
 	rs.Status.Phase = reconcile.DerivePhase(metav1.ConditionTrue, conventions.ReasonReady)
 
-	// Feature F: ack a completed force-reconcile before the status write so
-	// the same write carries the token.  Only assigned on a successful path —
-	// any earlier error return leaves the ack empty, keeping the trigger live.
-	if forceReconcile {
-		rs.Status.LastReconcileToken = rs.Annotations[conventions.AnnotationReconcileAt]
-	}
-
-	candidate := rs.Status.DeepCopy()
-	candidate.LastSyncedAt = originalStatus.LastSyncedAt
-	candidate.ObservedGeneration = originalStatus.ObservedGeneration
-	if rs.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
-		now := metav1.Now()
-		rs.Status.LastSyncedAt = &now
-		rs.Status.ObservedGeneration = rs.Generation
-		if err := r.Status().Update(ctx, &rs); err != nil {
-			return ctrl.Result{}, err
-		}
+	_, uerr := reconcile.UpdateStatusIfChanged(
+		ctx,
+		r.Client,
+		&rs,
+		&rs.Status,
+		originalStatus,
+		forceReconcile,
+		rs.Annotations[conventions.AnnotationReconcileAt],
+		func() bool {
+			candidate := rs.Status.DeepCopy()
+			candidate.LastSyncedAt = originalStatus.LastSyncedAt
+			candidate.ObservedGeneration = originalStatus.ObservedGeneration
+			return !equality.Semantic.DeepEqual(originalStatus, candidate)
+		},
+	)
+	if uerr != nil {
+		return ctrl.Result{}, uerr
 	}
 
 	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(rs.Spec.Interval, defaultRulesetInterval)}, nil
