@@ -37,7 +37,7 @@ func swapCache(t *testing.T, cap int, ttl time.Duration) {
 func TestNewClient_CacheHit_ReusesSamePointer(t *testing.T) {
 	swapCache(t, 32, 30*time.Minute)
 
-	creds := Credentials{Token: "tok-cache-hit", AccountID: "acct-cache-hit"}
+	creds := Credentials{Token: "tok-cache-hit", AccountID: "acct-cache-hit"} //nolint:gosec // G101: test fixture, not a real credential
 
 	c1, err := NewClient(creds)
 	require.NoError(t, err)
