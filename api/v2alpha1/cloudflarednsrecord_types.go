@@ -233,6 +233,15 @@ type CloudflareDNSRecordStatus struct {
 	// this status field — so admin force-triggers are not auto-cleared.
 	// +optional
 	LastReconcileToken string `json:"lastReconcileToken,omitempty"`
+	// LegacyCompanionGCDone marks a record as having completed the one-time
+	// legacy-name companion GC sweep. When true, gcLegacyCompanion is
+	// skipped on subsequent reconciles. Stamped after a successful pass
+	// that either (a) found no legacy candidates, or (b) successfully
+	// deleted a legacy companion. Pre-S1 CRs reconcile once, set the
+	// field, and never pay the GC cost again. Purely additive: existing
+	// CRs without the field behave like field=false on first reconcile.
+	// +optional
+	LegacyCompanionGCDone bool `json:"legacyCompanionGCDone,omitempty"`
 }
 
 // +kubebuilder:object:root=true
