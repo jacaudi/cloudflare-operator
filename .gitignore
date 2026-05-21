@@ -9,6 +9,11 @@ docs/summary/
 .worktrees/
 .private-journal/
 
+# Generated kubebuilder/controller-gen scaffold (intermediate artifacts).
+# `make generate` recreates config/crd/bases/ locally; the published CRDs
+# live at chart/templates/crd-*.yaml.
+config/
+
 bin/
 cover.out
 *.test

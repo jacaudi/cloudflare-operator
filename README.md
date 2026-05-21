@@ -48,11 +48,23 @@ The chart ships the operator and the v2alpha1 CRDs. See
 ### Local development
 
 ```bash
-# Install CRDs into the current kube context.
-make install
+# Regenerate CRD bundles from the Go types under api/v2alpha1/.
+# Outputs to config/crd/bases/ (gitignored) and copies into chart/templates/.
+make generate
 
-# Deploy the operator into the current context.
-make deploy
+# Apply the regenerated CRDs into the current kube context.
+kubectl apply -f config/crd/bases/
+
+# Run the operator locally against the current kube context.
+go run ./cmd/manager
+```
+
+To install the chart from a local checkout instead of OCI:
+
+```bash
+helm install cloudflare-operator ./chart \
+  --namespace cloudflare-system \
+  --create-namespace
 ```
 
 ## Quick Start
