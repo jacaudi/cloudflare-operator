@@ -69,7 +69,7 @@ import (
 //
 // Stale-key sweep: uses the shared cacheTracker (attach.go) — on annotation
 // change or Route delete the prior tunnel-key's cache entry is cleared. The
-// tracker is initialized once via ensureTracker, called at the top of every
+// tracker is initialized once via sourceBase.ensure, called at the top of every
 // Reconcile and guarded by sync.Once so concurrent reconciles on the same
 // instance (MaxConcurrentReconciles > 1) cannot race to allocate competing
 // trackers and lose prior-attachment state.
@@ -80,24 +80,8 @@ type TLSRouteSourceReconciler struct {
 	Recorder record.EventRecorder
 	recorder *conventions.SafeRecorder
 
-	tracker      *cacheTracker
-	trackerOnce  sync.Once
+	sourceBase
 	recorderOnce sync.Once
-	dedupe       *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
-}
-
-// ensureTracker initializes r.tracker exactly once. Safe against concurrent
-// callers (controller-runtime worker pool with MaxConcurrentReconciles > 1).
-// Idempotent: tests that pre-seed r.tracker keep their fixture untouched.
-func (r *TLSRouteSourceReconciler) ensureTracker() {
-	r.trackerOnce.Do(func() {
-		if r.tracker == nil {
-			r.tracker = newCacheTracker()
-		}
-		if r.dedupe == nil {
-			r.dedupe = newEventDedupe(0, 0)
-		}
-	})
 }
 
 // +kubebuilder:rbac:groups="gateway.networking.k8s.io",resources=tlsroutes,verbs=get;list;watch
@@ -121,7 +105,7 @@ func (r *TLSRouteSourceReconciler) ensureRecorder() {
 func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tlsroute", req.NamespacedName)
 	r.ensureRecorder()
-	r.ensureTracker()
+	r.ensure()
 	srcKey := tunnelsynth.SourceKey{Kind: "TLSRoute", Namespace: req.Namespace, Name: req.Name}
 
 	var rt gwv1a2.TLSRoute

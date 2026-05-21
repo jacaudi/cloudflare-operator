@@ -58,7 +58,7 @@ import (
 // changes between reconciles, the cache entry under the prior tunnel-key
 // would otherwise be orphaned. The shared cacheTracker (attach.go) tracks
 // the last attached tunnel-key per source so we can clear the prior key
-// whenever the new key differs. Initialized once via ensureTracker, called
+// whenever the new key differs. Initialized once via sourceBase.ensure, called
 // at the top of every Reconcile and guarded by sync.Once so concurrent
 // reconciles on the same instance (MaxConcurrentReconciles > 1) cannot
 // race to allocate competing trackers — the first allocator wins and the
@@ -71,24 +71,8 @@ type ServiceSourceReconciler struct {
 	recorder         *conventions.SafeRecorder
 	DefaultConnector v2alpha1.ConnectorSpec
 
-	tracker      *cacheTracker
-	trackerOnce  sync.Once
+	sourceBase
 	recorderOnce sync.Once
-	dedupe       *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
-}
-
-// ensureTracker initializes r.tracker exactly once. Safe against concurrent
-// callers (controller-runtime worker pool with MaxConcurrentReconciles > 1).
-// Idempotent: tests that pre-seed r.tracker keep their fixture untouched.
-func (r *ServiceSourceReconciler) ensureTracker() {
-	r.trackerOnce.Do(func() {
-		if r.tracker == nil {
-			r.tracker = newCacheTracker()
-		}
-		if r.dedupe == nil {
-			r.dedupe = newEventDedupe(0, 0)
-		}
-	})
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
@@ -109,7 +93,7 @@ func (r *ServiceSourceReconciler) ensureRecorder() {
 func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("service", req.NamespacedName)
 	r.ensureRecorder()
-	r.ensureTracker()
+	r.ensure()
 
 	var svc corev1.Service
 	if err := r.Get(ctx, req.NamespacedName, &svc); err != nil {
