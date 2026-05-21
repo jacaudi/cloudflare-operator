@@ -642,6 +642,39 @@ changed. Hash-gating uses two new optional Status fields:
 No user-visible change. Matches the spec-hash short-circuit pattern
 that `CloudflareZoneConfig` already uses.
 
+### Internal refactor (simplify slice 3 / D, I, J, K, L, M, 2026-05)
+
+No behavior change visible to operators. Internal refactors:
+
+- **D — unified status-write epilogue.** All 5 reconcilers (Zone, ZoneConfig,
+  Ruleset, DNSRecord, Tunnel) now share a single generic
+  `reconcile.UpdateStatusIfChanged[T]` helper for their terminal status
+  write, eliminating a previously-detected drift between the zone
+  controller's epilogue and the other four. The zone controller's
+  in-memory rollback semantic on the no-write branch is now the universal
+  invariant.
+- **I — `sourceBase` embed.** The four source controllers (Service,
+  Gateway, HTTPRoute, TLSRoute) embed a shared `sourceBase` carrying
+  the cache-tracker + dedupe + `sync.Once` initializer; per-file
+  `ensureTracker()` methods are gone.
+- **J — `HaltWith` helper.** Four halt-shaped short-circuit branches in
+  `dnsrecord_controller.Reconcile` collapse to one-line calls against
+  `reconcile.HaltWith`, a sibling to the existing `HaltDependency` /
+  `HaltCredentialsUnavailable` helpers.
+- **K — `handleDeriveTunnelNameErr` helper.** The duplicated
+  `DeriveTunnelName` error-handling block in the Service + Gateway
+  source controllers lifts into a single helper in `attach.go`.
+- **L — `SafeRecorder` wrapping.** A nil-safe `*conventions.SafeRecorder`
+  wrapper replaces the 21 `if r.Recorder != nil { … }` guards across
+  the 9 controllers; each reconciler lazy-initializes the wrapper at
+  the top of `Reconcile` via `sync.Once`.
+- **M — intra-package helper unexported.** `transferOwnershipIfNeeded`
+  (no out-of-package callers) is now lowercase; `DeriveTunnelName` and
+  `EnsureTunnelCR` remain exported because the envtest exercises them
+  as production entry points.
+
+No user action required.
+
 ---
 
 ## Renovate tracking
