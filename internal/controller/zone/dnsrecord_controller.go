@@ -378,23 +378,23 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonOwnershipCompanionFailed)
 	}
 
-	// Feature F: ack a completed force-reconcile before the status write so
-	// the same write carries the token.  Only assigned on a successful managed-
-	// mode path — error returns and observe-mode leave the ack empty.
-	if forceReconcile {
-		rec.Status.LastReconcileToken = rec.Annotations[conventions.AnnotationReconcileAt]
-	}
-
-	candidate := rec.Status.DeepCopy()
-	candidate.LastSyncedAt = originalStatus.LastSyncedAt
-	candidate.ObservedGeneration = originalStatus.ObservedGeneration
-	if rec.Generation != originalStatus.ObservedGeneration || !equality.Semantic.DeepEqual(originalStatus, candidate) {
-		now := metav1.Now()
-		rec.Status.LastSyncedAt = &now
-		rec.Status.ObservedGeneration = rec.Generation
-		if err := r.Status().Update(ctx, &rec); err != nil {
-			return ctrl.Result{}, err
-		}
+	_, uerr := reconcile.UpdateStatusIfChanged(
+		ctx,
+		r.Client,
+		&rec,
+		&rec.Status,
+		originalStatus,
+		forceReconcile,
+		rec.Annotations[conventions.AnnotationReconcileAt],
+		func() bool {
+			candidate := rec.Status.DeepCopy()
+			candidate.LastSyncedAt = originalStatus.LastSyncedAt
+			candidate.ObservedGeneration = originalStatus.ObservedGeneration
+			return !equality.Semantic.DeepEqual(originalStatus, candidate)
+		},
+	)
+	if uerr != nil {
+		return ctrl.Result{}, uerr
 	}
 
 	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(rec.Spec.Interval, defaultDNSRecordInterval)}, nil
