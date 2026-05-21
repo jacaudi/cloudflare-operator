@@ -156,14 +156,14 @@ examples covering each CRD's full surface.
 
 ---
 
-## Status
+## Disclaimer
 
-Active development on the `refactor/total` branch. The v2alpha1 API
-shape is the stable target — CRD names + field shapes are settled —
-but the operator has not yet cut a stable tagged release. Tagged
-releases will follow once `refactor/total` lands on `main`. Until
-then, pin the OCI chart to a specific `v0.0.0-alpha.refactor-total.<sha>`
-build for reproducibility.
+**Unofficial — community project.** This is not an official Cloudflare
+product and is not endorsed by or affiliated with Cloudflare, Inc.
+The operator implements its Cloudflare API access on top of the
+official [cloudflare/cloudflare-go](https://github.com/cloudflare/cloudflare-go)
+Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc.
+Use at your own discretion.
 
 ## Documentation
 
