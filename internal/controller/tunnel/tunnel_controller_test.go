@@ -489,6 +489,11 @@ func TestApplyRemoteConfig_EmitsDriftDetectedWhenLiveDiffersFromObserved(t *test
 	// Out-of-band drift (Design E2): the live Cloudflare config differs from
 	// what the operator last observed. applyRemoteConfig must emit a single
 	// DriftDetected Warning Event for operator visibility.
+	//
+	// Post-G (simplify): drift detection only fires when wantSnap differs from
+	// ObservedIngress (the gate that skips GetConfiguration in steady state).
+	// This test seeds ObservedIngress as a stale prior snap (≠ wantSnap) so
+	// the gate allows GetConfiguration through, exercising the drift path.
 	setEnvCreds(t)
 	s := tunnelScheme(t)
 	m := mockcf.New()
@@ -497,6 +502,8 @@ func TestApplyRemoteConfig_EmitsDriftDetectedWhenLiveDiffersFromObserved(t *test
 		cloudflare.CreateTunnelParams{Name: "ns"})
 	require.NoError(t, err)
 	// Live config has a real ingress entry someone added via the dashboard.
+	// This differs from what the operator's ObservedIngress says — triggering
+	// the DriftDetected event once GetConfiguration runs.
 	_, err = m.Tunnel.PutConfiguration(context.Background(), "acct-1", created.ID,
 		cloudflare.TunnelConfig{Ingress: []cloudflare.IngressEntry{
 			{Hostname: "rogue.example.com", Service: "http://rogue.ns.svc:80"},
@@ -511,12 +518,13 @@ func TestApplyRemoteConfig_EmitsDriftDetectedWhenLiveDiffersFromObserved(t *test
 		},
 		Status: v2alpha1.CloudflareTunnelStatus{
 			TunnelID: created.ID,
-			// Deliberately equal to the resolved catch-all snapshot (empty
-			// cache → http_status:404), so wantSnap == ObservedIngress and
-			// the existing early-return fires. This isolates the assertion to
-			// pure drift detection: no PUT mutates the mock before we check
-			// for the DriftDetected event.
-			ObservedIngress: []v2alpha1.IngressEntrySnapshot{{Service: "http_status:404"}},
+			// Stale prior observed snap — differs from the catch-all wantSnap
+			// that an empty cache resolves to. This makes wantSnap ≠
+			// ObservedIngress so the new G gate allows GetConfiguration through,
+			// and the rogue live entry produces a DriftDetected event.
+			ObservedIngress: []v2alpha1.IngressEntrySnapshot{
+				{Hostname: "old.example.com", Service: "http://old.ns.svc:80"},
+			},
 		},
 	}
 	base := fake.NewClientBuilder().
@@ -1310,6 +1318,93 @@ func TestReconcile_OrphanedUserAuthored_SurfacedNotDeleted(t *testing.T) {
 		require.False(t, containsAll(ev, conventions.ReasonOrphanedUnmanaged),
 			"duplicate OrphanedUnmanaged Event must NOT be emitted on pass 2 (transition-gated)")
 	}
+}
+
+func TestApplyRemoteConfig_SkipGetWhenWantMatchesObserved(t *testing.T) {
+	// G (simplify): when wantSnap == Status.ObservedIngress (steady state),
+	// applyRemoteConfig must NOT call GetConfiguration — the drift-check call
+	// is only meaningful when the operator's own desired state moved.
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	created, err := m.Tunnel.CreateTunnel(context.Background(), "acct-1",
+		cloudflare.CreateTunnelParams{Name: "ns"})
+	require.NoError(t, err)
+
+	// ObservedIngress matches the snapshot an empty cache produces (catch-all
+	// only) so that wantSnap == ObservedIngress on reconcile.
+	matchedSnap := []v2alpha1.IngressEntrySnapshot{{Service: "http_status:404"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
+		Spec: v2alpha1.CloudflareTunnelSpec{
+			Name:      "ns",
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			TunnelID:        created.ID,
+			ObservedIngress: matchedSnap,
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 0, m.Calls("Tunnel.GetConfiguration"),
+		"wantSnap == ObservedIngress → GetConfiguration must be skipped (steady state)")
+}
+
+func TestApplyRemoteConfig_CallsGetWhenWantDiffersFromObserved(t *testing.T) {
+	// G (simplify) non-vacuity: when wantSnap != Status.ObservedIngress, the
+	// GetConfiguration drift-check must still fire (preserves existing
+	// drift-detection behavior when the operator's own desired state changes).
+	setEnvCreds(t)
+	s := tunnelScheme(t)
+	m := mockcf.New()
+
+	created, err := m.Tunnel.CreateTunnel(context.Background(), "acct-1",
+		cloudflare.CreateTunnelParams{Name: "ns"})
+	require.NoError(t, err)
+
+	// ObservedIngress is a stale prior entry — it does NOT match the catch-all
+	// that an empty cache will resolve to, so wantSnap != ObservedIngress and
+	// the gate must allow GetConfiguration through.
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", Finalizers: []string{conventions.FinalizerName}},
+		Spec: v2alpha1.CloudflareTunnelSpec{
+			Name:      "ns",
+			Connector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+		},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			TunnelID: created.ID,
+			// Stale prior snap — differs from the catch-all wantSnap.
+			ObservedIngress: []v2alpha1.IngressEntrySnapshot{
+				{Hostname: "old.example.com", Service: "http://old.ns.svc:80"},
+			},
+		},
+	}
+	base := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(tn).
+		WithStatusSubresource(&v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := newTunnelReconciler(t, c, s, m, tunnelsynth.NewCache())
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "tnl", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	require.GreaterOrEqual(t, m.Calls("Tunnel.GetConfiguration"), 1,
+		"wantSnap != ObservedIngress → GetConfiguration must be called (drift-detection path)")
 }
 
 func TestSnapshotFromConfig_ProjectsOriginRequest(t *testing.T) {

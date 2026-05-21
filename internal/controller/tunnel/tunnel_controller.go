@@ -582,15 +582,23 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 	// ObservedIngress would otherwise reflect.DeepEqual-mismatch and emit a
 	// spurious DriftDetected on the very first reconcile.
 	//
+	// Guarded on wantSnap differing from ObservedIngress (simplify G): when
+	// the operator's desired snapshot already matches what was last observed,
+	// the drift-check call is skipped in steady state. Out-of-band edits are
+	// still detected, but only on the reconcile where the operator's own
+	// desired state moves — one full reconcile interval later at most.
+	//
 	// The comparison is order-sensitive by design: it reuses
 	// snapshotFromConfig so it shares the exact basis the PUT-skip below
-	// (line ~435) already trusts — diverging here would make drift and
-	// PUT-skip disagree. This assumes Cloudflare preserves ingress order
-	// (cloudflared ingress is semantically ordered: the catch-all is last).
-	// If DriftDetected ever becomes chronically noisy, server-side ingress
-	// reordering is the first thing to check here.
+	// already trusts — diverging here would make drift and PUT-skip disagree.
+	// This assumes Cloudflare preserves ingress order (cloudflared ingress is
+	// semantically ordered: the catch-all is last). If DriftDetected ever
+	// becomes chronically noisy, server-side ingress reordering is the first
+	// thing to check here.
+	wantSnap := snapshotFromConfig(cfg)
 	var live *cloudflare.TunnelConfiguration
-	if tn.Status.TunnelID != "" && len(tn.Status.ObservedIngress) > 0 {
+	if tn.Status.TunnelID != "" && len(tn.Status.ObservedIngress) > 0 &&
+		!reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) {
 		l, gerr := tc.GetConfiguration(ctx, accountID, tn.Status.TunnelID)
 		if gerr != nil {
 			log.FromContext(ctx).V(1).Info("GetConfiguration drift-check failed (continuing)", "err", gerr.Error())
@@ -604,8 +612,6 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 			}
 		}
 	}
-
-	wantSnap := snapshotFromConfig(cfg)
 	if reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) && !forceReconcile {
 		return nil
 	}
