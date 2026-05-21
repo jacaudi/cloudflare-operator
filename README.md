@@ -49,11 +49,11 @@ The chart ships the operator and the v2alpha1 CRDs. See
 
 ```bash
 # Regenerate CRD bundles from the Go types under api/v2alpha1/.
-# Outputs to config/crd/bases/ (gitignored) and copies into chart/templates/.
+# Outputs to bin/crd-staging/ (gitignored) and copies into chart/templates/.
 make generate
 
 # Apply the regenerated CRDs into the current kube context.
-kubectl apply -f config/crd/bases/
+kubectl apply -f bin/crd-staging/
 
 # Run the operator locally against the current kube context.
 go run ./cmd/manager

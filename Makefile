@@ -15,12 +15,12 @@ tools:
 .PHONY: generate
 generate: tools
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=bin/crd-staging
 	# Copy the five bundle CRDs into the chart as templates, gated by
 	# .Values.crds.install and with the helm.sh/resource-policy: keep
 	# annotation gated by .Values.crds.keep (Helm owns CRDs).
 	@for kind in cloudflarednsrecords cloudflarerulesets cloudflaretunnels cloudflarezoneconfigs cloudflarezones; do \
-		src=config/crd/bases/cloudflare.io_$$kind.yaml ; \
+		src=bin/crd-staging/cloudflare.io_$$kind.yaml ; \
 		dst=chart/templates/crd-$$kind.yaml ; \
 		{ \
 		  echo '{{- if .Values.crds.install }}' ; \
