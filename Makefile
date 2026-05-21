@@ -16,10 +16,13 @@ tools:
 	GOBIN=$(GOBIN) go install github.com/norwoodj/helm-docs/cmd/helm-docs@latest
 	GOBIN=$(GOBIN) go install github.com/elastic/crd-ref-docs@latest
 
-.PHONY: generate
-generate: tools
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+.PHONY: manifests
+manifests: tools
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=bin/crd-staging
+
+.PHONY: generate
+generate: manifests
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 	# Copy the five bundle CRDs into the chart as templates, gated by
 	# .Values.crds.install and with the helm.sh/resource-policy: keep
 	# annotation gated by .Values.crds.keep (Helm owns CRDs).
@@ -48,7 +51,7 @@ generate: tools
 		--output-path=docs/crd-reference.md
 
 .PHONY: test
-test: tools
+test: manifests
 	KUBEBUILDER_ASSETS="$$($(ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" \
 		go test ./... -coverprofile=cover.out -race
 
