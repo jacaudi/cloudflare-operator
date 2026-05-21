@@ -268,6 +268,24 @@ type CloudflareDNSRecord struct {
 	Status            CloudflareDNSRecordStatus `json:"status,omitempty"`
 }
 
+// GetLastSyncedAt returns the LastSyncedAt bookkeeping field.
+func (s *CloudflareDNSRecordStatus) GetLastSyncedAt() *metav1.Time { return s.LastSyncedAt }
+
+// SetLastSyncedAt sets the LastSyncedAt bookkeeping field.
+func (s *CloudflareDNSRecordStatus) SetLastSyncedAt(t *metav1.Time) { s.LastSyncedAt = t }
+
+// GetObservedGeneration returns the ObservedGeneration bookkeeping field.
+func (s *CloudflareDNSRecordStatus) GetObservedGeneration() int64 { return s.ObservedGeneration }
+
+// SetObservedGeneration sets the ObservedGeneration bookkeeping field.
+func (s *CloudflareDNSRecordStatus) SetObservedGeneration(g int64) { s.ObservedGeneration = g }
+
+// GetLastReconcileToken returns the LastReconcileToken bookkeeping field.
+func (s *CloudflareDNSRecordStatus) GetLastReconcileToken() string { return s.LastReconcileToken }
+
+// SetLastReconcileToken sets the LastReconcileToken bookkeeping field.
+func (s *CloudflareDNSRecordStatus) SetLastReconcileToken(t string) { s.LastReconcileToken = t }
+
 // +kubebuilder:object:root=true
 // CloudflareDNSRecordList contains a list of CloudflareDNSRecord.
 type CloudflareDNSRecordList struct {

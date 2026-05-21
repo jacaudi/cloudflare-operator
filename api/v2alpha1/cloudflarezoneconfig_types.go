@@ -343,6 +343,24 @@ type CloudflareZoneConfigStatus struct {
 	LastReconcileToken string `json:"lastReconcileToken,omitempty"`
 }
 
+// GetLastSyncedAt returns the LastSyncedAt bookkeeping field.
+func (s *CloudflareZoneConfigStatus) GetLastSyncedAt() *metav1.Time { return s.LastSyncedAt }
+
+// SetLastSyncedAt sets the LastSyncedAt bookkeeping field.
+func (s *CloudflareZoneConfigStatus) SetLastSyncedAt(t *metav1.Time) { s.LastSyncedAt = t }
+
+// GetObservedGeneration returns the ObservedGeneration bookkeeping field.
+func (s *CloudflareZoneConfigStatus) GetObservedGeneration() int64 { return s.ObservedGeneration }
+
+// SetObservedGeneration sets the ObservedGeneration bookkeeping field.
+func (s *CloudflareZoneConfigStatus) SetObservedGeneration(g int64) { s.ObservedGeneration = g }
+
+// GetLastReconcileToken returns the LastReconcileToken bookkeeping field.
+func (s *CloudflareZoneConfigStatus) GetLastReconcileToken() string { return s.LastReconcileToken }
+
+// SetLastReconcileToken sets the LastReconcileToken bookkeeping field.
+func (s *CloudflareZoneConfigStatus) SetLastReconcileToken(t string) { s.LastReconcileToken = t }
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status

@@ -249,6 +249,24 @@ type CloudflareTunnelStatus struct {
 	LastReconcileToken string `json:"lastReconcileToken,omitempty"`
 }
 
+// GetLastSyncedAt returns the LastSyncedAt bookkeeping field.
+func (s *CloudflareTunnelStatus) GetLastSyncedAt() *metav1.Time { return s.LastSyncedAt }
+
+// SetLastSyncedAt sets the LastSyncedAt bookkeeping field.
+func (s *CloudflareTunnelStatus) SetLastSyncedAt(t *metav1.Time) { s.LastSyncedAt = t }
+
+// GetObservedGeneration returns the ObservedGeneration bookkeeping field.
+func (s *CloudflareTunnelStatus) GetObservedGeneration() int64 { return s.ObservedGeneration }
+
+// SetObservedGeneration sets the ObservedGeneration bookkeeping field.
+func (s *CloudflareTunnelStatus) SetObservedGeneration(g int64) { s.ObservedGeneration = g }
+
+// GetLastReconcileToken returns the LastReconcileToken bookkeeping field.
+func (s *CloudflareTunnelStatus) GetLastReconcileToken() string { return s.LastReconcileToken }
+
+// SetLastReconcileToken sets the LastReconcileToken bookkeeping field.
+func (s *CloudflareTunnelStatus) SetLastReconcileToken(t string) { s.LastReconcileToken = t }
+
 // IngressEntrySnapshot is a status-only snapshot of one materialized ingress
 // entry. NOT the source-of-truth shape — the reconciler computes ingress fresh
 // each loop. Used for drift detection and PUT-skip; the projection rules

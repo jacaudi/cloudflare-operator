@@ -85,6 +85,19 @@ func DerivePhase(status metav1.ConditionStatus, reason string) v2alpha1.Phase {
 	}
 }
 
+// StatusEpilogue is the interface UpdateStatusIfChanged[T] uses to read
+// and write the three bookkeeping fields every controller stamps in its
+// terminal status epilogue: LastSyncedAt, ObservedGeneration, and the
+// Feature F (S6) LastReconcileToken ack.
+type StatusEpilogue interface {
+	GetLastSyncedAt() *metav1.Time
+	SetLastSyncedAt(*metav1.Time)
+	GetObservedGeneration() int64
+	SetObservedGeneration(int64)
+	GetLastReconcileToken() string
+	SetLastReconcileToken(string)
+}
+
 // SetUnstructuredCondition is the unstructured-slice equivalent of SetCondition.
 // It upserts by `type` and only updates `lastTransitionTime` when `status` changes
 // (matches metav1.Condition convention used by SetCondition).
