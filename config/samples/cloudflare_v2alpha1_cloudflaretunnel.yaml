@@ -16,14 +16,17 @@ spec:
   name: cf-default-example
 
   # Per-CR credential override. Omit entirely to inherit the operator-level
-  # default (Foundation §5). The token Secret must carry the API token at the
-  # named key; the apiserver enforces credential+accountID as a paired unit.
+  # default. The API token and account ID are treated as a paired unit and
+  # must both be supplied via the same CloudflareCredentialRef block.
   cloudflare:
     tokenSecretRef:
-      name: cloudflare-api-token
+      name: cloudflare-credentials
       namespace: cloudflare-system
       key: token
-    accountID: "REPLACE_WITH_ACCOUNT_ID"
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
 
   # Reconciliation interval (default 30m).
   interval: 30m
@@ -40,6 +43,7 @@ spec:
   # Tunnel-wide routing defaults.
   routing:
     fallback:
-      httpStatus: 404      # OR url: "http://default.svc.cluster.local"
+      httpStatus: 404      # served when no source matches; OR url: "https://default.example.com"
     originRequest:
-      connectTimeoutSeconds: 10
+      noTLSVerify: false   # set true to skip TLS verification to the origin
+      # originServerName: "expected SAN on the origin certificate"

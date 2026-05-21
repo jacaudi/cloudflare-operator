@@ -1,0 +1,67 @@
+# CloudflareZoneConfig — manage zone-level settings (SSL, security, perf, …).
+#
+# Reconciles the spec's settings groups against the Cloudflare zone. Only
+# fields you set are managed — omitted fields are left untouched. Settings
+# changed in the Cloudflare dashboard are detected as drift on the next
+# reconcile and re-applied from this CR (the CR is the source of truth).
+#
+# Resolve the target zone via either `zoneRef.name` (an in-namespace
+# CloudflareZone CR) or `zoneID` (a literal Cloudflare zone ID). Exactly
+# one must be set.
+apiVersion: cloudflare.io/v2alpha1
+kind: CloudflareZoneConfig
+metadata:
+  name: example-com
+  namespace: default
+spec:
+  # Resolve the zone ID from a sibling CloudflareZone CR's status.
+  # Mutually exclusive with `zoneID`.
+  zoneRef:
+    name: example-com
+
+  # Per-CR credential override (omit to inherit the operator-level default).
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
+
+  interval: 30m
+
+  # SSL/TLS. All fields are pointers — omit to leave the corresponding
+  # Cloudflare setting alone.
+  ssl:
+    mode: full                    # off | flexible | full | strict
+    minTLSVersion: "1.2"          # 1.0 | 1.1 | 1.2 | 1.3
+    tls13: "on"                   # on | off | zrt
+    alwaysUseHTTPS: "on"          # on | off
+    automaticHTTPSRewrites: "on"  # on | off
+
+  # Security posture.
+  security:
+    securityLevel: medium         # essentially_off | low | medium | high | under_attack
+    challengeTTL: 1800            # one of the API-fixed bucket values (seconds)
+    browserCheck: "on"            # on | off
+    emailObfuscation: "on"        # on | off
+
+  # Performance / cache settings.
+  performance:
+    cacheLevel: aggressive        # aggressive | basic | simplified
+    brotli: "on"                  # on | off
+    http2: "on"                   # on | off
+    http3: "on"                   # on | off
+    earlyHints: "on"              # on | off
+
+  # Network behavior.
+  network:
+    ipv6: "on"                    # on | off
+    websockets: "on"              # on | off
+    ipGeolocation: "on"           # on | off
+
+  # DNS resolution behavior.
+  dns:
+    cnameFlattening: flatten_at_root  # flatten_at_root | flatten_all | flatten_none

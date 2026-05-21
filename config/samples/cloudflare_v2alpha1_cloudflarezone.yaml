@@ -1,0 +1,45 @@
+# CloudflareZone — onboard a domain as a Cloudflare zone.
+#
+# Applying this CR ensures the domain is registered as a zone on the
+# Cloudflare account referenced by `cloudflare.accountIDSecretRef`. The
+# zone's Cloudflare-assigned ID is published on Status once the loop
+# converges, where downstream CRs (CloudflareZoneConfig, CloudflareRuleset,
+# CloudflareDNSRecord) can resolve it via `zoneRef.name`.
+#
+# DeletionPolicy is the safety knob: "Retain" (default) leaves the zone in
+# Cloudflare when the CR is deleted; "Delete" actively removes it.
+apiVersion: cloudflare.io/v2alpha1
+kind: CloudflareZone
+metadata:
+  name: example-com
+  namespace: default
+spec:
+  # The domain to onboard. Must be a valid registrable domain.
+  name: example.com
+
+  # full      — Cloudflare is authoritative DNS (most common)
+  # partial   — CNAME setup; Cloudflare proxies via partial DNS
+  # secondary — zone mirrors an upstream master
+  # Immutable after the zone is created in Cloudflare.
+  type: full
+
+  # Retain leaves the zone in Cloudflare on CR delete (default + safest).
+  # Switch to Delete only when you want destructive cleanup semantics.
+  deletionPolicy: Retain
+
+  # Reconciliation interval. Drives drift detection between this CR and
+  # the live zone state in Cloudflare.
+  interval: 30m
+
+  # Per-CR credential override. Omit entirely to inherit the operator-level
+  # default. The API token and account ID are treated as a paired unit and
+  # must both be supplied via the same CloudflareCredentialRef block.
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
