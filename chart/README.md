@@ -558,6 +558,31 @@ of grepping log lines. Existing S1 reasons (`OwnershipCompanionFailed`,
 additional, machine-grep-able field. Consumer wiring lands incrementally
 in later slices — the helper is in place today and is safe to adopt.
 
+### Legacy-companion GC one-shot ack + tunnel→route watch fix (simplify slice 1, 2026-05)
+
+#### `Status.LegacyCompanionGCDone` (B)
+
+`CloudflareDNSRecord` records now carry a `status.legacyCompanionGCDone`
+boolean ack for the pre-S1 legacy-name companion GC sweep. On first
+successful reconcile the operator runs the sweep (deletes any legacy
+companions found), sets the ack to `true`, and skips the sweep on
+every subsequent reconcile. Pre-existing CRs migrate automatically on
+their next reconcile pass; users do not need to do anything.
+
+Behavior change: zone-API call volume drops by 2 List calls per
+`CloudflareDNSRecord` per reconcile (zero CF API calls post-ack). At
+N=200 records / 5-min interval this saves ~4,800 CF List calls per
+hour.
+
+#### Tunnel→Route watch fix (A)
+
+A previously-silent bug in `tunnelToHTTPRoutes` / `tunnelToTLSRoutes`
+filtered routes by a `cloudflare.io/tunnel=true` annotation that lives
+on Gateways (not on Routes), so the watch was a no-op. After this
+slice, Routes attached to a tunnel re-reconcile within seconds of the
+tunnel's `Status.TunnelCNAME` populating. No user-visible action
+required — first-time tunnel setup latency improves.
+
 ---
 
 ## Renovate tracking
