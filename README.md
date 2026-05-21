@@ -3,6 +3,15 @@
 A Kubernetes operator for managing Cloudflare DNS records, Zones, Rulesets, and
 Cloudflare Tunnels declaratively using Custom Resources.
 
+## Disclaimer
+
+**Unofficial — community project.** This is not an official Cloudflare
+product and is not endorsed by or affiliated with Cloudflare, Inc.
+The operator implements its Cloudflare API access on top of the
+official [cloudflare/cloudflare-go](https://github.com/cloudflare/cloudflare-go)
+Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc.
+Use at your own discretion.
+
 ## Features
 
 - Manage Cloudflare DNS, Zones, and Rulesets as Kubernetes resources
@@ -155,15 +164,6 @@ See the [`config/samples/`](config/samples/) directory for complete CR
 examples covering each CRD's full surface.
 
 ---
-
-## Disclaimer
-
-**Unofficial — community project.** This is not an official Cloudflare
-product and is not endorsed by or affiliated with Cloudflare, Inc.
-The operator implements its Cloudflare API access on top of the
-official [cloudflare/cloudflare-go](https://github.com/cloudflare/cloudflare-go)
-Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc.
-Use at your own discretion.
 
 ## Documentation
 
