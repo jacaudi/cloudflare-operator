@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
@@ -484,6 +485,35 @@ func parseGatewayServiceRef(raw, defaultNS string) (namespace, name string, port
 		return "", "", 0, fmt.Errorf("malformed cloudflare.io/gateway-service %q (empty)", raw)
 	}
 	return defaultNS, hostPart, port, nil
+}
+
+// handleDeriveTunnelNameErr is the uniform error-handling shape for the
+// 2 source controllers (Service, Gateway) when DeriveTunnelName returns an
+// error. Classifies the error (InvalidName vs NameTooLong), emits a Warning
+// Event via the recorder, sweeps the tracker so the source no longer
+// contributes to any tunnel, and returns a nil-error reconcile result
+// (the failure is not retryable without the user editing the annotation,
+// so requeue-on-error would just spin).
+//
+// rec may wrap a nil EventRecorder — SafeRecorder's nil-guard handles it.
+func handleDeriveTunnelNameErr(
+	rec *conventions.SafeRecorder,
+	obj client.Object,
+	dedupe *eventDedupe,
+	tracker *cacheTracker,
+	cache *tunnelsynth.Cache,
+	srcKey tunnelsynth.SourceKey,
+	err error,
+) (reconcile.Result, error) {
+	reason := conventions.ReasonInvalidName
+	if errors.Is(err, ErrNameTooLong) {
+		reason = conventions.ReasonNameTooLong
+	}
+	dedupe.emit(rec, obj, corev1.EventTypeWarning, reason, err.Error())
+	if prev, ok := tracker.sweep(srcKey); ok {
+		cache.Clear(prev, srcKey)
+	}
+	return reconcile.Result{}, nil
 }
 
 // findTunnelTargetedParentRef scans parentRefs for the first parent Gateway

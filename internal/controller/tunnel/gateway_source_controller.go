@@ -155,15 +155,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// user editing the annotation.
 	derived, err := DeriveTunnelName(gw.Namespace, gw.Annotations[conventions.AnnotationTunnelName])
 	if err != nil {
-		reason := conventions.ReasonInvalidName
-		if errors.Is(err, ErrNameTooLong) {
-			reason = conventions.ReasonNameTooLong
-		}
-		r.dedupe.emit(r.recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
-		if prev, ok := r.tracker.sweep(srcKey); ok {
-			r.Cache.Clear(prev, srcKey)
-		}
-		return reconcile.Result{}, nil
+		return handleDeriveTunnelNameErr(r.recorder, &gw, r.dedupe, r.tracker, r.Cache, srcKey, err)
 	}
 
 	// Resolve the Gateway's underlying Service BEFORE EnsureTunnelCR — if the

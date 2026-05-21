@@ -20,7 +20,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -138,17 +137,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// requeue-on-error would just spin.
 	derived, err := DeriveTunnelName(svc.Namespace, svc.Annotations[conventions.AnnotationTunnelName])
 	if err != nil {
-		reason := conventions.ReasonInvalidName
-		if errors.Is(err, ErrNameTooLong) {
-			reason = conventions.ReasonNameTooLong
-		}
-		r.dedupe.emit(r.recorder, &svc, corev1.EventTypeWarning, reason, err.Error())
-		// Sweep any stale prior key — the source is now in a broken state and
-		// must not contribute to any tunnel.
-		if prev, ok := r.tracker.sweep(srcKey); ok {
-			r.Cache.Clear(prev, srcKey)
-		}
-		return reconcile.Result{}, nil
+		return handleDeriveTunnelNameErr(r.recorder, &svc, r.dedupe, r.tracker, r.Cache, srcKey, err)
 	}
 
 	tn, err := EnsureTunnelCR(ctx, r.Client, r.Scheme, &svc, "Service", derived, r.DefaultConnector)

@@ -31,10 +31,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
 )
 
 func TestDeriveTunnelName_WithName(t *testing.T) {
@@ -587,6 +589,106 @@ func TestIsOrphaned_LabelsOnly(t *testing.T) {
 
 	plain := tnWith(nil, nil)
 	require.False(t, isOrphaned(plain), "user-authored (no labels/annotation) never orphaned")
+}
+
+// TestHandleDeriveTunnelNameErr_InvalidName verifies the classify-emit-sweep-return
+// shape for the InvalidName branch (non-ErrNameTooLong errors).
+func TestHandleDeriveTunnelNameErr_InvalidName(t *testing.T) {
+	fakeRec := record.NewFakeRecorder(4)
+	rec := conventions.NewSafeRecorder(fakeRec)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"}
+	tunnelKey := tunnelsynth.TunnelKey{Namespace: "ns", Name: "prior-tunnel"}
+
+	// Seed the tracker so sweep has something to clear.
+	tracker.swap(srcKey, tunnelKey)
+	// And put a cache entry under that key.
+	cache.Set(tunnelKey, srcKey, nil)
+
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
+
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrInvalidName)
+
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+
+	// Tracker must be swept — sweep again should return no prior.
+	_, hadPrior := tracker.sweep(srcKey)
+	require.False(t, hadPrior, "tracker must be empty after handleDeriveTunnelNameErr")
+
+	// Event must carry the InvalidName reason.
+	select {
+	case ev := <-fakeRec.Events:
+		require.Contains(t, ev, conventions.ReasonInvalidName)
+	default:
+		t.Fatal("expected InvalidName event")
+	}
+}
+
+// TestHandleDeriveTunnelNameErr_NameTooLong verifies the NameTooLong branch
+// emits a distinct reason.
+func TestHandleDeriveTunnelNameErr_NameTooLong(t *testing.T) {
+	fakeRec := record.NewFakeRecorder(4)
+	rec := conventions.NewSafeRecorder(fakeRec)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Gateway", Namespace: "ns", Name: "gw"}
+
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns", UID: "uid-gw"}}
+
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrNameTooLong)
+
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+
+	select {
+	case ev := <-fakeRec.Events:
+		require.Contains(t, ev, conventions.ReasonNameTooLong)
+	default:
+		t.Fatal("expected NameTooLong event")
+	}
+}
+
+// TestHandleDeriveTunnelNameErr_NilRecorder verifies the helper does not panic
+// when the SafeRecorder wraps a nil EventRecorder (e.g. unit-test without a
+// real recorder wired).
+func TestHandleDeriveTunnelNameErr_NilRecorder(t *testing.T) {
+	rec := conventions.NewSafeRecorder(nil)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns"}}
+
+	// Must not panic.
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrInvalidName)
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+}
+
+// TestHandleDeriveTunnelNameErr_NoTrackerEntry verifies the helper is a no-op
+// on cache.Clear when the tracker has no prior entry for the source key
+// (e.g. first reconcile failing at DeriveTunnelName before any cache write).
+func TestHandleDeriveTunnelNameErr_NoTrackerEntry(t *testing.T) {
+	fakeRec := record.NewFakeRecorder(4)
+	rec := conventions.NewSafeRecorder(fakeRec)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
+
+	// No prior tracker entry — cache.Clear should not be called (but must not panic).
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrInvalidName)
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
 }
 
 // TestFindTunnelTargetedParentRef exercises the to-be-extracted shared helper
