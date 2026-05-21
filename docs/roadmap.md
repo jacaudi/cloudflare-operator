@@ -110,11 +110,25 @@ account-scoped**, not zone-scoped: `/accounts/{account_id}/email/routing/address
 
 ## Workers
 
-Cloudflare's serverless runtime. A controller would let teams ship Worker
-scripts, bindings, routes, and Cron Triggers as CRDs — closing the loop
-between the workload that produces a Worker and the operator that publishes
-it. This is the largest surface of the three and the most likely to want
-sub-controllers per concern.
+Cloudflare's serverless runtime — and, as of late 2024, **the recommended
+home for static sites and SPAs too**. Cloudflare's own docs say new
+features and optimizations are landing on Workers Static Assets instead of
+Pages, so this controller covers three modes under one CRD:
+
+1. **Pure static** — Hugo, Jekyll, MkDocs, plain HTML. `Worker.spec.assets`
+   only, no script.
+2. **SPA** — React, Vue, Svelte. Assets + `notFoundHandling:
+   SinglePageApplication` so unmatched paths return `index.html` and the
+   client-side router takes over.
+3. **Full-stack** — Astro, Next-on-Workers, Hugo with API routes. Assets +
+   Worker script + `ASSETS` binding; the script fetches static files via
+   `env.ASSETS.fetch()` and handles dynamic routes itself.
+
+A controller would let teams ship Worker scripts, static-asset bundles,
+bindings, routes, and Cron Triggers as CRDs — closing the loop between the
+workload (or static-site build) that produces a Worker and the operator
+that publishes it. This is the largest surface of the four and the most
+likely to want sub-controllers per concern.
 
 **API surface (verified):** Scripts live under
 `/accounts/{account_id}/workers/scripts/{script_name}` (cloudflare-go:
@@ -125,12 +139,17 @@ percentage of traffic to one or two versions (gradual rollouts). Routes
 live under `/zones/{zone_id}/workers/routes` (zone-scoped, not account).
 KV namespaces are a separate top-level resource at
 `/accounts/{account_id}/storage/kv/namespaces` (cloudflare-go:
-`client.KV.Namespaces.*`).
+`client.KV.Namespaces.*`). Static assets travel with the script upload (the
+`[assets]` block in `wrangler.toml` becomes part of the version payload).
 
 ### Workers — likely CRDs
 
-- `Worker` — script source ref (ConfigMap / OCI artifact / inline), runtime
-  flags, compatibility date, observability config. Status surfaces
+- `Worker` — script source ref (ConfigMap / OCI artifact / inline) **and/or**
+  `spec.assets` (directory source ref + `binding` name +
+  `notFoundHandling: SinglePageApplication|404` + `runWorkerFirst` route
+  list), runtime flags, compatibility date, observability config. Pure
+  static sites omit the script ref; SPAs omit it and set
+  `notFoundHandling`; full-stack apps set both. Status surfaces
   `lastVersionID` + the active `deploymentID`. Maps to
   `Workers.Scripts.*` (script-level metadata).
 - `WorkerDeployment` (optional) — explicit deployment object exposing
@@ -152,17 +171,24 @@ KV namespaces are a separate top-level resource at
 
 ### Workers — open questions
 
-- Script delivery: how does the script get from the developer's repo into
-  the cluster? OCI artifact pulled by the controller? ConfigMap built by a
-  CI step? Inline in the CR (only viable for tiny scripts)?
+- Artifact delivery: scripts are a single file, but static-asset bundles
+  are *directory trees* (a Hugo build is hundreds of files). The
+  same source-ref field has to cover both shapes. OCI artifact is the
+  obvious fit (Hugo/Vite CI builds → pushes an OCI artifact → operator
+  pulls + uploads to Cloudflare); ConfigMap doesn't scale past trivial
+  scripts; PVCs are awkward; inline is hopeless for assets. Do we
+  support **OCI artifact only** for v1 and add other sources later?
 - Binding sourcing: do we resolve k8s Secret refs at apply time and push
   the values to Cloudflare, or use the Workers Secrets API and avoid
   exposing the values to the operator at all?
 - Versioning + rollback: Cloudflare keeps every version. Do we expose
   `WorkerDeployment` from day one (declarative gradual rollouts) or default
   to "always 100% latest" and add the CRD later?
-- Scope: do we cover Pages too (same runtime, different surface), or keep
-  this strictly to Workers and treat Pages as a separate future track?
+- Pages legacy: Cloudflare Pages still exists but is no longer the
+  recommended path. Do we ignore it entirely (the static/SPA/full-stack
+  modes above already cover the same ground via Workers + Assets), or
+  ship a thin compatibility shim so existing Pages projects can be
+  managed by the operator?
 
 ---
 
