@@ -215,13 +215,9 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 
 	content, err := r.resolveContent(ctx, &rec)
 	if err != nil {
-		rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
-			conventions.ReasonDegraded, err.Error())
-		rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonDegraded)
-		if uerr := r.Status().Update(ctx, &rec); uerr != nil {
-			return ctrl.Result{}, uerr
-		}
-		return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+		return reconcile.HaltWith(ctx, r.Client, &rec,
+			&rec.Status.Conditions, &rec.Status.Phase,
+			conventions.ReasonDegraded, err.Error(), reconcile.DefaultRequeueAfter)
 	}
 
 	// Adopt branch: TXT-verified takeover by (name, type) match. Ownership is
@@ -244,15 +240,12 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			}
 			if len(txtRecs) == 0 {
 				// No TXT companion — refuse adoption. DO NOT create a TXT.
-				msg := "record exists but has no TXT companion; adoption refused (no silent backfill). " +
-					"See docs/plans/2026-05-14-txt-registry-design.md §5.4 migration procedure."
-				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
-					conventions.ReasonAdoptRefusedNoTXT, msg)
-				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedNoTXT)
-				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
-					return ctrl.Result{}, uerr
-				}
-				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+				return reconcile.HaltWith(ctx, r.Client, &rec,
+					&rec.Status.Conditions, &rec.Status.Phase,
+					conventions.ReasonAdoptRefusedNoTXT,
+					"record exists but has no TXT companion; adoption refused (no silent backfill). "+
+						"See docs/plans/2026-05-14-txt-registry-design.md §5.4 migration procedure.",
+					reconcile.DefaultRequeueAfter)
 			}
 			switch verifyTXTOwnership(txtRecs[0].Content, readCodec, "CloudflareDNSRecord", rec.Namespace, rec.Name) {
 			case TxtOwnershipMatch:
@@ -268,24 +261,18 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				// Fall through to the normal update/sync path below.
 			case TxtOwnershipForeign:
 				// TXT companion claims a different owner — refuse adoption.
-				msg := "TXT companion claims a different owner; refusing adoption"
-				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
-					conventions.ReasonAdoptRefusedForeign, msg)
-				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedForeign)
-				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
-					return ctrl.Result{}, uerr
-				}
-				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+				return reconcile.HaltWith(ctx, r.Client, &rec,
+					&rec.Status.Conditions, &rec.Status.Phase,
+					conventions.ReasonAdoptRefusedForeign,
+					"TXT companion claims a different owner; refusing adoption",
+					reconcile.DefaultRequeueAfter)
 			default: // TxtOwnershipUnrecognized
 				// TXT content is not decodable — refuse conservatively.
-				msg := "TXT companion content not decodable; refusing adoption (see design §5.4)"
-				rec.Status.Conditions = reconcile.SetReady(rec.Status.Conditions, metav1.ConditionFalse,
-					conventions.ReasonAdoptRefusedNoTXT, msg)
-				rec.Status.Phase = reconcile.DerivePhase(metav1.ConditionFalse, conventions.ReasonAdoptRefusedNoTXT)
-				if uerr := r.Status().Update(ctx, &rec); uerr != nil {
-					return ctrl.Result{}, uerr
-				}
-				return ctrl.Result{RequeueAfter: reconcile.DefaultRequeueAfter}, nil
+				return reconcile.HaltWith(ctx, r.Client, &rec,
+					&rec.Status.Conditions, &rec.Status.Phase,
+					conventions.ReasonAdoptRefusedNoTXT,
+					"TXT companion content not decodable; refusing adoption (see design §5.4)",
+					reconcile.DefaultRequeueAfter)
 			}
 		}
 	}

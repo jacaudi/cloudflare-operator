@@ -61,6 +61,32 @@ func HaltDependency(
 	return ctrl.Result{RequeueAfter: after}, nil
 }
 
+// HaltWith sets a Ready=False condition with the supplied reason and message,
+// writes status, and returns a halt-and-requeue result. It is a generalized
+// sibling to HaltDependency / HaltCredentialsUnavailable: callers supply the
+// reason + message directly. Passing requeueAfter ≤ 0 falls back to
+// DefaultRequeueAfter.
+func HaltWith(
+	ctx context.Context,
+	c client.Client,
+	obj client.Object,
+	conds *[]metav1.Condition,
+	phase *v2alpha1.Phase,
+	reason, message string,
+	requeueAfter time.Duration,
+) (ctrl.Result, error) {
+	*conds = SetReady(*conds, metav1.ConditionFalse, reason, message)
+	*phase = DerivePhase(metav1.ConditionFalse, reason)
+	if err := c.Status().Update(ctx, obj); err != nil {
+		return ctrl.Result{}, err
+	}
+	after := requeueAfter
+	if after <= 0 {
+		after = DefaultRequeueAfter
+	}
+	return ctrl.Result{RequeueAfter: after}, nil
+}
+
 // HaltCredentialsUnavailable persists a CredentialsUnavailable Ready=False
 // condition and returns the halt result produced by LoadCredentials /
 // LoadCredentialsHierarchical. It is the shared form of the post-credential-
