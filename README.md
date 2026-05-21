@@ -189,6 +189,7 @@ covering every CRD plus the annotation-driven attachment patterns
 | [docs/gateway-api.md](docs/gateway-api.md) | End-to-end Gateway-API integration: Gateway opt-in, HTTPRoute / TLSRoute attachment, per-Route overrides, cascade-GC, generated-object inventory, common gotchas |
 | [docs/reconciliation.md](docs/reconciliation.md) | Reconcile cadence, `Phase=Error` retry semantics, the `cloudflare.io/reconcile-at` force-reconcile annotation |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Field guide for diagnosing the operator: Status → Conditions → Logs → Events flow, the `Ready=False` reason vocabulary mapped to fixes, the verify-reconcile-actually-ran annotation-ack trick |
+| [docs/tunnels.md](docs/tunnels.md) | `CloudflareTunnel` deep-dive: direct-create vs auto-created, the 52-char naming budget, the cloudflared dataplane sizing knobs, the cloudflared image override precedence chain, the Status surface, cascade-GC rules |
 
 ## Acknowledgements
 
