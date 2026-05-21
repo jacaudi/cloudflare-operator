@@ -68,11 +68,13 @@ type ServiceSourceReconciler struct {
 	Scheme           *runtime.Scheme
 	Cache            *tunnelsynth.Cache
 	Recorder         record.EventRecorder
+	recorder         *conventions.SafeRecorder
 	DefaultConnector v2alpha1.ConnectorSpec
 
-	tracker     *cacheTracker
-	trackerOnce sync.Once
-	dedupe      *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
+	tracker      *cacheTracker
+	trackerOnce  sync.Once
+	recorderOnce sync.Once
+	dedupe       *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
 }
 
 // ensureTracker initializes r.tracker exactly once. Safe against concurrent
@@ -95,8 +97,18 @@ func (r *ServiceSourceReconciler) ensureTracker() {
 // +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarednsrecords,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives one iteration of the Service-source state machine.
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *ServiceSourceReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("service", req.NamespacedName)
+	r.ensureRecorder()
 	r.ensureTracker()
 
 	var svc corev1.Service
@@ -146,9 +158,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if errors.Is(err, ErrNameTooLong) {
 			reason = conventions.ReasonNameTooLong
 		}
-		if r.Recorder != nil {
-			r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeWarning, reason, err.Error())
-		}
+		r.dedupe.emit(r.recorder, &svc, corev1.EventTypeWarning, reason, err.Error())
 		// Sweep any stale prior key — the source is now in a broken state and
 		// must not contribute to any tunnel.
 		if prev, ok := r.tracker.sweep(srcKey); ok {
@@ -165,9 +175,7 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// Translate annotations + Service spec → contributions.
 	contribs, warns := tunnelsynth.TranslateService(&svc, defaultsFromAnnotations(svc.GetAnnotations(), tunnelsynth.DefaultsFor(tn)))
 	for _, w := range warns {
-		if r.Recorder != nil {
-			r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeWarning, w.Reason, w.Message)
-		}
+		r.dedupe.emit(r.recorder, &svc, corev1.EventTypeWarning, w.Reason, w.Message)
 	}
 
 	tunnelKey := tunnelsynth.TunnelKey{Namespace: tn.Namespace, Name: tn.Name}

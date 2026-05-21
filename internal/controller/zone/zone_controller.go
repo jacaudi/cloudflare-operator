@@ -21,6 +21,7 @@ package zone
 import (
 	"context"
 	stderrors "errors"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -48,7 +49,9 @@ type CloudflareZoneReconciler struct {
 	Scheme *runtime.Scheme
 	// Recorder is wired by the manager setup (T18). T14 does not currently
 	// emit events; future reasons may.
-	Recorder record.EventRecorder
+	Recorder     record.EventRecorder
+	recorder     *conventions.SafeRecorder
+	recorderOnce sync.Once
 
 	// ZoneClientFn returns a Cloudflare ZoneClient for the resolved credentials.
 	// Tests inject an in-memory mock; production wires NewZoneClientFromCF.
@@ -75,8 +78,21 @@ type CloudflareZoneReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// ensureRecorder lazily initializes r.recorder on first Reconcile. Tests
+// that construct the reconciler without calling SetupWithManager (i.e. without
+// setting r.Recorder) get a SafeRecorder wrapping nil, which is a safe no-op.
+// sync.Once-guarded per MaxConcurrentReconciles > 1; matches ensureTracker idiom.
+func (r *CloudflareZoneReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 // Reconcile drives one iteration of the CloudflareZone state machine.
 func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ensureRecorder()
 	logger := log.FromContext(ctx).WithValues("cloudflarezone", req.NamespacedName)
 
 	var z v2alpha1.CloudflareZone

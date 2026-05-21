@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -75,8 +76,10 @@ const pendingDeletionGrace = 60 * time.Second
 // the early-exit path.
 type CloudflareTunnelReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme       *runtime.Scheme
+	Recorder     record.EventRecorder
+	recorder     *conventions.SafeRecorder
+	recorderOnce sync.Once
 
 	// TunnelClientFn returns a Cloudflare TunnelClient for the resolved
 	// credentials. Tests inject an in-memory mock; production wires
@@ -118,8 +121,18 @@ func (r *CloudflareTunnelReconciler) gracePeriod() time.Duration {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *CloudflareTunnelReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 // Reconcile drives one iteration of the CloudflareTunnel state machine.
 func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ensureRecorder()
 	logger := log.FromContext(ctx).WithValues("cloudflaretunnel", req.NamespacedName)
 
 	var tn v2alpha1.CloudflareTunnel
@@ -186,11 +199,11 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.ensureTunnel(ctx, &tn, tc, creds.AccountID); err != nil {
 		return ctrl.Result{}, r.failStatus(ctx, &tn, conventions.ReasonTunnelCreating, err)
 	}
-	if priorTunnelID == "" && tn.Status.TunnelID != "" && r.Recorder != nil {
+	if priorTunnelID == "" && tn.Status.TunnelID != "" {
 		// First-time create-or-adopt transition. Emit a single Event so
 		// operators can correlate the cluster object with the Cloudflare-side
 		// tunnel id without tailing logs.
-		r.Recorder.Eventf(&tn, corev1.EventTypeNormal, conventions.ReasonTunnelCreated,
+		r.recorder.Eventf(&tn, corev1.EventTypeNormal, conventions.ReasonTunnelCreated,
 			"tunnel %q created (id=%s)", tn.Spec.Name, tn.Status.TunnelID)
 	}
 	if err := r.ensureTokenSecret(ctx, &tn, tc, creds.AccountID); err != nil {
@@ -257,10 +270,8 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				pendingRequeueAfter = grace
 			case time.Since(tn.Status.LastOrphanedAt.Time) >= grace:
 				// Two-tick confirmed: still orphaned past the grace window.
-				if r.Recorder != nil {
-					r.Recorder.Eventf(&tn, corev1.EventTypeWarning, conventions.ReasonTerminalNoSources,
-						"no remaining sources after %s; self-deleting", grace)
-				}
+				r.recorder.Eventf(&tn, corev1.EventTypeWarning, conventions.ReasonTerminalNoSources,
+					"no remaining sources after %s; self-deleting", grace)
 				tn.Status.Conditions = reconcilelib.SetReady(tn.Status.Conditions, metav1.ConditionFalse,
 					conventions.ReasonTerminalNoSources, "auto-created tunnel has no remaining sources")
 				// Terminal status so observers see the final
@@ -300,8 +311,8 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// SetReady is idempotent and overwrites rollupStatus's tentative
 		// Ready reason so that OrphanedUnmanaged is the persisted state.
 		prevStored := reconcilelib.FindReady(originalStatus.Conditions)
-		if r.Recorder != nil && (prevStored == nil || prevStored.Reason != conventions.ReasonOrphanedUnmanaged) {
-			r.Recorder.Eventf(&tn, corev1.EventTypeWarning, conventions.ReasonOrphanedUnmanaged,
+		if prevStored == nil || prevStored.Reason != conventions.ReasonOrphanedUnmanaged {
+			r.recorder.Eventf(&tn, corev1.EventTypeWarning, conventions.ReasonOrphanedUnmanaged,
 				"tunnel has no sources and no owner but is not operator-managed; "+
 					"it will NOT be auto-deleted — adopt/label it or delete it manually")
 		}
@@ -421,13 +432,11 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tn *v2
 		if err := r.Update(ctx, tn); err != nil {
 			return ctrl.Result{}, err
 		}
-		if r.Recorder != nil {
-			// Drain succeeded and the finalizer was just released. Surface a
-			// terminal Event so operators see the drain completed cleanly
-			// rather than guessing from the CR's absence.
-			r.Recorder.Eventf(tn, corev1.EventTypeNormal, "TunnelDeleted",
-				"tunnel %q drained and removed from Cloudflare", tn.Spec.Name)
-		}
+		// Drain succeeded and the finalizer was just released. Surface a
+		// terminal Event so operators see the drain completed cleanly
+		// rather than guessing from the CR's absence.
+		r.recorder.Eventf(tn, corev1.EventTypeNormal, "TunnelDeleted",
+			"tunnel %q drained and removed from Cloudflare", tn.Spec.Name)
 	}
 	return ctrl.Result{}, nil
 }
@@ -642,17 +651,15 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 		} else {
 			live = l
 			if live != nil && !reflect.DeepEqual(snapshotFromConfig(live.Config), tn.Status.ObservedIngress) {
-				if r.Recorder != nil {
-					r.Recorder.Eventf(tn, corev1.EventTypeWarning, conventions.ReasonDriftDetected,
-						"live tunnel configuration differs from operator-observed config (out-of-band edit detected)")
-				}
+				r.recorder.Eventf(tn, corev1.EventTypeWarning, conventions.ReasonDriftDetected,
+					"live tunnel configuration differs from operator-observed config (out-of-band edit detected)")
 			}
 		}
 	}
 	if reflect.DeepEqual(wantSnap, tn.Status.ObservedIngress) && !forceReconcile {
 		return nil
 	}
-	emitOriginRequestWipedEvents(r.Recorder, tn, live, cfg)
+	emitOriginRequestWipedEvents(r.recorder, tn, live, cfg)
 	if _, err := tc.PutConfiguration(ctx, accountID, tn.Status.TunnelID, cfg); err != nil {
 		return err
 	}
@@ -665,14 +672,11 @@ func (r *CloudflareTunnelReconciler) applyRemoteConfig(
 // (loser deleted between cache-write and emit) and logs anything else at
 // V(1) without failing the reconcile.
 func (r *CloudflareTunnelReconciler) emitDuplicateHostnameEvent(ctx context.Context, c tunnelsynth.Conflict) error {
-	if r.Recorder == nil {
-		return nil
-	}
 	loser, err := r.fetchSource(ctx, c.Loser)
 	if err != nil {
 		return err
 	}
-	r.Recorder.Eventf(loser, corev1.EventTypeWarning, conventions.ReasonDuplicateHostname,
+	r.recorder.Eventf(loser, corev1.EventTypeWarning, conventions.ReasonDuplicateHostname,
 		"hostname %q already claimed by %s %s/%s",
 		c.Hostname, c.Winner.Kind, c.Winner.Namespace, c.Winner.Name)
 	return nil

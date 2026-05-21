@@ -72,11 +72,13 @@ type GatewaySourceReconciler struct {
 	Scheme           *runtime.Scheme
 	Cache            *tunnelsynth.Cache
 	Recorder         record.EventRecorder
+	recorder         *conventions.SafeRecorder
 	DefaultConnector v2alpha1.ConnectorSpec
 
-	tracker     *cacheTracker
-	trackerOnce sync.Once
-	dedupe      *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
+	tracker      *cacheTracker
+	trackerOnce  sync.Once
+	recorderOnce sync.Once
+	dedupe       *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
 }
 
 // ensureTracker initializes r.tracker exactly once. Safe against concurrent
@@ -100,8 +102,18 @@ func (r *GatewaySourceReconciler) ensureTracker() {
 // +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarednsrecords,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives one iteration of the Gateway-source state machine.
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *GatewaySourceReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("gateway", req.NamespacedName)
+	r.ensureRecorder()
 	r.ensureTracker()
 
 	var gw gwv1.Gateway
@@ -146,10 +158,8 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// the Gateway-as-tunnel-apex pattern has nothing to publish.
 	hostnames := listenerHostnames(&gw)
 	if len(hostnames) == 0 {
-		if r.Recorder != nil {
-			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, conventions.ReasonNoListenerHostname,
-				"Gateway has no listener with a hostname; tunnel-apex synthesis requires at least one")
-		}
+		r.dedupe.emit(r.recorder, &gw, corev1.EventTypeWarning, conventions.ReasonNoListenerHostname,
+			"Gateway has no listener with a hostname; tunnel-apex synthesis requires at least one")
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
 		}
@@ -165,9 +175,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if errors.Is(err, ErrNameTooLong) {
 			reason = conventions.ReasonNameTooLong
 		}
-		if r.Recorder != nil {
-			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
-		}
+		r.dedupe.emit(r.recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
 		}
@@ -185,9 +193,7 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			// distinct reason for observability.
 			reason = conventions.ReasonGatewayServiceUnresolved
 		}
-		if r.Recorder != nil {
-			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
-		}
+		r.dedupe.emit(r.recorder, &gw, corev1.EventTypeWarning, reason, err.Error())
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
 		}
@@ -262,10 +268,8 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			// the Gateway must still publish its CNAME -> tunnel record.
 			tlsApexHostnames = append(tlsApexHostnames, h)
 		default:
-			if r.Recorder != nil {
-				r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning, conventions.ReasonUnsupportedProtocol,
-					fmt.Sprintf("listener %q protocol %s not supported on tunnel-apex Gateway", l.Name, l.Protocol))
-			}
+			r.dedupe.emit(r.recorder, &gw, corev1.EventTypeWarning, conventions.ReasonUnsupportedProtocol,
+				fmt.Sprintf("listener %q protocol %s not supported on tunnel-apex Gateway", l.Name, l.Protocol))
 		}
 	}
 
@@ -325,8 +329,8 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 	// routes the real listener wildcard hostnames. An invalid-but-present override
 	// emits a Warning event and falls through to per-listener emission.
 	apexHost, apexValid, apexPresent := gatewayApexOverride(&gw)
-	if apexPresent && !apexValid && r.Recorder != nil {
-		r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeWarning,
+	if apexPresent && !apexValid {
+		r.dedupe.emit(r.recorder, &gw, corev1.EventTypeWarning,
 			conventions.ReasonGatewayApexInvalid,
 			fmt.Sprintf("cloudflare.io/gateway-apex %q is not a valid non-wildcard hostname; ignoring",
 				gw.GetAnnotations()[conventions.AnnotationGatewayApex]))

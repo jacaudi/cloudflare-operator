@@ -22,6 +22,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -58,7 +59,9 @@ type CloudflareRulesetReconciler struct {
 	Scheme *runtime.Scheme
 	// Recorder is wired by the manager setup (T18). Nil is tolerated; event
 	// emission no-ops without a recorder.
-	Recorder record.EventRecorder
+	Recorder     record.EventRecorder
+	recorder     *conventions.SafeRecorder
+	recorderOnce sync.Once
 	// RulesetClientFn returns a Cloudflare RulesetClient for the resolved
 	// credentials. Tests inject an in-memory mock.
 	RulesetClientFn func(cloudflare.Credentials) (cloudflare.RulesetClient, error)
@@ -70,8 +73,18 @@ type CloudflareRulesetReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *CloudflareRulesetReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 // Reconcile drives one iteration of the CloudflareRuleset state machine.
 func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ensureRecorder()
 	logger := log.FromContext(ctx).WithValues("cloudflareruleset", req.NamespacedName)
 
 	var rs v2alpha1.CloudflareRuleset
@@ -167,10 +180,8 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		rs.Status.RulesetID = created.ID
 		rs.Status.RuleCount = len(created.Rules)
 		logger.Info("created phase entrypoint", "phase", rs.Spec.Phase, "rulesetID", created.ID)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(&rs, corev1.EventTypeNormal, conventions.ReasonReconciling,
-				"created %s phase entrypoint %s", rs.Spec.Phase, created.ID)
-		}
+		r.recorder.Eventf(&rs, corev1.EventTypeNormal, conventions.ReasonReconciling,
+			"created %s phase entrypoint %s", rs.Spec.Phase, created.ID)
 
 	case rulesetMatches(existing, params) && !forceReconcile:
 		// In sync and no force-reconcile requested — no API write needed.
@@ -185,10 +196,8 @@ func (r *CloudflareRulesetReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		rs.Status.RulesetID = updated.ID
 		rs.Status.RuleCount = len(updated.Rules)
 		logger.Info("updated phase entrypoint", "phase", rs.Spec.Phase, "rulesetID", updated.ID)
-		if r.Recorder != nil {
-			r.Recorder.Eventf(&rs, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
-				"updated %s phase entrypoint %s", rs.Spec.Phase, updated.ID)
-		}
+		r.recorder.Eventf(&rs, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
+			"updated %s phase entrypoint %s", rs.Spec.Phase, updated.ID)
 	}
 
 	rs.Status.Conditions = reconcile.SetReady(rs.Status.Conditions, metav1.ConditionTrue,

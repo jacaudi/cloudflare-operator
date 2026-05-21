@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -56,7 +57,9 @@ type CloudflareZoneConfigReconciler struct {
 	Scheme *runtime.Scheme
 	// Recorder is wired by the manager setup (T18). Nil is tolerated; the
 	// per-group transition-event emitter no-ops without a recorder.
-	Recorder record.EventRecorder
+	Recorder     record.EventRecorder
+	recorder     *conventions.SafeRecorder
+	recorderOnce sync.Once
 	// ZoneConfigClientFn returns a Cloudflare ZoneConfigClient for the
 	// resolved credentials. Tests inject an in-memory mock.
 	ZoneConfigClientFn func(cloudflare.Credentials) (cloudflare.ZoneConfigClient, error)
@@ -69,7 +72,17 @@ type CloudflareZoneConfigReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile drives one iteration of the CloudflareZoneConfig state machine.
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *CloudflareZoneConfigReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 func (r *CloudflareZoneConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ensureRecorder()
 	logger := log.FromContext(ctx).WithValues("cloudflarezoneconfig", req.NamespacedName)
 
 	var cfg v2alpha1.CloudflareZoneConfig
@@ -483,9 +496,6 @@ func (r *CloudflareZoneConfigReconciler) emitGroupTransitionEvents(
 	prior map[string]metav1.ConditionStatus,
 	results []groupResult,
 ) {
-	if r.Recorder == nil {
-		return
-	}
 	for _, g := range results {
 		if g.skip {
 			continue
@@ -497,10 +507,10 @@ func (r *CloudflareZoneConfigReconciler) emitGroupTransitionEvents(
 		}
 		switch newStatus {
 		case metav1.ConditionTrue:
-			r.Recorder.Eventf(obj, corev1.EventTypeNormal, conventions.ReasonSettingsApplied,
+			r.recorder.Eventf(obj, corev1.EventTypeNormal, conventions.ReasonSettingsApplied,
 				"%s applied (%d setting(s))", g.groupLabel, g.count)
 		default:
-			r.Recorder.Eventf(obj, corev1.EventTypeWarning, conventions.ReasonSettingsApplyFailed,
+			r.recorder.Eventf(obj, corev1.EventTypeWarning, conventions.ReasonSettingsApplyFailed,
 				"%s: %s: %s", g.groupLabel, g.reason(), g.message())
 		}
 	}

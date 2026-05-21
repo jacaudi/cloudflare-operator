@@ -78,10 +78,12 @@ type TLSRouteSourceReconciler struct {
 	Scheme   *runtime.Scheme
 	Cache    *tunnelsynth.Cache
 	Recorder record.EventRecorder
+	recorder *conventions.SafeRecorder
 
-	tracker     *cacheTracker
-	trackerOnce sync.Once
-	dedupe      *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
+	tracker      *cacheTracker
+	trackerOnce  sync.Once
+	recorderOnce sync.Once
+	dedupe       *eventDedupe // D2 event dedupe; lazy-inited inside trackerOnce.
 }
 
 // ensureTracker initializes r.tracker exactly once. Safe against concurrent
@@ -107,8 +109,18 @@ func (r *TLSRouteSourceReconciler) ensureTracker() {
 // +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarednsrecords,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives one iteration of the TLSRoute-source state machine.
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *TLSRouteSourceReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tlsroute", req.NamespacedName)
+	r.ensureRecorder()
 	r.ensureTracker()
 	srcKey := tunnelsynth.SourceKey{Kind: "TLSRoute", Namespace: req.Namespace, Name: req.Name}
 
@@ -188,10 +200,8 @@ func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.
 	r.Cache.Set(tunnelKey, srcKey, contribs)
 
 	// Surface translator warnings as Events for operator visibility.
-	if r.Recorder != nil {
-		for _, w := range warns {
-			r.dedupe.emit(r.Recorder, &rt, corev1.EventTypeWarning, w.Reason, w.Message)
-		}
+	for _, w := range warns {
+		r.dedupe.emit(r.recorder, &rt, corev1.EventTypeWarning, w.Reason, w.Message)
 	}
 
 	// Blocked: the parent Gateway has only wildcard listeners and no valid
@@ -202,11 +212,9 @@ func (r *TLSRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile.
 	// chainContent == "" — without this ordering the deferred guard would
 	// fire first and return without the Warning event.
 	if apexBlocked {
-		if r.Recorder != nil {
-			r.dedupe.emit(r.Recorder, &rt, corev1.EventTypeWarning,
-				conventions.ReasonGatewayApexRequired,
-				"parent Gateway listener is wildcard-only; set the cloudflare.io/gateway-apex annotation on the Gateway to publish per-route records")
-		}
+		r.dedupe.emit(r.recorder, &rt, corev1.EventTypeWarning,
+			conventions.ReasonGatewayApexRequired,
+			"parent Gateway listener is wildcard-only; set the cloudflare.io/gateway-apex annotation on the Gateway to publish per-route records")
 		if err := r.writeParentStatus(ctx, &rt, *parent, warns, len(contribs) > 0); err != nil {
 			logger.V(1).Info("status write failed (best-effort; ignored)", "err", err)
 		}

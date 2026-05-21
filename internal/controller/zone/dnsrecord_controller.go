@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	stderrors "errors"
 	"fmt"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -58,7 +59,9 @@ type CloudflareDNSRecordReconciler struct {
 	Scheme *runtime.Scheme
 	// Recorder is wired by the manager setup (T18). Nil is tolerated; event
 	// emission no-ops without a recorder.
-	Recorder record.EventRecorder
+	Recorder     record.EventRecorder
+	recorder     *conventions.SafeRecorder
+	recorderOnce sync.Once
 	// DNSClientFn returns a Cloudflare DNSClient for the resolved credentials.
 	// Tests inject an in-memory mock; production wires NewDNSClientFromCF.
 	DNSClientFn func(cloudflare.Credentials) (cloudflare.DNSClient, error)
@@ -72,8 +75,18 @@ type CloudflareDNSRecordReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
+// ensureRecorder lazily initializes r.recorder on first Reconcile.
+func (r *CloudflareDNSRecordReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
 // Reconcile drives one iteration of the CloudflareDNSRecord state machine.
 func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ensureRecorder()
 	logger := log.FromContext(ctx).WithValues("cloudflarednsrecord", req.NamespacedName)
 
 	var rec v2alpha1.CloudflareDNSRecord
@@ -250,10 +263,8 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 				logger.Info("adopted existing DNS record with TXT verification",
 					"recordID", list[0].ID, "txtRecordID", txtRecs[0].ID,
 					"name", rec.Spec.Name, "type", rec.Spec.Type)
-				if r.Recorder != nil {
-					r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonAdoptedExistingRecord,
-						"adopted existing %s record for %s (id=%s)", rec.Spec.Type, rec.Spec.Name, list[0].ID)
-				}
+				r.recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonAdoptedExistingRecord,
+					"adopted existing %s record for %s (id=%s)", rec.Spec.Type, rec.Spec.Name, list[0].ID)
 				// Fall through to the normal update/sync path below.
 			case TxtOwnershipForeign:
 				// TXT companion claims a different owner — refuse adoption.
@@ -323,10 +334,8 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			}
 			rec.Status.CurrentContent = updated.Content
 			logger.Info("updated DNS record", "recordID", updated.ID)
-			if r.Recorder != nil {
-				r.Recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
-					"corrected drift on %s record %s", rec.Spec.Type, rec.Spec.Name)
-			}
+			r.recorder.Eventf(&rec, corev1.EventTypeNormal, conventions.ReasonDriftDetected,
+				"corrected drift on %s record %s", rec.Spec.Type, rec.Spec.Name)
 		} else {
 			rec.Status.CurrentContent = existing.Content
 		}
@@ -348,10 +357,8 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 	switch {
 	case companionErr != nil:
 		logger.Error(companionErr, "companion reconcile failed; surfacing via Ready=False")
-		if r.Recorder != nil {
-			r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
-				"TXT ownership companion failed (%s): %s", cout.failClass, companionErr.Error())
-		}
+		r.recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
+			"TXT ownership companion failed (%s): %s", cout.failClass, companionErr.Error())
 	case cout.ownershipOK:
 		rec.Status.TxtRecordID = cout.txtRecordID
 		rec.Status.TxtAffix = txtAffix
@@ -359,19 +366,15 @@ func (r *CloudflareDNSRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 			legacyFound, gcErr := gcLegacyCompanion(ctx, dc, zoneID, zoneDomain, rec.Spec.Name, rec.Namespace, rec.Name, readCodec)
 			if gcErr != nil {
 				logger.Error(gcErr, "legacy companion GC failed", "legacyFound", legacyFound)
-				if r.Recorder != nil {
-					r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonLegacyCompanionGCFailed,
-						"legacy companion GC failed (legacyFound=%v): %v", legacyFound, gcErr)
-				}
+				r.recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonLegacyCompanionGCFailed,
+					"legacy companion GC failed (legacyFound=%v): %v", legacyFound, gcErr)
 			} else {
 				rec.Status.LegacyCompanionGCDone = true
 			}
 		}
 	default:
-		if r.Recorder != nil {
-			r.Recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
-				"TXT ownership companion not in desired state: %s", cout.failClass)
-		}
+		r.recorder.Eventf(&rec, corev1.EventTypeWarning, conventions.ReasonOwnershipCompanionFailed,
+			"TXT ownership companion not in desired state: %s", cout.failClass)
 	}
 
 	if companionOK {
