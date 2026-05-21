@@ -1,7 +1,10 @@
 docs/design/
 docs/plans/
 docs/prompt/
-docs/follow/simplify-findings.md
+docs/follow/
+docs/issues/
+docs/review/
+docs/summary/
 .claude/worktrees/
 .worktrees/
 
