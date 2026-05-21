@@ -19,10 +19,12 @@ limitations under the License.
 package reconcile
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
 	"github.com/jacaudi/cloudflare-operator/internal/conventions"
@@ -96,6 +98,77 @@ type StatusEpilogue interface {
 	SetObservedGeneration(int64)
 	GetLastReconcileToken() string
 	SetLastReconcileToken(string)
+}
+
+// UpdateStatusIfChanged is the unified terminal status-write epilogue helper
+// used by all 5 CRD reconcilers (Zone, ZoneConfig, DNSRecord, Ruleset, Tunnel).
+// It is the authoritative implementation of the epilogue that was previously
+// duplicated — with a subtle drift — across each reconciler.
+//
+// The helper performs the following in order:
+//
+//  1. If forceReconcile is true, stamps forceToken into
+//     objStatus.LastReconcileToken (Feature F / S6 ack). This stamp happens
+//     BEFORE the change predicate is evaluated so that a caller whose
+//     statusDiffers callback includes LastReconcileToken in its DeepEqual will
+//     detect the change and trigger a write — which is the intended contract.
+//     CALLER CONTRACT: when forceReconcile may be true, the statusDiffers
+//     callback MUST include LastReconcileToken in its diff comparison;
+//     otherwise this function takes the no-write branch and the stamped ack
+//     is silently dropped (the in-memory token survives until the next
+//     Get() overwrites it).
+//
+//  2. Evaluates the change predicate: a write is needed when either
+//     obj.GetGeneration() differs from snapshot.GetObservedGeneration() (spec
+//     changed since the last reconcile) OR the caller-supplied statusDiffers
+//     callback returns true (content other than the masked bookkeeping fields
+//     changed, including a freshly stamped LastReconcileToken).
+//
+//  3. No-write branch: restores the in-memory LastSyncedAt and
+//     ObservedGeneration to the snapshot's values. This is the zone-controller
+//     rollback semantic promoted to a universal invariant: when this function
+//     returns without writing, the in-memory obj carries no LastSyncedAt or
+//     ObservedGeneration changes that weren't already in the snapshot.
+//
+//  4. Write branch: stamps LastSyncedAt = metav1.Now() and ObservedGeneration
+//     = obj.GetGeneration(), then calls c.Status().Update(ctx, obj).
+//
+// The caller supplies statusDiffers as a closure that compares the *current*
+// live status content against the snapshot taken at reconcile-start, masking
+// LastSyncedAt and ObservedGeneration from the comparison (those fields are
+// managed exclusively by this helper). A typical implementation uses
+// equality.Semantic.DeepEqual on a masked copy of the two Status structs.
+func UpdateStatusIfChanged[T client.Object](
+	ctx context.Context,
+	c client.Client,
+	obj T,
+	objStatus, snapshot StatusEpilogue,
+	forceReconcile bool,
+	forceToken string,
+	statusDiffers func() bool,
+) (changed bool, err error) {
+	// 1. Stamp the Feature F ack before the predicate so that the caller's
+	//    statusDiffers callback can detect the changed token and trigger a write.
+	if forceReconcile {
+		objStatus.SetLastReconcileToken(forceToken)
+	}
+
+	// 2. Change predicate: write when generation advanced OR content differs.
+	if obj.GetGeneration() == snapshot.GetObservedGeneration() && !statusDiffers() {
+		// 3. No-write path: restore in-memory bookkeeping to snapshot values.
+		objStatus.SetLastSyncedAt(snapshot.GetLastSyncedAt())
+		objStatus.SetObservedGeneration(snapshot.GetObservedGeneration())
+		return false, nil
+	}
+
+	// 4. Write path: stamp now + generation, then persist.
+	now := metav1.Now()
+	objStatus.SetLastSyncedAt(&now)
+	objStatus.SetObservedGeneration(obj.GetGeneration())
+	if err := c.Status().Update(ctx, obj); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // SetUnstructuredCondition is the unstructured-slice equivalent of SetCondition.
