@@ -51,15 +51,16 @@ type Mock struct {
 	ZoneConfig *zoneConfigMock
 	Tunnel     *tunnelMock
 
-	mu           sync.Mutex
-	injectors    map[string]error
-	nthInjectors map[string]nthInjector
-	calls        map[string]int
+	mu               sync.Mutex
+	injectors        map[string]error
+	nthInjectors     map[string]nthInjector
+	persistentErrors map[string]error
+	calls            map[string]int
 }
 
 // New returns an initialized Mock.
 func New() *Mock {
-	m := &Mock{injectors: map[string]error{}, nthInjectors: map[string]nthInjector{}, calls: map[string]int{}}
+	m := &Mock{injectors: map[string]error{}, nthInjectors: map[string]nthInjector{}, persistentErrors: map[string]error{}, calls: map[string]int{}}
 	m.Zone = &zoneMock{parent: m, zones: map[string]*cloudflare.Zone{}}
 	m.DNS = &dnsMock{parent: m, records: map[string]map[string]*cloudflare.DNSRecord{}}
 	m.Ruleset = &rulesetMock{parent: m, entries: map[string]map[string]*cloudflare.Ruleset{}}
@@ -94,6 +95,24 @@ func (m *Mock) InjectErrorOnCall(method string, callN int, err error) {
 	m.nthInjectors[method] = nthInjector{callN: callN, err: err}
 }
 
+// InjectPersistentError installs an error that fires on EVERY call to the
+// named method until cleared by ClearPersistentError. Unlike InjectError,
+// the error is not consumed on first use. Useful for tests that need the
+// same failure to repeat across consecutive reconcile ticks.
+func (m *Mock) InjectPersistentError(method string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.persistentErrors[method] = err
+}
+
+// ClearPersistentError removes any persistent error previously installed for
+// method via InjectPersistentError, restoring normal behaviour.
+func (m *Mock) ClearPersistentError(method string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.persistentErrors, method)
+}
+
 // take records a call attempt for method (incrementing the call counter before
 // checking for an injected error, so that even error-injected calls are
 // counted as "attempted") and returns any injected error. The increment
@@ -103,7 +122,11 @@ func (m *Mock) take(method string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls[method]++
-	// Check simple (next-call) injector first.
+	// Check persistent (non-consuming) injector first.
+	if err, ok := m.persistentErrors[method]; ok {
+		return err
+	}
+	// Check simple (next-call) injector.
 	if err, ok := m.injectors[method]; ok {
 		delete(m.injectors, method)
 		return err

@@ -135,6 +135,13 @@ const (
 	// Warning event on failure transition.
 	ReasonSettingsApplied     = "SettingsApplied"
 	ReasonSettingsApplyFailed = "SettingsApplyFailed"
+
+	// ReasonLegacyCompanionGCFailed is emitted as a Warning Event when the
+	// one-shot legacy-companion GC sweep encounters a transient error
+	// (gcLegacyCompanion returns legacyFound=true with a non-nil error).
+	// The Status.LegacyCompanionGCDone ack is NOT set; the next reconcile
+	// retries. Introduced by simplify slice 1 finding B.
+	ReasonLegacyCompanionGCFailed = "LegacyCompanionGCFailed"
 )
 
 // ZoneReasons returns the reason vocabulary appended by spec 2.
@@ -159,6 +166,7 @@ func ZoneReasons() []string {
 		ReasonOwnershipCompanionFailed,
 		ReasonSettingsApplied,
 		ReasonSettingsApplyFailed,
+		ReasonLegacyCompanionGCFailed,
 	}
 }
 
