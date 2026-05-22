@@ -1,0 +1,67 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
+package reconcile
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+)
+
+func TestEnsureFinalizer_Adds(t *testing.T) {
+	obj := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "x"}}
+	changed := EnsureFinalizer(obj, conventions.FinalizerName)
+	require.True(t, changed)
+	require.Contains(t, obj.GetFinalizers(), conventions.FinalizerName)
+}
+
+func TestEnsureFinalizer_NoChangeIfPresent(t *testing.T) {
+	obj := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "x", Finalizers: []string{conventions.FinalizerName}},
+	}
+	changed := EnsureFinalizer(obj, conventions.FinalizerName)
+	require.False(t, changed)
+}
+
+func TestRemoveFinalizer(t *testing.T) {
+	obj := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "x", Finalizers: []string{conventions.FinalizerName, "other"}},
+	}
+	changed := RemoveFinalizer(obj, conventions.FinalizerName)
+	require.True(t, changed)
+	require.NotContains(t, obj.GetFinalizers(), conventions.FinalizerName)
+	require.Contains(t, obj.GetFinalizers(), "other")
+}
+
+func TestRemoveFinalizer_DoesNotAliasInput(t *testing.T) {
+	obj := &corev1.ConfigMap{}
+	obj.SetFinalizers([]string{"a", "target", "b"})
+	pre := obj.GetFinalizers()
+	preCopy := append([]string(nil), pre...)
+
+	changed := RemoveFinalizer(obj, "target")
+	require.True(t, changed)
+	require.Equal(t, []string{"a", "b"}, obj.GetFinalizers())
+	// The slice the caller held before the call must be untouched.
+	require.Equal(t, preCopy, pre)
+}
+
+func TestRemoveFinalizer_AbsentReturnsFalseNoWrite(t *testing.T) {
+	obj := &corev1.ConfigMap{}
+	obj.SetFinalizers([]string{"a", "b"})
+	before := append([]string(nil), obj.GetFinalizers()...)
+
+	changed := RemoveFinalizer(obj, "nonexistent")
+	require.False(t, changed)
+	// No spurious write: finalizers unchanged when the target is absent.
+	require.Equal(t, before, obj.GetFinalizers())
+}

@@ -23,6 +23,14 @@
       "matchPackageNames": ["go", "golang"],
       "groupName": "go-toolchain",
       "recreateWhen": "always"
+    },
+    {
+      "description": "cloudflared image bumps -> fix(cloudflared) so the operator gets >= a patch release",
+      "matchDepNames": [
+        "cloudflare/cloudflared"
+      ],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "cloudflared"
     }
   ],
   "customManagers": [
@@ -47,6 +55,17 @@
       ],
       "depNameTemplate": "github.com/golangci/golangci-lint/v2",
       "datasourceTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^internal/controller/tunnel/dataplane\\.go$/"
+      ],
+      "matchStrings": [
+        "const DefaultCloudflaredImage = \"docker\\.io/cloudflare/cloudflared:(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "cloudflare/cloudflared",
+      "datasourceTemplate": "docker"
     }
   ]
 }

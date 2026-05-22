@@ -1,380 +1,304 @@
-# Tunnels
+# Cloudflare Tunnels
 
-`CloudflareTunnel` provisions a Cloudflare Tunnel and optionally manages the `cloudflared` connector Deployment that keeps the tunnel connected. It also aggregates `CloudflareTunnelRule` CRs — whether hand-authored or emitted by source controllers — into the cloudflared `config.yaml` that governs ingress routing.
+A `CloudflareTunnel` CR is the operator's atomic unit for an
+operator-managed Cloudflare Tunnel: a Cloudflare-side tunnel (with
+remote-config ingress rules), a cloudflared `Deployment` that connects
+it, a metrics `Service`, and the connector-token `Secret`. This page
+covers the standalone tunnel — the CR shape, what the operator
+materializes, the cloudflared dataplane sizing knobs, and the cascade-GC
+rules.
 
----
+If you came here from the Quick Start's "(Optional) Declare a Cloudflare
+Tunnel" step, you're in the right place. For the
+annotation-driven attachment path (Gateway → tunnel auto-creation), read
+[`gateway-api.md`](gateway-api.md) — the two pages share a lot of
+ground, but this one is the CRD-first view.
 
-## Quickstart: Operator-Managed Connector
+## Two creation paths
 
-The simplest fully-managed setup: one tunnel, the operator owns cloudflared.
+The operator manages tunnels via two paths. They produce the same
+runtime outcome (a tunnel + dataplane + ingress rules) but differ in
+who owns the CR's lifecycle:
+
+### Direct-create
+
+You write a `CloudflareTunnel` CR yourself and `kubectl apply` it.
+You own the CR's lifecycle — the operator never deletes it
+automatically, even when no sources reference it.
 
 ```yaml
-apiVersion: cloudflare.io/v1alpha1
+apiVersion: cloudflare.io/v2alpha1
 kind: CloudflareTunnel
 metadata:
-  name: prod
-  namespace: network
+  name: example-tunnel
 spec:
-  name: prod                               # tunnel name in Cloudflare
-  secretRef:
-    name: cloudflare-api-token             # Secret with apiToken + accountID
-  generatedSecretName: prod-tunnel-credentials  # operator creates this Secret
+  name: example-tunnel
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      key: accountID
   connector:
-    enabled: true
     replicas: 2
-  routing:
-    defaultBackend:
-      url: https://my-gateway.network.svc.cluster.local
+    protocol: auto
 ```
 
-The operator:
-1. Creates the tunnel in Cloudflare (if it doesn't exist) and writes credentials to `prod-tunnel-credentials`.
-2. Reconciles a `ServiceAccount`, `ConfigMap` (cloudflared `config.yaml`), and `Deployment` named after the tunnel, all in the same namespace.
-3. Aggregates any `CloudflareTunnelRule` CRs referencing this tunnel into the ConfigMap.
-4. When the ConfigMap changes, patches the Deployment's pod template annotation to trigger a rolling restart.
+Use when:
 
----
+- You're not using Gateway API (or you want a tunnel that exists
+  independent of any Gateway / Route).
+- You want predictable lifecycle: the tunnel stays until you delete
+  the CR.
+- You're attaching arbitrary sources via the annotation flow but want
+  the tunnel itself to be a first-class declared object (e.g. for
+  GitOps tracking).
 
-## `spec.connector` — Managing cloudflared
+### Auto-created
 
-```yaml
-spec:
-  connector:
-    enabled: true           # default: false. Must be true to deploy cloudflared.
-    replicas: 2             # default: 2. Minimum: 1.
-    nameOverride: ""        # default: "". When set, names the Deployment + SA exactly
-                            # this value and the ConfigMap "<nameOverride>-config".
-                            # When unset, names use "cloudflared-<tunnel.metadata.name>".
-    image:
-      repository: docker.io/cloudflare/cloudflared
-      tag: "2026.3.0"       # omit to use the operator's compile-time default
-    resources:
-      requests:
-        cpu: 10m
-        memory: 128Mi
-      limits:
-        memory: 256Mi
-    nodeSelector: {}
-    tolerations: []
-    affinity: {}
-    topologySpreadConstraints: []
+The operator creates the CR for you when it observes a source object
+(Gateway / Service) annotated with `cloudflare.io/tunnel: "true"`.
+The CR carries `cloudflare.io/auto-created` to mark its provenance.
+
+Use when:
+
+- Gateway-API is your routing layer and you want the tunnel to follow
+  the Gateway's lifecycle.
+- You don't want to manage the tunnel CR by hand.
+- You're comfortable with cascade-GC removing the tunnel when its
+  last source detaches.
+
+The full Gateway-API path is documented in
+[`gateway-api.md`](gateway-api.md). The rest of this page applies to
+both creation paths.
+
+## The 52-character naming budget
+
+`spec.name` is immutable after create AND capped at **52 characters**.
+The cap exists because the operator derives several Kubernetes
+resource names from it:
+
+```
+cloudflared-<spec.name>          (the Deployment + Pod)
+cloudflared-<spec.name>-metrics  (the metrics Service)
+cloudflared-<spec.name>-token    (the connector-token Secret)
 ```
 
-All fields in `connector` except `enabled` are optional. Omitting `connector` entirely (or setting `enabled: false`) means you are responsible for running cloudflared yourself.
+The Kubernetes DNS-1123 label limit is 63 characters. With the
+`cloudflared-` prefix (12 chars), `spec.name` can be up to 51 chars
+for the longest derived name; the CRD-level cap is 52 to leave a
+1-char margin (and because the Cloudflare API itself accepts up to 52
+gracefully).
 
-At `replicas: 2` or higher the operator additionally creates a `PodDisruptionBudget` and injects a default per-hostname `topologySpreadConstraint`. See [crd-reference.md → Default scheduling and disruption budget](crd-reference.md#default-scheduling-and-disruption-budget) for the override semantics.
+For auto-created tunnels the operator derives `spec.name` from the
+source's namespace (post-Slice-5: dropped the `cf-` prefix; auto-name
+is now `<namespace>[-<tunnel-name-annotation>]`). For direct-create,
+you choose. Stay under 52 characters and you're fine.
 
-### Naming the connector resources
+> **Renames are not supported.** `spec.name` is immutable via CEL
+> validation. The Cloudflare API treats `config_src` as write-once;
+> a rename would orphan the cloudflared credential Secret and every
+> DNS target pointing at `<old-tunnel-id>.cfargotunnel.com`. If you
+> need a different name, delete the CR and create a fresh one.
 
-By default the operator names the Deployment and ServiceAccount as
-`cloudflared-<tunnel.metadata.name>`, the ConfigMap as
-`cloudflared-<tunnel.metadata.name>-config`, and the PodDisruptionBudget
-(when configured) as `cloudflared-<tunnel.metadata.name>-pdb`. The
-`cloudflared-` prefix matches Cloudflare's official Helm chart and makes
-`kubectl get pods | grep cloudflared` find every operator-managed connector
-cluster-wide.
+## What the operator materializes
 
-To use a different name family — for example, to fit existing monitoring
-labels or GitOps drift expectations — set `spec.connector.nameOverride`:
+For each `CloudflareTunnel` CR, the operator creates:
 
-```yaml
-spec:
-  connector:
-    enabled: true
-    nameOverride: cloudflared-prod
-```
+| Object | Owns it | Why |
+|---|---|---|
+| Cloudflare-side tunnel (UUID) | Cloudflare account | The tunnel itself; carries the credential cloudflared needs. |
+| Cloudflare-side remote config | Cloudflare account | The ingress rules cloudflared uses to route to backends. PUT on every reconcile when the desired snap differs from `Status.ObservedIngress`. |
+| `Deployment` (cloudflared) | `CloudflareTunnel` CR | The dataplane Pods. Owner-ref → CR. |
+| `Service` (cloudflared metrics) | `CloudflareTunnel` CR | Exposes cloudflared's `/metrics` for Prometheus. Owner-ref → CR. |
+| `Secret` (connector token) | `CloudflareTunnel` CR | The Cloudflare-issued token cloudflared authenticates with. Owner-ref → CR. |
 
-With `nameOverride: cloudflared-prod`, the Deployment and ServiceAccount are
-named `cloudflared-prod` and the ConfigMap is named `cloudflared-prod-config`.
+All four operator-side objects are GC'd by Kubernetes when the
+`CloudflareTunnel` CR is deleted (owner-references). The Cloudflare-side
+tunnel is deleted by the operator's finalizer.
 
-Changing `nameOverride` on a live tunnel reconciles new resources at the new name; the old resources are NOT cleaned up automatically while the connector remains enabled. Delete the orphaned Deployment/SA/ConfigMap/PDB manually, or briefly toggle `spec.connector.enabled: false` to let the operator garbage-collect them on the next reconcile (see [Disabling the connector](#disabling-the-connector-reverting-to-self-managed-cloudflared)).
+## The cloudflared dataplane (`spec.connector`)
 
-`nameOverride` must be a valid DNS-1123 subdomain (lowercase alphanumerics
-and `-`, length ≤ 253).
+The `Connector` block configures the `Deployment` the operator creates.
+All fields have sensible defaults; most installs only need to set
+`replicas` and accept everything else.
 
-#### Upgrading from earlier versions
+| Field | Default | Range / Enum | What it does |
+|---|---|---|---|
+| `replicas` | `2` | 1–25 (no HPA) | Pod count. Two for HA; bump for additional throughput / connector-redundancy. |
+| `protocol` | `auto` | `auto` / `http2` / `quic` | cloudflared's transport. `auto` picks based on network behavior. `quic` is fastest where it works; `http2` is the conservative fallback. |
+| `logLevel` | `info` | `debug` / `info` / `warn` / `error` | cloudflared's `--loglevel`. Bump to `debug` to investigate, then revert. |
+| `gracePeriodSeconds` | `30` | ≥0 | cloudflared's `--grace-period`. Pod `terminationGracePeriodSeconds` is set to this + 15. |
+| `resources` | `50m/64Mi` requests, `200m/256Mi` limits | standard PodSpec.ResourceRequirements | Container resource bounds. Observed defaults; raise for high-throughput. |
+| `nodeSelector` / `tolerations` / `affinity` / `topologySpreadConstraints` | unset | standard PodSpec | Scheduling controls; pass-through. |
+| `originCASecretRef` | unset | `SecretReference` | When set, mounts the referenced Secret as a CA bundle cloudflared uses to validate origin certs. |
+| `image` | compile-time pinned `cloudflare/cloudflared:<tag>` | `ConnectorImage` (repo + tag, both optional) | Cloudflared image override. See below. |
 
-Operator versions before this change defaulted the base name to
-`<tunnel.metadata.name>-connector`. On upgrade, the connector reconciler
-automatically deletes the legacy-named resources (Deployment,
-ServiceAccount, ConfigMap, PDB) owned by your `CloudflareTunnel` after
-applying the new `cloudflared-<tunnel.metadata.name>` family. The two connectors briefly
-coexist while the new pods come up, so there is no traffic gap. No manual
-action is required for users who did not set `nameOverride`.
+### Cloudflared image overrides
 
-If you have monitoring queries, alert routes, or external automation that
-filter by the old pod-name prefix (for example, `pod=~"<tunnel>-connector-.*"`),
-update them to match `cloudflared-<tunnel>-.*` after the upgrade.
+The operator ships with a compile-time pinned cloudflared tag
+(Renovate-tracked; bumps land as `fix(cloudflared)` commits). You can
+override at three levels — most specific wins:
 
-### Upgrading the cloudflared image
+1. **Per-CR**: `CloudflareTunnel.spec.connector.image` (per-axis).
+2. **Chart-level default**: `controllers.tunnel.connector.image`
+   (per-axis; the operator-managed default for auto-created tunnels).
+3. **Operator compile-time pin** (default).
 
-Update `spec.connector.image.tag` and apply:
+Per-axis means `repository` and `tag` override independently. Setting
+only `repository: my-mirror.example.com/cloudflare/cloudflared` keeps
+the compile-time pinned tag (repository-only mirror — Docker Hub
+rate-limit mitigation pattern).
 
-```bash
-kubectl patch cloudflaretunnel prod -n network \
-  --type=merge \
-  -p '{"spec":{"connector":{"image":{"tag":"2026.5.0"}}}}'
-```
+See the `cloudflared connector image` section in
+[`chart/README.md`](../chart/README.md) for chart-side details.
 
-The operator detects the spec change, updates the Deployment's container image, and Kubernetes performs a rolling update. `status.connector.image` reflects the image actually running.
+## Routing defaults (`spec.routing`)
 
-### Checking connector health
+Two pieces:
 
-```bash
-kubectl describe cloudflaretunnel prod -n network
-```
+### Fallback (the catch-all)
 
-Look for:
-- `ConnectorReady=True` — at least one cloudflared pod is running.
-- `IngressConfigured=True` — the aggregated config was applied without conflicts.
-- `status.connector.readyReplicas` — number of ready pods.
-
-```bash
-# Check the connector Deployment directly
-kubectl get deploy -n network -l cloudflare.io/tunnel=prod
-
-# Check connector pod logs
-kubectl logs -n network -l cloudflare.io/tunnel=prod
-```
-
-### Disabling the connector (reverting to self-managed cloudflared)
-
-Set `connector.enabled: false` (or remove the `connector` block):
-
-```bash
-kubectl patch cloudflaretunnel prod -n network \
-  --type=merge \
-  -p '{"spec":{"connector":{"enabled":false}}}'
-```
-
-Setting `spec.connector.enabled: false` (or removing the `connector` block) tells the operator to stop running cloudflared for this tunnel. On the next reconcile the operator deletes the Deployment, ServiceAccount, ConfigMap, and PodDisruptionBudget it owns for this `CloudflareTunnel` — including any resources left over from prior `spec.connector.nameOverride` values. The deletion is gated on owner-reference UID, so any hand-applied resources sharing the connector labels are left alone. The credentials Secret named by `spec.generatedSecretName` is preserved so a self-managed cloudflared can keep using it. The operator continues to reconcile `CloudflareTunnelRule` CRs but does not render or update the ConfigMap while the connector is disabled.
-
----
-
-## `spec.routing` — Tunnel-Wide Routing Defaults
+What cloudflared returns when no specific ingress rule matches the
+incoming hostname. The operator auto-appends a catch-all at the end of
+the ingress list; this field lets you override what that catch-all
+does. Two mutually exclusive forms:
 
 ```yaml
 spec:
   routing:
-    defaultBackend:
-      url: https://my-gateway.network.svc.cluster.local
-      # OR
-      serviceRef:
-        name: my-gateway
-        namespace: network
-        port: 443
-        scheme: https
+    fallback:
+      httpStatus: 404      # synthetic status response
+```
+
+```yaml
+spec:
+  routing:
+    fallback:
+      url: "https://default.example.com"   # forward to a real backend
+```
+
+Default behavior (when `routing.fallback` is unset): cloudflared returns
+HTTP 404 for unmatched hostnames.
+
+### Origin-request defaults
+
+Tunnel-wide defaults for the cloudflared `originRequest` block. Source
+objects (Routes / Services) can override these via annotations
+(`cloudflare.io/no-tls-verify`, `cloudflare.io/origin-server-name`).
+
+```yaml
+spec:
+  routing:
     originRequest:
-      noTLSVerify: false
+      noTLSVerify: false        # default: verify origin TLS
+      # originServerName: "expected SAN on origin cert"
 ```
 
-`routing.defaultBackend` handles traffic that no `CloudflareTunnelRule` matches. It is rendered as the second-to-last entry in the cloudflared ingress list (before the auto-appended `http_status:404` catch-all that the operator always writes at the end).
+> **Heads up:** the CRD's `TunnelOriginRequest` shape currently
+> models only `noTLSVerify` + `originServerName`. The full
+> Cloudflared origin-request surface (`connectTimeout`,
+> `keepAliveTimeout`, `tlsTimeout`, `http2Origin`, etc.) is not yet
+> exposed via this CR. Backlog item for a future API revision.
 
-`routing.originRequest` sets defaults applied to all rules unless overridden by an individual rule's `originRequest`.
+## The Status surface
 
-If you have no `routing.defaultBackend`, unmatched traffic returns a 404 from cloudflared.
+Watch these fields when something isn't behaving:
 
-### Rendered cloudflared config.yaml order
-
-```
-1. All CloudflareTunnelRule entries, sorted by priority descending, then name ascending
-2. spec.routing.defaultBackend (if set)
-3. service: http_status:404    ← always auto-appended; do not write it manually
-```
-
-The operator owns the final `http_status:404`. Any catch-all intent goes through `routing.defaultBackend`.
-
----
-
-## Primary apex hostname
-
-A `CloudflareTunnel` may declare an opt-in *apex hostname* — a single
-operator-managed FQDN that CNAMEs to the underlying tunnel UUID. When set,
-per-route DNS records emitted by the HTTPRoute and Service source
-controllers CNAME to this apex instead of carrying the tunnel UUID
-themselves.
-
-**Why:** without an apex, a tunnel UUID rotation requires updating every
-per-route record. With one, only the apex record moves; per-route records
-keep pointing at the stable apex name.
-
-```yaml
-apiVersion: cloudflare.io/v1alpha1
-kind: CloudflareTunnel
-metadata:
-  name: external-edge
-  namespace: cloudflare
-spec:
-  name: external-edge
-  secretRef:
-    name: cloudflare-credentials
-  generatedSecretName: external-edge-credentials
-  apexHostname:
-    name: edge.example.com
-    zoneRef:
-      name: example-com
-    proxied: true            # default true; orange-cloud the apex
-```
-
-**What the operator manages:**
-
-- A `CloudflareDNSRecord` named `<tunnel-name>-apex` (here:
-  `external-edge-apex`), in the same namespace as the tunnel,
-  owner-reffed to the tunnel — Kubernetes garbage-collects it when the
-  tunnel is deleted.
-- The apex CNAME's content tracks `Status.TunnelCNAME`, so a tunnel UUID
-  rotation results in exactly one Cloudflare API write (the apex update);
-  per-route records do not move.
-
-**Per-route record content** (HTTPRoute / Service source controllers):
-
-| Tunnel state | Per-route CNAME content |
+| Field | What it means |
 |---|---|
-| `spec.apexHostname` unset | `<tunnel-uuid>.cfargotunnel.com` (legacy / direct) |
-| `spec.apexHostname` set, apex *not* yet Ready | `<tunnel-uuid>.cfargotunnel.com` (fallback during transition) |
-| `spec.apexHostname` set, apex Ready | `<spec.apexHostname.name>` |
+| `Phase` | Pending / Reconciling / Ready / Error — coarse summary. See [`troubleshooting.md`](troubleshooting.md). |
+| `Conditions[Ready]` | The detailed Ready condition; `reason` + `message` carry the why. |
+| `Conditions[ConnectorReady]` | Cloudflared connector pods are actively connected to Cloudflare's edge. False can mean pods crashed, egress is blocked, or the connector token is invalid. |
+| `Conditions[RemoteConfigApplied]` | The last `/configurations` PUT to Cloudflare succeeded (matches `ObservedIngress`). |
+| `TunnelID` | The Cloudflare-assigned UUID. Populated after first successful create. |
+| `TunnelCNAME` | `<tunnelID>.cfargotunnel.com`. The DNS target that records point at. |
+| `ConnectionsHealthy` | Count of active connectors observed via Cloudflare's API. Zero means no healthy connectors — usually pairs with `ConnectorReady=False`. |
+| `ObservedIngress` | The last successfully applied ingress list. Used for the G optimization in Slice 2 (skip GetConfiguration when `wantSnap == ObservedIngress`). |
+| `ObservedDataplaneDeploymentHash` / `ObservedDataplaneServiceHash` | sha256 of the last successfully applied Deployment / Service. Used for the H optimization (skip Apply when nothing changed). |
+| `AttachedSources` | Lexicographically-sorted list of sources (Gateways / Routes / Services) currently contributing ingress rules to this tunnel. Informational. |
+| `LastSyncedAt` | Wall-clock of the last successful reconcile. |
+| `LastReconcileToken` | Acked `cloudflare.io/reconcile-at` annotation value. See [`reconciliation.md`](reconciliation.md). |
 
-**Status:** `Status.ApexHostname` reflects the resolved name and the
-underlying record ID; `ApexHostnameReady` is the dedicated condition.
-The tunnel's overall `Ready` condition is independent — a misconfigured
-apex does not take down a working tunnel.
+## Cascade-GC
 
-**Validation:** the operator checks at reconcile time that
-`spec.apexHostname.name` is a valid DNS name and falls under the zone
-referenced by `spec.apexHostname.zoneRef`. Mismatches set
-`ApexHostnameReady=False, ReasonInvalidSpec`.
+Auto-created tunnel CRs are eligible for **cascade-GC**: when their
+last source detaches and the CR carries
+`cloudflare.io/auto-created: "true"` (OR the standard source-owner
+labels the operator stamps), the operator self-deletes the CR. The
+deletion cascades to the Deployment / Service / Secret via
+owner-references; the Cloudflare-side tunnel is removed by the
+operator's finalizer.
 
-**Collision policy:** if a different `CloudflareDNSRecord` CR in the same
-namespace already claims `spec.apexHostname.name`, the operator refuses
-to upsert and sets `ApexHostnameReady=False,
-ReasonRecordOwnershipConflict` — the pre-existing CR is left alone.
-Resolve manually by either deleting the conflicting CR or renaming the
-apex.
+Direct-create CRs (lacking `cloudflare.io/auto-created`) are NEVER
+cascade-GC'd. Even when `Status.AttachedSources` is empty, the
+operator keeps the tunnel up. You own its lifecycle.
 
-**Removal:** clearing `spec.apexHostname` GCs the apex CR and per-route
-records revert to direct `<uuid>.cfargotunnel.com` content on their next
-reconcile.
+To check whether a given tunnel is cascade-GC-eligible:
 
----
-
-## Hand-Authored `CloudflareTunnelRule`
-
-Source controllers emit `CloudflareTunnelRule` CRs automatically. You can also write them by hand for cases that the annotation sources don't cover — for example, explicit `http_status` rejections, custom `originRequest` settings, or backends not reachable from a Service reference.
-
-```yaml
-apiVersion: cloudflare.io/v1alpha1
-kind: CloudflareTunnelRule
-metadata:
-  name: myapp-rule
-  namespace: apps
-spec:
-  tunnelRef:
-    name: prod
-    namespace: network        # omit if rule is in the same namespace as the tunnel
-  hostnames:
-    - "app.example.com"
-    - "api.example.com"
-  backend:
-    serviceRef:
-      name: myapp
-      namespace: apps
-      port: 8080
-      scheme: http            # http | https | h2c | tcp
-  originRequest:
-    noTLSVerify: false
-    connectTimeout: 30s
-  priority: 100               # higher = evaluated earlier; default 100
+```sh
+kubectl get cloudflaretunnel/<name> -n <ns> \
+  -o jsonpath='{.metadata.annotations.cloudflare\.io/auto-created}{"\n"}'
 ```
 
-### Backend forms
+If the output is `true`, cascade-GC is in play. Empty / absent means
+direct-create and you delete it yourself.
 
-`backend` is a discriminated union; exactly one of the three must be set:
+## Common patterns + gotchas
 
-- **`serviceRef`** — routes to a Kubernetes Service. The operator resolves `http://myapp.apps.svc.cluster.local:8080` at render time from the Service's cluster DNS name.
-- **`url`** — raw backend URL. Use for any backend not expressible as a Service reference.
-- **`httpStatus`** — produces a cloudflared `http_status:<code>` entry. Use for explicit rejection rules.
+### "The tunnel says Ready=True but no traffic flows"
 
-```yaml
-# Reject at a specific hostname
-spec:
-  backend:
-    httpStatus: 404
+`Ready=True` only requires `RemoteConfigApplied=True` and (typically)
+`ConnectorReady=True`. It does NOT verify that cloudflared can reach
+your backends. Check:
 
-# Route to an arbitrary URL
-spec:
-  backend:
-    url: "https://upstream.internal.example.com:8443"
-```
+- `kubectl get pods -n <ns> -l app=cloudflared-<name>` — pods running?
+- `kubectl logs -n <ns> -l app=cloudflared-<name>` — any backend
+  errors?
+- DNS-side: `dig <hostname>` from outside the cluster — does it
+  resolve to the tunnel CNAME?
 
-### Port and scheme inference
+### "ConnectorReady stays False"
 
-If `backend.serviceRef.scheme` is omitted, the operator infers it from the Service's port name:
-- Port named `http` → `http`
-- Port named `https` → `https`
-- Port named `grpc` → `h2c`
-- Anything else → `http`
+Most likely cloudflared can't reach Cloudflare's edge. Check:
 
----
+- Pod logs for "Unable to connect to Cloudflare edge" or similar.
+- NetworkPolicy egress to `*.argotunnel.com`, `*.cloudflareclient.com`.
+- The connector-token Secret — `kubectl get secret -n <ns>
+  cloudflared-<name>-token` — should exist with a non-empty `token`
+  key.
 
-## Aggregation Semantics
+### "Two CRs want the same tunnel"
 
-The tunnel controller aggregates all `CloudflareTunnelRule` CRs referencing a tunnel cluster-wide on every reconcile. Aggregation is deterministic.
+Don't. The Cloudflare API treats tunnel names as unique within an
+account. Two CRs (or two operators) trying to create the same name
+will collide; one wins, the other surfaces `Error`. Pick distinct
+names.
 
-### Sorting
+### "I want to scale connector pods up"
 
-Rules are sorted: **priority descending**, then **name ascending**. Higher-priority rules appear earlier in the cloudflared ingress list, so cloudflared matches them first.
+Set `spec.connector.replicas`. There's no HPA — the operator doesn't
+auto-scale based on traffic. If you need that, layer a separate HPA
+manually on the Deployment the operator creates (the Deployment's
+selector labels are stable, so a manual HPA is durable across
+reconciles).
 
-### Wildcard-specificity tiebreak
+### "Cloudflared is OOM-killed"
 
-When two rules have the same priority and similar hostnames (e.g., `*.example.com` vs. `app.example.com`), the more-specific hostname (`app.example.com`) wins the sort, appearing before the wildcard. This mirrors cloudflared's own matching semantics (first-match wins for exact before wildcard).
+Bump `spec.connector.resources.limits.memory`. The default 256Mi is
+fine for low-traffic; high-throughput tunnels (QUIC, many backends,
+many concurrent connections) can need more.
 
-### Duplicate hostname detection
+## Related
 
-If two rules claim the same hostname at the same aggregation rank, the first rule (by sort order) wins and gets `TunnelAccepted=True`. The losing rule gets `TunnelAccepted=False, reason=DuplicateHostname`. The tunnel controller is the only writer of `CloudflareTunnelRule.status`.
-
-### Hand-authored vs. annotation-sourced
-
-Hand-authored rules and annotation-sourced rules are peers in aggregation. Priority determines order. If you want a hand-authored rule to take precedence over an annotation-sourced rule on the same hostname, set a higher `priority` value.
-
----
-
-## `CloudflareTunnelRule` Status
-
-After aggregation, each rule's status reflects the tunnel controller's decision:
-
-```bash
-kubectl get cloudflaretunnelrule -n apps -o wide
-
-kubectl describe cloudflaretunnelrule myapp-rule -n apps
-```
-
-Conditions:
-
-| Condition | Meaning |
-|---|---|
-| `Valid=True` | Spec passed validation |
-| `TunnelAccepted=True` | Included in the last aggregation render |
-| `TunnelAccepted=False, reason=DuplicateHostname` | A higher-priority rule claimed one of this rule's hostnames |
-| `Conflict=True` | This rule was excluded due to hostname collision |
-
-`status.resolvedBackend` shows the URL cloudflared was configured with.
-`status.appliedToConfigHash` shows the config hash at the time this rule was included (useful for debugging drift).
-
----
-
-## Migrating from Self-Managed cloudflared
-
-If you currently run your own cloudflared Deployment:
-
-1. Keep `connector.enabled: false` (or omit it).
-2. Author `CloudflareTunnelRule` CRs (or annotate sources) to mirror your current cloudflared `config.yaml`.
-3. Apply the `CloudflareTunnel` CR. The operator reconciles the rules and writes `status.connector.configHash`, but does **not** render a ConfigMap while `connector.enabled` is `false`.
-4. Set `connector.enabled: true`. The operator creates the managed `ServiceAccount`, `ConfigMap`, and `Deployment`, then compare the rendered ConfigMap against your hand-rolled config:
-
-   ```bash
-   kubectl get configmap cloudflared-prod-config -n network -o yaml
-   ```
-
-5. Once satisfied, delete your hand-rolled Deployment. Brief overlap is safe — cloudflared supports multiple connectors per tunnel.
-
-There is no in-place takeover of an existing Deployment. If the operator finds a Deployment with the expected name that it does not own (no ownerRef pointing at the `CloudflareTunnel`), it logs `AggregationFailed` and requeues — it will not overwrite the Deployment. Delete or rename the conflicting Deployment to let the operator proceed.
+- [`gateway-api.md`](gateway-api.md) — annotation-driven attachment +
+  the auto-created lifecycle.
+- [`annotations.md`](annotations.md) — `cloudflare.io/tunnel`,
+  `cloudflare.io/tunnel-name`, `cloudflare.io/auto-created` reference.
+- [`reconciliation.md`](reconciliation.md) — when the next reconcile
+  fires + the force-reconcile annotation.
+- [`troubleshooting.md`](troubleshooting.md) — `Phase=Error` and
+  `ConnectorReady=False` diagnostic flow.
+- [`credentials.md`](credentials.md) — credential resolution.
+- [`examples/cloudflare_v2alpha1_cloudflaretunnel.yaml`](../examples/cloudflare_v2alpha1_cloudflaretunnel.yaml) — direct-create sample.

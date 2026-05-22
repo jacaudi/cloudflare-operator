@@ -1,0 +1,327 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
+// Package zone contains the four reconcilers that make up the zone bundle:
+// CloudflareZone, CloudflareZoneConfig, CloudflareDNSRecord, CloudflareRuleset.
+package zone
+
+import (
+	"context"
+	stderrors "errors"
+	"sync"
+	"time"
+
+	"k8s.io/apimachinery/pkg/api/equality"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
+	"github.com/jacaudi/cloudflare-operator/internal/cloudflare"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	"github.com/jacaudi/cloudflare-operator/internal/reconcile"
+)
+
+// defaultZoneInterval is the fallback requeue interval when Spec.Interval is unset.
+const defaultZoneInterval = 30 * time.Minute
+
+// CloudflareZoneReconciler drives the lifecycle of a CloudflareZone CR:
+// credentials → create-or-adopt the zone on Cloudflare → reflect status →
+// activation poke while pending → delete (with optional zone removal).
+type CloudflareZoneReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+	// Recorder is wired by the manager setup (T18). T14 does not currently
+	// emit events; future reasons may.
+	Recorder     record.EventRecorder
+	recorder     *conventions.SafeRecorder
+	recorderOnce sync.Once
+
+	// ZoneClientFn returns a Cloudflare ZoneClient for the resolved credentials.
+	// Tests inject an in-memory mock; production wires NewZoneClientFromCF.
+	ZoneClientFn func(cloudflare.Credentials) (cloudflare.ZoneClient, error)
+
+	// CFClientFn returns the raw cloudflare-go wrapper, needed to drain the
+	// zone hold before DeleteZone on the DeletionPolicyDelete path. Optional;
+	// when nil, the hold-drain step is skipped (best-effort).
+	CFClientFn func(cloudflare.Credentials) (*cloudflare.Client, error)
+
+	// DrainHoldFn drains the zone hold before DeleteZone on the delete path.
+	// When non-nil, this overrides the default CFClientFn → cloudflare.DrainZoneHold
+	// chain — used primarily for test injection. Production wiring leaves this nil
+	// and relies on CFClientFn.
+	//
+	// The hold drain is best-effort: any error returned is logged and execution
+	// continues to DeleteZone.
+	DrainHoldFn func(ctx context.Context, zoneID string) error
+}
+
+// +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarezones,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarezones/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cloudflare-operator.cloudflare.io,resources=cloudflarezones/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
+// ensureRecorder lazily initializes r.recorder on first Reconcile. Tests
+// that construct the reconciler without calling SetupWithManager (i.e. without
+// setting r.Recorder) get a SafeRecorder wrapping nil, which is a safe no-op.
+// sync.Once-guarded per MaxConcurrentReconciles > 1; matches ensureTracker idiom.
+func (r *CloudflareZoneReconciler) ensureRecorder() {
+	r.recorderOnce.Do(func() {
+		if r.recorder == nil {
+			r.recorder = conventions.NewSafeRecorder(r.Recorder)
+		}
+	})
+}
+
+// Reconcile drives one iteration of the CloudflareZone state machine.
+func (r *CloudflareZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.ensureRecorder()
+	logger := log.FromContext(ctx).WithValues("cloudflarezone", req.NamespacedName)
+
+	var z v2alpha1.CloudflareZone
+	if err := r.Get(ctx, req.NamespacedName, &z); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Feature F prelude: check whether a force-reconcile was requested via the
+	// cloudflare.io/reconcile-at annotation.  Evaluated after the Get so we
+	// have both the live annotation and the persisted ack in status.
+	forceReconcile := reconcile.ForceReconcileRequested(
+		z.Annotations[conventions.AnnotationReconcileAt],
+		z.Status.LastReconcileToken,
+	)
+
+	if !z.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &z)
+	}
+
+	if reconcile.EnsureFinalizer(&z, conventions.FinalizerName) {
+		if err := r.Update(ctx, &z); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	creds, halt, err := reconcile.LoadCredentialsHierarchical(ctx, r.Client, z.Spec.Cloudflare, z.Namespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if halt != nil {
+		return reconcile.HaltCredentialsUnavailable(ctx, r.Client, &z, &z.Status.Conditions, &z.Status.Phase, halt)
+	}
+
+	// Snapshot status before reconcile work so the trailing Status().Update
+	// can be skipped when nothing material changed. reflectZoneStatus stamps
+	// LastSyncedAt + ObservedGeneration each pass; we mask those for the
+	// comparison below.
+	originalStatus := z.Status.DeepCopy()
+
+	zc, err := r.ZoneClientFn(creds)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Create-or-adopt: if we have no ZoneID, look one up by name, else create.
+	if z.Status.ZoneID == "" {
+		existing, lerr := zc.ListZonesByName(ctx, creds.AccountID, z.Spec.Name)
+		if lerr != nil {
+			return ctrl.Result{}, lerr
+		}
+		if len(existing) > 0 {
+			z.Status.ZoneID = existing[0].ID
+			logger.Info("adopted existing zone", "zoneID", z.Status.ZoneID, "name", z.Spec.Name)
+		} else {
+			created, cerr := zc.CreateZone(ctx, creds.AccountID, cloudflare.ZoneParams{
+				Name: z.Spec.Name,
+				Type: z.Spec.Type,
+			})
+			if cerr != nil {
+				return ctrl.Result{}, cerr
+			}
+			z.Status.ZoneID = created.ID
+			logger.Info("created zone", "zoneID", z.Status.ZoneID, "name", z.Spec.Name)
+		}
+	}
+
+	got, err := zc.GetZone(ctx, z.Status.ZoneID)
+	if err != nil {
+		if stderrors.Is(err, cloudflare.ErrZoneNotFound) {
+			// Zone disappeared from Cloudflare — clear and requeue to recreate/adopt.
+			z.Status.ZoneID = ""
+			if uerr := r.Status().Update(ctx, &z); uerr != nil {
+				return ctrl.Result{}, uerr
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Reflect observed state.
+	now := metav1.Now()
+	reflectZoneStatus(&z, got, now)
+
+	switch got.Status {
+	case v2alpha1.ZoneStatusActive:
+		z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
+			conventions.ConditionTypeReady, metav1.ConditionTrue,
+			conventions.ReasonZoneActivated, "zone is active")
+		z.Status.Phase = v2alpha1.PhaseReady
+	case v2alpha1.ZoneStatusPending, v2alpha1.ZoneStatusInitializing:
+		// Pending / initializing path:
+		//
+		// Cloudflare's TriggerActivationCheck is documented as asynchronous —
+		// it queues an NS check and returns immediately, with the zone
+		// flipping to active only when the check actually runs (minutes to
+		// hours later). For production traffic we'd unconditionally surface
+		// ZoneActivating here.
+		//
+		// However, the in-memory mock used in unit tests flips status
+		// synchronously inside TriggerActivationCheck. To make the reconciler
+		// observe that flip in the same pass (and to handle the rare case
+		// where real Cloudflare does return active quickly), we re-Get and
+		// re-reflect the full snapshot before falling back to the Reconciling
+		// branch. Against real Cloudflare this re-Get almost always shows
+		// pending again, so the cost is one extra API call per reconcile of a
+		// pending zone.
+		//
+		// We re-run the *full* reflect (not just Status.Status) so that
+		// observed fields like NameServers and ActivatedOn stay consistent
+		// with the persisted Status string — otherwise we'd write
+		// Status=active with stale NameServers/ActivatedOn from the pre-poke
+		// snapshot.
+		if terr := zc.TriggerActivationCheck(ctx, z.Status.ZoneID); terr != nil {
+			logger.Info("activation check poke failed (continuing)", "err", terr.Error())
+		} else if refreshed, gerr := zc.GetZone(ctx, z.Status.ZoneID); gerr == nil && refreshed != nil {
+			reflectZoneStatus(&z, refreshed, now)
+		} else if gerr != nil {
+			logger.V(1).Info("activation refresh GetZone failed", "err", gerr.Error())
+		}
+		if z.Status.Status == v2alpha1.ZoneStatusActive {
+			z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
+				conventions.ConditionTypeReady, metav1.ConditionTrue,
+				conventions.ReasonZoneActivated, "zone is active")
+			z.Status.Phase = v2alpha1.PhaseReady
+		} else {
+			z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
+				conventions.ConditionTypeReady, metav1.ConditionFalse,
+				conventions.ReasonZoneActivating, "awaiting NS delegation")
+			z.Status.Phase = v2alpha1.PhaseReconciling
+		}
+	default:
+		z.Status.Conditions = reconcile.SetCondition(z.Status.Conditions,
+			conventions.ConditionTypeReady, metav1.ConditionUnknown,
+			conventions.ReasonReconciling, "zone status: "+got.Status)
+		z.Status.Phase = v2alpha1.PhasePending
+	}
+
+	_, uerr := reconcile.UpdateStatusIfChanged(
+		ctx,
+		r.Client,
+		&z,
+		&z.Status,
+		originalStatus,
+		forceReconcile,
+		z.Annotations[conventions.AnnotationReconcileAt],
+		func() bool {
+			candidate := z.Status.DeepCopy()
+			candidate.LastSyncedAt = originalStatus.LastSyncedAt
+			candidate.ObservedGeneration = originalStatus.ObservedGeneration
+			return !equality.Semantic.DeepEqual(originalStatus, candidate)
+		},
+	)
+	if uerr != nil {
+		return ctrl.Result{}, uerr
+	}
+
+	return ctrl.Result{RequeueAfter: reconcile.ResolveInterval(z.Spec.Interval, defaultZoneInterval)}, nil
+}
+
+// reconcileDelete handles the deletion path: optionally remove the zone on
+// Cloudflare (DeletionPolicyDelete), then drop the finalizer. The CR is
+// already deletion-marked so no status update is attempted.
+func (r *CloudflareZoneReconciler) reconcileDelete(ctx context.Context, z *v2alpha1.CloudflareZone) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	if z.Status.ZoneID != "" && z.Spec.DeletionPolicy == v2alpha1.DeletionPolicyDelete {
+		creds, halt, err := reconcile.LoadCredentialsHierarchical(ctx, r.Client, z.Spec.Cloudflare, z.Namespace)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if halt != nil {
+			// Cannot delete on CF side without creds — leave the finalizer in
+			// place and requeue so the user can correct the credential ref.
+			return *halt, nil
+		}
+
+		zc, err := r.ZoneClientFn(creds)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Best-effort: drain any hold before delete. The hold drain is allowed to
+		// fail (logged-not-returned) so that a stuck-hold endpoint never blocks
+		// finalizer release.
+		if drainErr := r.drainZoneHold(ctx, creds, z.Status.ZoneID); drainErr != nil {
+			logger.Info("zone hold drain failed (continuing)", "err", drainErr.Error())
+		}
+
+		if derr := reconcile.WrapDeleteErr(zc.DeleteZone(ctx, z.Status.ZoneID)); derr != nil {
+			return ctrl.Result{}, derr
+		}
+		logger.Info("deleted zone on Cloudflare", "zoneID", z.Status.ZoneID)
+	}
+
+	if reconcile.RemoveFinalizer(z, conventions.FinalizerName) {
+		if err := r.Update(ctx, z); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{}, nil
+}
+
+// drainZoneHold resolves the drain implementation: prefer DrainHoldFn (test
+// injection); fall back to CFClientFn → cloudflare.DrainZoneHold (production).
+// Returns nil if neither is configured (the drain is best-effort).
+func (r *CloudflareZoneReconciler) drainZoneHold(ctx context.Context, creds cloudflare.Credentials, zoneID string) error {
+	if r.DrainHoldFn != nil {
+		return r.DrainHoldFn(ctx, zoneID)
+	}
+	if r.CFClientFn == nil {
+		return nil
+	}
+	cf, err := r.CFClientFn(creds)
+	if err != nil {
+		return err
+	}
+	if cf == nil {
+		return nil
+	}
+	return cloudflare.DrainZoneHold(ctx, cf.CF(), zoneID)
+}
+
+// reflectZoneStatus copies observed fields from a cloudflare.Zone into the
+// CR's status. The caller is responsible for the subsequent r.Status().Update.
+// Passing the `now` timestamp in (rather than calling metav1.Now() inside)
+// keeps LastSyncedAt consistent across multiple reflect calls within the same
+// reconcile pass.
+func reflectZoneStatus(z *v2alpha1.CloudflareZone, observed *cloudflare.Zone, now metav1.Time) {
+	z.Status.Status = observed.Status
+	z.Status.NameServers = observed.NameServers
+	z.Status.OriginalNameServers = observed.OriginalNameServers
+	z.Status.OriginalRegistrar = observed.OriginalRegistrar
+	z.Status.ActivatedOn = nil
+	if observed.ActivatedOn != nil {
+		t := metav1.NewTime(*observed.ActivatedOn)
+		z.Status.ActivatedOn = &t
+	}
+	z.Status.LastSyncedAt = &now
+	z.Status.ObservedGeneration = z.Generation
+}

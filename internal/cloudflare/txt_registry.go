@@ -1,17 +1,8 @@
 /*
-Copyright 2026.
+Copyright (c) 2026 jacaudi
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
 */
 
 package cloudflare
@@ -21,234 +12,247 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
 )
 
-// RegistryPayload is the decoded external-dns-compatible TXT registry entry.
-//
-// Wire format:
-//
-//	"heritage=external-dns,external-dns/owner=<owner>,external-dns/resource=<kind>/<ns>/<name>"
-//
-// SourceKind / SourceNamespace / SourceName may be empty for legacy external-dns
-// registry entries that only carry owner information. Callers should treat
-// missing resource information as "adoptable but unlinked".
+// RegistryPayload is the JSON schema for a TXT companion record (V=1).
+// Field names are compact because Cloudflare TXT records are capped at
+// 1024 bytes; every character counts when a record may carry multiple
+// ownership claims. Decoders must reject payloads whose V field is not
+// equal to 1.
 type RegistryPayload struct {
-	Owner           string
-	SourceKind      string
-	SourceNamespace string
-	SourceName      string
+	// V is the schema version. Only V=1 is recognised.
+	V int `json:"v"`
+	// K is the Kubernetes resource kind (e.g. "CloudflareDNSRecord").
+	K string `json:"k"`
+	// NS is the Kubernetes namespace of the owning object.
+	NS string `json:"ns"`
+	// N is the Kubernetes name of the owning object.
+	N string `json:"n"`
+	// H is an optional content hash of the owned record (sha256:<hex>).
+	// Omitted when unknown or not yet computed.
+	H string `json:"h,omitempty"`
 }
 
-// AffixConfig controls how the companion TXT's record name is derived from the
-// managed record's FQDN. Defaults (all empty strings) yield external-dns's
-// default affix scheme.
-type AffixConfig struct {
-	Prefix              string
-	Suffix              string
-	WildcardReplacement string
-}
-
-// ErrRegistryMalformed is returned when a TXT payload cannot be parsed as an
-// external-dns registry entry.
+// AffixName returns the name of the companion TXT record for a DNS record
+// identified by name. The companion is the hostname with `prefix + "."`
+// prepended as a new leftmost label, so it is ALWAYS a real subdomain that
+// ends in the same zone as the hostname. This is robust by construction:
+// Cloudflare never zone-appends it, and an exact-name List always finds it
+// (the S1 fix for the external-jacaudi 81058 loop — see design 2026-05-19
+// §4.1; the old "collapse all-but-last label" scheme produced names not
+// ending in the zone for multi-label zones).
 //
-// This error deliberately covers BOTH cases:
-//  1. The TXT is not an external-dns registry record at all (e.g. an SPF
-//     record, a user-managed TXT, or any other non-registry payload whose
-//     heritage key is missing or not "external-dns").
-//  2. The TXT looks like a registry record but is structurally invalid
-//     (e.g. missing owner, malformed resource tuple, missing '=' separator).
+// A wildcard label ("*") is mapped per-label to the "_wildcard" sentinel so
+// the companion name is never a literal-'*' DNS name.
 //
-// Callers MUST NOT try to distinguish these two cases: both mean "do not
-// treat this TXT as ownership metadata." Wrapping them under a single
-// sentinel keeps adoption logic simple — any error from DecodeRegistryPayload
-// means "ignore this record for registry purposes."
-var ErrRegistryMalformed = errors.New("txt registry: malformed payload")
-
-// EncodeRegistryPayload produces the canonical quoted wire form of a
-// RegistryPayload.
-func EncodeRegistryPayload(p RegistryPayload) string {
-	var b strings.Builder
-	b.WriteString(`"heritage=external-dns,external-dns/owner=`)
-	b.WriteString(p.Owner)
-	if p.SourceKind != "" {
-		b.WriteString(",external-dns/resource=")
-		b.WriteString(p.SourceKind)
-		b.WriteString("/")
-		b.WriteString(p.SourceNamespace)
-		b.WriteString("/")
-		b.WriteString(p.SourceName)
+//	AffixName("cf-txt", "test")          → "cf-txt.test"
+//	AffixName("cf-txt", "foo.test")      → "cf-txt.foo.test"
+//	AffixName("cf-txt", "foo.bar.test")  → "cf-txt.foo.bar.test"
+//	AffixName("cf-txt", "*.example.com") → "cf-txt._wildcard.example.com"
+//	AffixName("cf-txt", "*")             → "cf-txt._wildcard"
+func AffixName(prefix, name string) string {
+	segs := strings.Split(name, ".")
+	for i, s := range segs {
+		segs[i] = sanitizeLabel(s)
 	}
-	b.WriteString(`"`)
-	return b.String()
+	return prefix + "." + strings.Join(segs, ".")
 }
 
-// DecodeRegistryPayload parses the wire form produced by EncodeRegistryPayload.
-// Accepts both quoted and unquoted forms (Cloudflare's DNS API sometimes strips
-// surrounding quotes on read).
-func DecodeRegistryPayload(raw string) (RegistryPayload, error) {
-	s := strings.Trim(raw, `"`)
-	kv := map[string]string{}
-	for part := range strings.SplitSeq(s, ",") {
-		key, val, ok := strings.Cut(part, "=")
-		if !ok {
-			return RegistryPayload{}, fmt.Errorf("%w: missing '=' in %q", ErrRegistryMalformed, part)
-		}
-		kv[strings.TrimSpace(key)] = strings.TrimSpace(val)
+// sanitizeLabel maps a wildcard label ("*") to a reserved, asterisk-free
+// sentinel so the derived companion name is never a literal-'*' name (which
+// Cloudflare warns about) and is never itself a '*.' wildcard. Exact-equality
+// match: only a standalone "*" label is rewritten; no legitimate hostname has
+// a label equal to "*". Leading underscore keeps the sentinel out of the
+// normal-hostname space (collision with a real "_wildcard.<zone>" is a
+// documented accepted limitation — see design §8).
+func sanitizeLabel(label string) string {
+	if label == "*" {
+		return "_wildcard"
 	}
-	if kv["heritage"] != "external-dns" {
-		return RegistryPayload{}, fmt.Errorf("%w: heritage != external-dns", ErrRegistryMalformed)
+	return label
+}
+
+// ErrUnrecognizedCodec is returned by codec decoders when the TXT
+// record value is not a recognised format or the version field is
+// unknown. Reconcilers should map this error to
+// Reason=AdoptRefusedNoTXT so the record is left unowned.
+var ErrUnrecognizedCodec = errors.New("txt registry: unrecognized codec or malformed payload")
+
+// Codec encodes/decodes a RegistryPayload to/from a TXT record's content
+// string. Implementations: plaintextCodec (bare JSON; default),
+// aesCodec (v1:<nonce>:<ciphertext> AES-256-GCM; opt-in via key Secret),
+// autoDetectingCodec (read-side dispatcher; sniffs the v1: prefix, no Encode).
+type Codec interface {
+	Encode(payload RegistryPayload) (string, error)
+	Decode(s string) (RegistryPayload, error)
+	Kind() string
+}
+
+// plaintextCodec writes bare JSON; reads JSON OR rejects with
+// ErrUnrecognizedCodec when the input is anything else. Used when no key
+// Secret is configured (the v2alpha1 default).
+type plaintextCodec struct{}
+
+var _ Codec = plaintextCodec{}
+
+func (plaintextCodec) Encode(p RegistryPayload) (string, error) {
+	if p.V == 0 {
+		p.V = 1 // default — callers always intend v1 in v2alpha1
 	}
-	owner, ok := kv["external-dns/owner"]
-	if !ok || owner == "" {
-		return RegistryPayload{}, fmt.Errorf("%w: missing external-dns/owner", ErrRegistryMalformed)
+	b, err := json.Marshal(p)
+	if err != nil {
+		return "", fmt.Errorf("plaintext encode: %w", err)
 	}
-	p := RegistryPayload{Owner: owner}
-	if res := kv["external-dns/resource"]; res != "" {
-		parts := strings.SplitN(res, "/", 3)
-		if len(parts) != 3 {
-			return RegistryPayload{}, fmt.Errorf("%w: resource must be kind/ns/name, got %q", ErrRegistryMalformed, res)
-		}
-		p.SourceKind = parts[0]
-		p.SourceNamespace = parts[1]
-		p.SourceName = parts[2]
+	return string(b), nil
+}
+
+func (plaintextCodec) Decode(s string) (RegistryPayload, error) {
+	var p RegistryPayload
+	if err := json.Unmarshal([]byte(s), &p); err != nil {
+		return RegistryPayload{}, fmt.Errorf("plaintext decode: %w: %w", ErrUnrecognizedCodec, err)
+	}
+	if p.V != 1 {
+		return RegistryPayload{}, fmt.Errorf("plaintext decode: %w: unsupported schema version %d", ErrUnrecognizedCodec, p.V)
 	}
 	return p, nil
 }
 
-// AffixName returns the companion-TXT record name for a managed record at fqdn
-// with the given record type. Matches external-dns's default affix scheme.
-func AffixName(fqdn, recordType string, cfg AffixConfig) string {
-	// Replace wildcard leaf.
-	if cfg.WildcardReplacement != "" && strings.HasPrefix(fqdn, "*.") {
-		fqdn = cfg.WildcardReplacement + fqdn[1:] // "*.example.com" -> "any.example.com"
-	}
-	// Default type prefix if user hasn't configured a custom prefix/suffix.
-	typePrefix := ""
-	if cfg.Prefix == "" && cfg.Suffix == "" {
-		switch recordType {
-		case "A", "AAAA":
-			typePrefix = "a-"
-		case "CNAME":
-			typePrefix = "cname-"
-		default:
-			typePrefix = strings.ToLower(recordType) + "-"
-		}
-	}
-	switch {
-	case cfg.Prefix != "":
-		return cfg.Prefix + fqdn
-	case cfg.Suffix != "":
-		// Inject suffix before the first dot (the leaf label).
-		dot := strings.IndexByte(fqdn, '.')
-		if dot < 0 {
-			return fqdn + cfg.Suffix
-		}
-		return fqdn[:dot] + cfg.Suffix + fqdn[dot:]
-	default:
-		return typePrefix + fqdn
-	}
+func (plaintextCodec) Kind() string { return "plaintext" }
+
+// aesCodec writes "v1:<base64-nonce>:<base64-ciphertext>" using AES-256-GCM
+// with a 32-byte key loaded from the operator-configured Secret. The "v1:"
+// prefix is a stable, self-identifying envelope marker for the encrypted
+// format.
+type aesCodec struct {
+	key [32]byte
 }
 
-// EncryptPayload produces a base64-encoded AES-256-CBC ciphertext of plaintext
-// using key. The output format is external-dns-compatible:
-//
-//	base64( IV[16] || PKCS#7-padded-ciphertext )
-//
-// key MUST be 32 bytes (AES-256).
-func EncryptPayload(plaintext string, key []byte) (string, error) {
-	if len(key) != 32 {
-		return "", fmt.Errorf("encrypt: key must be 32 bytes (AES-256), got %d", len(key))
+var _ Codec = aesCodec{}
+
+func (c aesCodec) Encode(p RegistryPayload) (string, error) {
+	if p.V == 0 {
+		p.V = 1
 	}
-	block, err := aes.NewCipher(key)
+	pt, err := json.Marshal(p)
 	if err != nil {
-		return "", fmt.Errorf("encrypt: %w", err)
+		return "", fmt.Errorf("aes encode marshal: %w", err)
 	}
-	iv := make([]byte, aes.BlockSize)
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return "", fmt.Errorf("encrypt: iv: %w", err)
+	block, err := aes.NewCipher(c.key[:])
+	if err != nil {
+		return "", fmt.Errorf("aes cipher: %w", err)
 	}
-	padded := pkcs7Pad([]byte(plaintext), aes.BlockSize)
-	ciphertext := make([]byte, len(padded))
-	cbc := cipher.NewCBCEncrypter(block, iv)
-	cbc.CryptBlocks(ciphertext, padded)
-	return base64.StdEncoding.EncodeToString(append(iv, ciphertext...)), nil
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("aes gcm: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("aes nonce: %w", err)
+	}
+	ct := gcm.Seal(nil, nonce, pt, nil)
+	return "v1:" + base64.StdEncoding.EncodeToString(nonce) + ":" + base64.StdEncoding.EncodeToString(ct), nil
 }
 
-// DecryptPayload attempts to decrypt a base64-encoded AES-256-CBC ciphertext
-// using any key in keys (tried in order). If the input does not parse as
-// base64 or does not look encrypted at all, it is returned verbatim
-// (plaintext passthrough). If the input is encrypted but no key decrypts it
-// cleanly, returns an error.
-//
-// "Looks encrypted" is determined by base64 decoding successfully to at
-// least two AES blocks (IV + one block of ciphertext).
-func DecryptPayload(input string, keys [][]byte) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(input)
-	if err != nil || len(data) < aes.BlockSize*2 || len(data)%aes.BlockSize != 0 {
-		return input, nil // plaintext passthrough
+func (c aesCodec) Decode(s string) (RegistryPayload, error) {
+	parts := strings.SplitN(s, ":", 3)
+	if len(parts) != 3 || parts[0] != "v1" || parts[1] == "" || parts[2] == "" {
+		return RegistryPayload{}, fmt.Errorf("aes decode: %w: malformed v1 envelope", ErrUnrecognizedCodec)
 	}
-	if len(keys) == 0 {
-		return input, nil
+	nonce, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return RegistryPayload{}, fmt.Errorf("aes decode nonce: %w: %w", ErrUnrecognizedCodec, err)
 	}
-	iv, ct := data[:aes.BlockSize], data[aes.BlockSize:]
-	var lastErr error
-	for _, key := range keys {
-		if len(key) != 32 {
-			lastErr = fmt.Errorf("decrypt: key must be 32 bytes, got %d", len(key))
-			continue
-		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		plain := make([]byte, len(ct))
-		cbc := cipher.NewCBCDecrypter(block, iv)
-		cbc.CryptBlocks(plain, ct)
-		unpadded, ok := pkcs7Unpad(plain, aes.BlockSize)
-		if !ok {
-			lastErr = errors.New("decrypt: pkcs7 unpad failed")
-			continue
-		}
-		// Sanity: valid external-dns payloads always contain
-		// "heritage=external-dns".
-		if !strings.Contains(string(unpadded), "heritage=external-dns") {
-			lastErr = errors.New("decrypt: decoded bytes do not look like a registry payload")
-			continue
-		}
-		return string(unpadded), nil
+	ct, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return RegistryPayload{}, fmt.Errorf("aes decode ciphertext: %w: %w", ErrUnrecognizedCodec, err)
 	}
-	if lastErr == nil {
-		lastErr = errors.New("decrypt: no keys provided")
+	block, err := aes.NewCipher(c.key[:])
+	if err != nil {
+		return RegistryPayload{}, fmt.Errorf("aes decode cipher: %w", err)
 	}
-	return "", lastErr
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return RegistryPayload{}, fmt.Errorf("aes decode gcm: %w", err)
+	}
+	pt, err := gcm.Open(nil, nonce, ct, nil)
+	if err != nil {
+		return RegistryPayload{}, fmt.Errorf("aes decode open: %w: %w", ErrUnrecognizedCodec, err)
+	}
+	var p RegistryPayload
+	if err := json.Unmarshal(pt, &p); err != nil {
+		return RegistryPayload{}, fmt.Errorf("aes decode unmarshal: %w: %w", ErrUnrecognizedCodec, err)
+	}
+	if p.V != 1 {
+		return RegistryPayload{}, fmt.Errorf("aes decode: %w: unsupported schema version %d", ErrUnrecognizedCodec, p.V)
+	}
+	return p, nil
 }
 
-func pkcs7Pad(data []byte, blockSize int) []byte {
-	padLen := blockSize - (len(data) % blockSize)
-	pad := make([]byte, padLen)
-	for i := range pad {
-		pad[i] = byte(padLen)
-	}
-	return append(data, pad...)
+func (aesCodec) Kind() string { return "aes-gcm" }
+
+// autoDetectingCodec is the read-side wrapper for Decode. It sniffs the
+// "v1:" prefix: present + aes!=nil → aesCodec; otherwise → plaintextCodec.
+// Encode is not supported (panics) — the reconciler must use the explicit
+// configured encoder based on whether a key Secret is loaded.
+type autoDetectingCodec struct {
+	plain plaintextCodec
+	aes   *aesCodec
 }
 
-func pkcs7Unpad(data []byte, blockSize int) ([]byte, bool) {
-	if len(data) == 0 || len(data)%blockSize != 0 {
-		return nil, false
+var _ Codec = autoDetectingCodec{}
+
+// CodecKindFor reports which codec Decode would select for stored TXT
+// content, WITHOUT decoding: "aes-gcm" for the "v1:" prefix, "plaintext"
+// otherwise. Single source of truth for the read-side sniff shared by
+// autoDetectingCodec.Decode and status reporting. The two string values
+// match ObservedTXTPayload.Codec ("aes-gcm" / "plaintext").
+func CodecKindFor(s string) string {
+	if strings.HasPrefix(s, "v1:") {
+		return "aes-gcm"
 	}
-	padLen := int(data[len(data)-1])
-	if padLen == 0 || padLen > blockSize {
-		return nil, false
-	}
-	for i := len(data) - padLen; i < len(data); i++ {
-		if data[i] != byte(padLen) {
-			return nil, false
+	return "plaintext"
+}
+
+func (c autoDetectingCodec) Decode(s string) (RegistryPayload, error) {
+	if CodecKindFor(s) == "aes-gcm" {
+		if c.aes == nil {
+			return RegistryPayload{}, fmt.Errorf("auto-detect: %w: v1: input but no key configured", ErrUnrecognizedCodec)
 		}
+		return c.aes.Decode(s)
 	}
-	return data[:len(data)-padLen], true
+	return c.plain.Decode(s)
+}
+
+func (autoDetectingCodec) Encode(_ RegistryPayload) (string, error) {
+	panic("autoDetectingCodec.Encode: use the explicitly configured codec")
+}
+
+func (autoDetectingCodec) Kind() string { return "auto-detect" }
+
+// --- Exported constructors for reconciler use ---
+
+// NewPlaintextCodec returns the plaintext codec for reconciler use.
+func NewPlaintextCodec() Codec { return plaintextCodec{} }
+
+// NewAESCodec returns an AES-256-GCM codec for the given 32-byte key.
+func NewAESCodec(key [32]byte) Codec { return aesCodec{key: key} }
+
+// NewAutoDetectingCodec returns the read-side dispatcher. Pass the AES codec
+// (may be nil) to enable v1: dispatch; plaintext is always available.
+// If aes is not nil but is not an aesCodec, the AES path is disabled
+// defensively to prevent misuse.
+func NewAutoDetectingCodec(aes Codec) Codec {
+	if aes == nil {
+		return autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	}
+	if a, ok := aes.(aesCodec); ok {
+		return autoDetectingCodec{plain: plaintextCodec{}, aes: &a}
+	}
+	// Defensive: caller passed a non-aesCodec — disable encrypted path.
+	return autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
 }

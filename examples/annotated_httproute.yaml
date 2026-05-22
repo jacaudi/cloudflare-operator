@@ -1,0 +1,74 @@
+# Annotated HTTPRoute — canonical attachment to a tunnel-enabled Gateway.
+#
+# Self-contained sample: applies a tunnel-enabled Gateway AND an HTTPRoute
+# that attaches to it via parentRefs. When applied, the operator:
+#   1. Auto-creates a CloudflareTunnel CR in the same namespace.
+#   2. Spawns the cloudflared dataplane Deployment.
+#   3. Emits a CloudflareDNSRecord CR for each hostname on the Route,
+#      proxied per the Gateway's `cloudflare.io/proxied: "true"` default.
+#
+# IMPORTANT: the `cloudflare.io/tunnel` opt-in lives ONLY on the Gateway.
+# Routes do NOT need their own `cloudflare.io/tunnel` annotation; they
+# are picked up purely via the Gateway-API parentRef relationship.
+#
+# This sample demonstrates the INHERITANCE flow: the emitted DNSRecord
+# inherits `zone-ref`, `proxied`, `ttl`, etc. from the Gateway — the
+# Route doesn't need to set them. See annotated_httproute_override.yaml
+# for the per-Route override pattern (depends on the same Gateway
+# below; apply this file first or apply annotated_gateway.yaml).
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: example-gateway
+  namespace: default
+  annotations:
+    cloudflare.io/tunnel: "true"
+    cloudflare.io/zone-ref: example-com
+    cloudflare.io/proxied: "true"
+    cloudflare.io/ttl: "1"
+spec:
+  gatewayClassName: example-gateway-class
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.example.com"
+      allowedRoutes:
+        namespaces:
+          from: Same
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: example-com-tls
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: app-route
+  namespace: default
+  # No cloudflare.io annotations on the Route itself — everything is
+  # inherited from the Gateway above.
+spec:
+  parentRefs:
+    - name: example-gateway
+      # Sectional refs are supported; omit `sectionName` to attach to all
+      # of the Gateway's listeners whose hostname allows this Route's
+      # hostnames.
+      # sectionName: https
+
+  # Hostnames this Route handles. Each one becomes a CloudflareDNSRecord
+  # CR pointing at the tunnel's CNAME (proxied per the Gateway default).
+  hostnames:
+    - app.example.com
+    - api.example.com
+
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: app-backend
+          port: 8080

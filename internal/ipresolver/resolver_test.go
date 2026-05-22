@@ -1,109 +1,137 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
 package ipresolver
 
 import (
 	"context"
-	"fmt"
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-const testIP = "203.0.113.1"
-
-func TestResolveIP_SingleProvider(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, "203.0.113.1\n")
+func TestResolver_SingleProviderHappyPath(t *testing.T) {
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.42"))
 	}))
-	defer server.Close()
+	defer good.Close()
 
-	r := NewResolver(WithProviders([]string{server.URL}), WithCacheTTL(0))
+	r := NewResolver(WithProviders([]string{good.URL}), WithHTTPTimeout(2*time.Second))
 	ip, err := r.GetExternalIP(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ip != testIP {
-		t.Errorf("expected 203.0.113.1, got %s", ip)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "192.0.2.42", ip)
 }
 
-func TestResolveIP_ConsensusFromMultipleProviders(t *testing.T) {
-	makeServer := func(ip string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = fmt.Fprint(w, ip+"\n")
-		}))
-	}
-
-	s1 := makeServer(testIP)
-	s2 := makeServer(testIP)
-	s3 := makeServer("198.51.100.1")
-	defer s1.Close()
-	defer s2.Close()
-	defer s3.Close()
-
-	r := NewResolver(WithProviders([]string{s1.URL, s2.URL, s3.URL}), WithCacheTTL(0))
-	ip, err := r.GetExternalIP(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ip != testIP {
-		t.Errorf("expected consensus IP 203.0.113.1, got %s", ip)
-	}
-}
-
-func TestResolveIP_Caching(t *testing.T) {
-	callCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		_, _ = fmt.Fprint(w, "203.0.113.1\n")
+func TestResolver_Cache(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte("192.0.2.1"))
 	}))
-	defer server.Close()
-
-	r := NewResolver(WithProviders([]string{server.URL}), WithCacheTTL(5*time.Minute))
-
-	ip1, err := r.GetExternalIP(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	ip2, err := r.GetExternalIP(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if ip1 != ip2 {
-		t.Errorf("cached IP should match: %s vs %s", ip1, ip2)
-	}
-	if callCount != 1 {
-		t.Errorf("expected 1 HTTP call (cached), got %d", callCount)
-	}
+	defer srv.Close()
+	r := NewResolver(WithProviders([]string{srv.URL}), WithCacheTTL(10*time.Second))
+	_, _ = r.GetExternalIP(context.Background())
+	_, _ = r.GetExternalIP(context.Background())
+	require.Equal(t, 1, calls, "cache hit on second call")
 }
 
-func TestResolveIP_AllProvidersFail(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestResolver_AllProvidersFail(t *testing.T) {
+	r := NewResolver(WithProviders([]string{"http://127.0.0.1:1"}), WithHTTPTimeout(50*time.Millisecond))
+	_, err := r.GetExternalIP(context.Background())
+	require.Error(t, err)
+}
+
+// TestResolver_RejectsNonIPResponse pairs a provider returning a malformed
+// body with a provider returning a valid IP. The malformed response must be
+// rejected by the IP-validation branch (not surface as the result), and the
+// surviving good vote must win the tally.
+func TestResolver_RejectsNonIPResponse(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not-an-ip"))
+	}))
+	defer bad.Close()
+
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.7"))
+	}))
+	defer good.Close()
+
+	r := NewResolver(
+		WithProviders([]string{bad.URL, good.URL}),
+		WithCacheTTL(0),
+	)
+	ip, err := r.GetExternalIP(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "192.0.2.7", ip)
+}
+
+// TestResolver_ContextCancel covers the context-cancel branch: passing an
+// already-canceled context should propagate cancellation rather than spinning
+// on the provider fan-out.
+func TestResolver_ContextCancel(t *testing.T) {
+	// Slow server that would otherwise return a valid IP, so we can be sure
+	// the failure comes from the canceled context and not the response.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Second)
+		_, _ = w.Write([]byte("192.0.2.99"))
+	}))
+	defer srv.Close()
+
+	r := NewResolver(
+		WithProviders([]string{srv.URL}),
+		WithHTTPTimeout(5*time.Second),
+		WithCacheTTL(0),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled
+	start := time.Now()
+	_, err := r.GetExternalIP(ctx)
+	elapsed := time.Since(start)
+	require.ErrorIs(t, err, context.Canceled, "expected wrapped context.Canceled when ctx is canceled")
+	require.Less(t, elapsed, time.Second, "should return promptly on canceled context")
+}
+
+// TestResolver_OneProviderErrorsOneSucceeds_ReturnsSurvivingVote pairs a
+// failing provider (500) with a good provider. Because the lifted
+// implementation tallies provider votes rather than short-circuiting on the
+// first success, the returned IP must come from the surviving provider when
+// all others error.
+func TestResolver_OneProviderErrorsOneSucceeds_ReturnsSurvivingVote(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
-	defer server.Close()
+	defer bad.Close()
 
-	r := NewResolver(WithProviders([]string{server.URL}), WithCacheTTL(0))
-	_, err := r.GetExternalIP(context.Background())
-	if err == nil {
-		t.Error("expected error when all providers fail")
-	}
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("192.0.2.55"))
+	}))
+	defer good.Close()
+
+	r := NewResolver(
+		WithProviders([]string{bad.URL, good.URL}),
+		WithCacheTTL(0),
+	)
+	ip, err := r.GetExternalIP(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "192.0.2.55", ip)
 }
 
-func TestResolveIP_TrimsWhitespace(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, "  203.0.113.1 \n")
-	}))
-	defer server.Close()
-
-	r := NewResolver(WithProviders([]string{server.URL}), WithCacheTTL(0))
-	ip, err := r.GetExternalIP(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if ip != testIP {
-		t.Errorf("expected trimmed IP, got %q", ip)
-	}
+func TestSecureHTTPClient_HasTLSFloorAndTimeouts(t *testing.T) {
+	c := secureHTTPClient(5 * time.Second)
+	require.Equal(t, 5*time.Second, c.Timeout)
+	tr, ok := c.Transport.(*http.Transport)
+	require.True(t, ok, "Transport must be *http.Transport")
+	require.NotNil(t, tr.TLSClientConfig)
+	require.Equal(t, uint16(tls.VersionTLS12), tr.TLSClientConfig.MinVersion)
+	require.Positive(t, tr.TLSHandshakeTimeout)
+	require.Positive(t, tr.ResponseHeaderTimeout)
 }

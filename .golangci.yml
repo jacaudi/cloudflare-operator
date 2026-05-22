@@ -1,66 +1,27 @@
----
+# golangci-lint configuration. Enforces the go-standards §8.5 minimum set.
+# CI invokes `make lint` (component-lint.yml runs golangci-lint when present);
+# do not duplicate this ruleset in CI scripts.
 version: "2"
+
 run:
-  allow-parallel-runners: true
+  timeout: 5m
+  tests: true
+
 linters:
-  default: none
   enable:
-    - copyloopvar
-    - dupl
-    - errcheck
-    - goconst
-    - gocyclo
     - govet
-    - ineffassign
-    - lll
-    - modernize
-    - misspell
-    - nakedret
-    - prealloc
-    - revive
+    - errcheck
     - staticcheck
-    - unconvert
-    - unparam
+    - gosec
     - unused
-    - logcheck
-  settings:
-    custom:
-      logcheck:
-        type: "module"
-        description: Checks Go logging calls for Kubernetes logging conventions.
-    revive:
-      rules:
-        - name: comment-spacings
-        - name: import-shadowing
-    modernize:
-      disable:
-        - omitzero
+    - gocritic
   exclusions:
-    generated: lax
+    generated: strict
     rules:
-      - linters:
-          - lll
-        path: api/*
-      - linters:
-          - dupl
-          - lll
-        path: internal/*
-      # Test helpers often accept parameters for future flexibility even when
-      # current call sites only pass one value. Accept the ergonomic cost.
-      - linters:
-          - unparam
-        path: _test\.go
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+      # Generated deepcopy / CRD scaffolding.
+      - path: "zz_generated\\..*\\.go"
+        linters: [govet, errcheck, staticcheck, gosec, unused, gocritic]
+
 formatters:
   enable:
     - gofmt
-    - goimports
-  exclusions:
-    generated: lax
-    paths:
-      - third_party$
-      - builtin$
-      - examples$

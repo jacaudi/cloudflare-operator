@@ -1,7 +1,7 @@
 ---
 apiVersion: v2
 name: cloudflare-operator
-description: A Kubernetes operator for managing Cloudflare resources declaratively
+description: Kubernetes meta-operator for declarative Cloudflare DNS, tunnels, rulesets, and zone configuration with Gateway API integration
 type: application
 version: 0.18.3
 appVersion: "0.18.3"
@@ -9,6 +9,8 @@ kubeVersion: ">=1.31.0-0"
 keywords:
   - cloudflare
   - dns
+  - tunnel
+  - gateway-api
   - operator
   - kubernetes
   - infrastructure-as-code
@@ -17,7 +19,9 @@ sources:
   - https://github.com/jacaudi/cloudflare-operator
 maintainers:
   - name: jacaudi
+annotations:
+  artifacthub.io/license: MIT
 dependencies:
   - name: common
-    repository: https://bjw-s-labs.github.io/helm-charts
-    version: 5.0.0
+    repository: https://bjw-s-labs.github.io/helm-charts/
+    version: 5.0.1

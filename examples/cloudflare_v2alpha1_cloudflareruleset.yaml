@@ -1,0 +1,65 @@
+# CloudflareRuleset — manage a Cloudflare ruleset entrypoint and its rules.
+#
+# A ruleset is a phase-scoped collection of rules (WAF, transform, redirect,
+# rate-limit, …). The `phase` field selects the entrypoint; the `rules` list
+# is the desired set in evaluation order. The operator replaces the live
+# rules with the spec's list on every successful reconcile, so the CR is
+# authoritative — rules added in the Cloudflare dashboard are removed
+# on the next reconcile.
+#
+# Resolve the target zone via `zoneRef.name` (preferred) or `zoneID`.
+#
+# === Credentials (operator-level default) ===
+# This example omits `spec.cloudflare` and inherits the operator-level
+# default credentials configured at chart install time:
+#
+#   credentials:
+#     existingSecret: cloudflare-operator-credentials
+#     tokenKey: apiToken
+#     accountIDKey: accountID
+#
+# To override credentials per-CR instead, see the `spec.cloudflare` block in
+# `cloudflare_v2alpha1_cloudflarednsrecord.yaml`. The full resolution order
+# lives in `docs/credentials.md`.
+apiVersion: cloudflare.io/v2alpha1
+kind: CloudflareRuleset
+metadata:
+  name: example-com-waf-custom
+  namespace: default
+spec:
+  zoneRef:
+    name: example-com
+
+  # Human-readable ruleset name. Surfaced in the Cloudflare dashboard.
+  name: "example.com custom WAF"
+  description: "Block known-bad bot UAs and challenge admin paths"
+
+  # The Cloudflare ruleset entrypoint phase. Common choices:
+  #   http_request_firewall_custom    — custom WAF rules (this sample)
+  #   http_request_firewall_managed   — bind managed rulesets
+  #   http_request_transform          — rewrite request fields
+  #   http_request_redirect           — bulk + dynamic redirects
+  #   http_ratelimit                  — rate-limit rules
+  #   http_response_headers_transform — response-header transforms
+  # See https://developers.cloudflare.com/ruleset-engine/about/phases/ for the
+  # full list.
+  phase: http_request_firewall_custom
+
+  rules:
+    # Rule 1 — outright block matches.
+    - description: "Block known-bad bot user-agents"
+      enabled: true
+      action: block
+      # Cloudflare filter-expression syntax. See the Cloudflare WAF docs.
+      expression: |
+        (http.user_agent contains "BadBot/1.0") or
+        (http.user_agent contains "EvilCrawler")
+
+    # Rule 2 — managed challenge for sensitive paths.
+    - description: "Managed challenge on /admin"
+      enabled: true
+      action: managed_challenge
+      expression: |
+        (http.request.uri.path matches "^/admin(/|$)")
+
+  interval: 30m

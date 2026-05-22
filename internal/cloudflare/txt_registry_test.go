@@ -1,283 +1,217 @@
 /*
-Copyright 2026.
+Copyright (c) 2026 jacaudi
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
 */
 
 package cloudflare
 
 import (
-	"errors"
+	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-const testPayloadMinimal = `"heritage=external-dns,external-dns/owner=foo"`
+func TestRegistryPayload_FieldShape(t *testing.T) {
+	p := RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "default", N: "root", H: "sha256:abc123"}
+	require.Equal(t, 1, p.V)
+	require.Equal(t, "CloudflareDNSRecord", p.K)
+}
 
-func TestEncodeRegistryPayload(t *testing.T) {
-	tests := []struct {
-		name  string
-		input RegistryPayload
-		want  string
-	}{
-		{
-			name: "httproute source",
-			input: RegistryPayload{
-				Owner:           "cloudflare-operator-prod",
-				SourceKind:      "httproute",
-				SourceNamespace: "apps",
-				SourceName:      "myapp",
-			},
-			want: `"heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=httproute/apps/myapp"`,
-		},
-		{
-			name: "service source",
-			input: RegistryPayload{
-				Owner:           "cloudflare-operator-prod",
-				SourceKind:      "service",
-				SourceNamespace: "selfhosted",
-				SourceName:      "rickroll",
-			},
-			want: `"heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=service/selfhosted/rickroll"`,
-		},
-		{
-			name:  "owner only, no resource — legacy external-dns shape",
-			input: RegistryPayload{Owner: "external-dns-home"},
-			want:  `"heritage=external-dns,external-dns/owner=external-dns-home"`,
-		},
+func TestAffixName_Apex(t *testing.T) {
+	require.Equal(t, "cf-txt.test", AffixName("cf-txt", "test"))
+}
+
+func TestAffixName_Subdomain(t *testing.T) {
+	require.Equal(t, "cf-txt.foo.test", AffixName("cf-txt", "foo.test"))
+}
+
+func TestAffixName_DeepSubdomain(t *testing.T) {
+	require.Equal(t, "cf-txt.foo.bar.test", AffixName("cf-txt", "foo.bar.test"))
+}
+
+func TestRegistryPayload_JSONTags(t *testing.T) {
+	p := RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "default", N: "root"}
+	b, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"v":1,"k":"CloudflareDNSRecord","ns":"default","n":"root"}`, string(b))
+	p.H = "sha256:abc"
+	b, err = json.Marshal(p)
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"h":"sha256:abc"`)
+}
+
+func TestErrUnrecognizedCodec_Is(t *testing.T) {
+	require.ErrorIs(t, ErrUnrecognizedCodec, ErrUnrecognizedCodec)
+	require.EqualError(t, ErrUnrecognizedCodec, "txt registry: unrecognized codec or malformed payload")
+}
+
+func TestPlaintextCodec_RoundTrip(t *testing.T) {
+	c := plaintextCodec{}
+	p := RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "media", N: "root", H: "sha256:deadbeef"}
+	encoded, err := c.Encode(p)
+	require.NoError(t, err)
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, p, got)
+}
+
+func TestPlaintextCodec_RejectsUnknownVersion(t *testing.T) {
+	_, err := plaintextCodec{}.Decode(`{"v":99,"k":"X","ns":"y","n":"z"}`)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "v=99 must wrap ErrUnrecognizedCodec for AdoptRefusedNoTXT branching")
+}
+
+func TestPlaintextCodec_RejectsMalformedJSON(t *testing.T) {
+	_, err := plaintextCodec{}.Decode("not-json-at-all")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "malformed JSON must wrap ErrUnrecognizedCodec for AdoptRefusedNoTXT branching")
+}
+
+func TestPlaintextCodec_KindIsPlaintext(t *testing.T) {
+	require.Equal(t, "plaintext", plaintextCodec{}.Kind())
+}
+
+func makeKey(t *testing.T, seed byte) [32]byte {
+	t.Helper()
+	var k [32]byte
+	for i := range k {
+		k[i] = seed + byte(i)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := EncodeRegistryPayload(tc.input)
-			if got != tc.want {
-				t.Errorf("EncodeRegistryPayload() = %q, want %q", got, tc.want)
-			}
-		})
+	return k
+}
+
+func TestAESCodec_RoundTrip(t *testing.T) {
+	c := aesCodec{key: makeKey(t, 1)}
+	p := RegistryPayload{V: 1, K: "CloudflareDNSRecord", NS: "media", N: "root", H: "sha256:deadbeef"}
+	encoded, err := c.Encode(p)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(encoded, "v1:"), "encoded form must start with v1: prefix")
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, p, got)
+}
+
+func TestAESCodec_FreshNoncePerEncode(t *testing.T) {
+	c := aesCodec{key: makeKey(t, 1)}
+	p := RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"}
+	seen := make(map[string]bool)
+	for i := 0; i < 10; i++ {
+		s, err := c.Encode(p)
+		require.NoError(t, err)
+		require.False(t, seen[s], "Encode #%d produced a duplicate (no fresh nonce?)", i)
+		seen[s] = true
 	}
 }
 
-func TestDecodeRegistryPayload(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    RegistryPayload
-		wantErr bool
-	}{
-		{
-			name:  "valid httproute payload with quotes",
-			input: `"heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=httproute/apps/myapp"`,
-			want: RegistryPayload{
-				Owner:           "cloudflare-operator-prod",
-				SourceKind:      "httproute",
-				SourceNamespace: "apps",
-				SourceName:      "myapp",
-			},
-		},
-		{
-			name:  "valid payload without surrounding quotes",
-			input: `heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=service/ns/svc`,
-			want: RegistryPayload{
-				Owner:           "cloudflare-operator-prod",
-				SourceKind:      "service",
-				SourceNamespace: "ns",
-				SourceName:      "svc",
-			},
-		},
-		{
-			name:    "wrong heritage",
-			input:   `"heritage=terraform,external-dns/owner=foo"`,
-			wantErr: true,
-		},
-		{
-			name:    "missing owner",
-			input:   `"heritage=external-dns,external-dns/resource=service/ns/svc"`,
-			wantErr: true,
-		},
-		{
-			name:  "owner only (no resource ref) — legal for old external-dns format",
-			input: `"heritage=external-dns,external-dns/owner=external-dns-home"`,
-			want: RegistryPayload{
-				Owner: "external-dns-home",
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := DecodeRegistryPayload(tc.input)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("DecodeRegistryPayload() err = %v, wantErr %v", err, tc.wantErr)
-			}
-			if err != nil {
-				if !errors.Is(err, ErrRegistryMalformed) {
-					t.Errorf("expected ErrRegistryMalformed, got %v", err)
-				}
-				return
-			}
-			if got != tc.want {
-				t.Errorf("DecodeRegistryPayload() = %+v, want %+v", got, tc.want)
-			}
-		})
+func TestAESCodec_RejectsWrongKey(t *testing.T) {
+	good := aesCodec{key: makeKey(t, 1)}
+	bad := aesCodec{key: makeKey(t, 99)}
+	p := RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"}
+	encoded, err := good.Encode(p)
+	require.NoError(t, err)
+	_, err = bad.Decode(encoded)
+	require.Error(t, err, "decoding with wrong key must fail (GCM auth tag)")
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "wrong-key decode must wrap ErrUnrecognizedCodec for AdoptRefusedNoTXT branching")
+}
+
+func TestAESCodec_RejectsTampering(t *testing.T) {
+	c := aesCodec{key: makeKey(t, 1)}
+	p := RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"}
+	encoded, err := c.Encode(p)
+	require.NoError(t, err)
+	tampered := encoded[:len(encoded)-1] + string([]byte{encoded[len(encoded)-1] ^ 0x01})
+	_, err = c.Decode(tampered)
+	require.Error(t, err, "GCM auth tag should catch ciphertext tampering")
+	require.ErrorIs(t, err, ErrUnrecognizedCodec)
+}
+
+func TestAESCodec_RejectsMalformedV1Format(t *testing.T) {
+	c := aesCodec{key: makeKey(t, 1)}
+	for _, bad := range []string{"v1", "v1:", "v1::", "v1:not-base64:also-not-base64", "v2:something:else", "random-text"} {
+		_, err := c.Decode(bad)
+		require.Error(t, err, "input %q should be rejected", bad)
+		require.ErrorIs(t, err, ErrUnrecognizedCodec, "input %q must wrap ErrUnrecognizedCodec", bad)
 	}
 }
 
-func TestAffixName(t *testing.T) {
-	tests := []struct {
-		name                string
-		fqdn                string
-		recordType          string
-		prefix              string
-		suffix              string
-		wildcardReplacement string
-		want                string
-	}{
-		{
-			name:       "A record default affix",
-			fqdn:       "app.example.com",
-			recordType: "A",
-			want:       "a-app.example.com",
-		},
-		{
-			name:       "CNAME default affix",
-			fqdn:       "app.example.com",
-			recordType: "CNAME",
-			want:       "cname-app.example.com",
-		},
-		{
-			name:       "AAAA uses a- prefix (external-dns parity)",
-			fqdn:       "app.example.com",
-			recordType: "AAAA",
-			want:       "a-app.example.com",
-		},
-		{
-			name:       "prefix overrides default",
-			fqdn:       "app.example.com",
-			recordType: "A",
-			prefix:     "extdns-",
-			want:       "extdns-app.example.com",
-		},
-		{
-			name:       "suffix style",
-			fqdn:       "app.example.com",
-			recordType: "A",
-			suffix:     "-extdns",
-			want:       "app-extdns.example.com",
-		},
-		{
-			name:                "wildcard replacement",
-			fqdn:                "*.example.com",
-			recordType:          "A",
-			wildcardReplacement: "any",
-			want:                "a-any.example.com",
-		},
-		{
-			name:       "apex record (no leaf to prefix)",
-			fqdn:       "example.com",
-			recordType: "A",
-			want:       "a-example.com",
-		},
-		{
-			name:       "TXT record uses lowercased type prefix",
-			fqdn:       "foo.example.com",
-			recordType: "TXT",
-			want:       "txt-foo.example.com",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := AffixName(tc.fqdn, tc.recordType, AffixConfig{
-				Prefix:              tc.prefix,
-				Suffix:              tc.suffix,
-				WildcardReplacement: tc.wildcardReplacement,
-			})
-			if got != tc.want {
-				t.Errorf("AffixName() = %q, want %q", got, tc.want)
-			}
-		})
-	}
+func TestAESCodec_KindIsAESGCM(t *testing.T) {
+	require.Equal(t, "aes-gcm", aesCodec{key: makeKey(t, 1)}.Kind())
 }
 
-func TestEncryptDecryptPayload(t *testing.T) {
-	key32 := []byte("01234567890123456789012345678901") // 32 bytes
-	plaintext := `"heritage=external-dns,external-dns/owner=cloudflare-operator-prod,external-dns/resource=service/ns/svc"`
-
-	encoded, err := EncryptPayload(plaintext, key32)
-	if err != nil {
-		t.Fatalf("EncryptPayload() err = %v", err)
-	}
-	if encoded == plaintext {
-		t.Fatalf("encrypted payload equals plaintext")
-	}
-
-	got, err := DecryptPayload(encoded, [][]byte{key32})
-	if err != nil {
-		t.Fatalf("DecryptPayload() err = %v", err)
-	}
-	if got != plaintext {
-		t.Errorf("DecryptPayload() = %q, want %q", got, plaintext)
-	}
+func TestAutoDetectingCodec_DispatchesPlaintext(t *testing.T) {
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	encoded, _ := plaintextCodec{}.Encode(RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"})
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "X", got.K)
 }
 
-func TestDecryptPayload_PlaintextPassthrough(t *testing.T) {
-	got, err := DecryptPayload(testPayloadMinimal, nil)
-	if err != nil {
-		t.Fatalf("DecryptPayload() on plaintext err = %v", err)
-	}
-	if got != testPayloadMinimal {
-		t.Errorf("got %q, want %q (plaintext should pass through)", got, testPayloadMinimal)
-	}
+func TestAutoDetectingCodec_DispatchesAESWhenKeyPresent(t *testing.T) {
+	aesC := aesCodec{key: makeKey(t, 1)}
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: &aesC}
+	encoded, _ := aesC.Encode(RegistryPayload{V: 1, K: "X", NS: "ns", N: "n"})
+	got, err := c.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "X", got.K)
 }
 
-func TestDecryptPayload_TriesKeysInOrder(t *testing.T) {
-	keyOld := []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	keyNew := []byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-
-	encoded, err := EncryptPayload(testPayloadMinimal, keyOld)
-	if err != nil {
-		t.Fatalf("EncryptPayload() err = %v", err)
-	}
-
-	got, err := DecryptPayload(encoded, [][]byte{keyNew, keyOld})
-	if err != nil {
-		t.Fatalf("DecryptPayload() err = %v", err)
-	}
-	if got != testPayloadMinimal {
-		t.Errorf("DecryptPayload() = %q, want %q", got, testPayloadMinimal)
-	}
+func TestAutoDetectingCodec_RefusesEncryptedWithoutKey(t *testing.T) {
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	_, err := c.Decode("v1:ANY:THING")
+	require.ErrorIs(t, err, ErrUnrecognizedCodec, "encrypted input with no key configured must surface unrecognized")
 }
 
-func TestDecryptPayload_AllKeysFail(t *testing.T) {
-	realKey := []byte("cccccccccccccccccccccccccccccccc")
-	wrongKey := []byte("dddddddddddddddddddddddddddddddd")
-
-	encoded, err := EncryptPayload(testPayloadMinimal, realKey)
-	if err != nil {
-		t.Fatalf("EncryptPayload() err = %v", err)
-	}
-
-	_, err = DecryptPayload(encoded, [][]byte{wrongKey})
-	if err == nil {
-		t.Fatalf("DecryptPayload() with wrong key should error, got nil")
-	}
+func TestAutoDetectingCodec_EncodePanics(t *testing.T) {
+	c := autoDetectingCodec{plain: plaintextCodec{}, aes: nil}
+	require.Panics(t, func() { _, _ = c.Encode(RegistryPayload{V: 1}) },
+		"autoDetectingCodec is read-only; callers must use the explicit encoder")
 }
 
-func TestDecryptPayload_EmptyKeysPassthroughOnBlockAlignedBase64(t *testing.T) {
-	// Valid base64 that decodes to exactly 32 bytes (2 AES blocks, block-aligned).
-	// With no keys configured, this must pass through unchanged — not error.
-	input := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
-	got, err := DecryptPayload(input, nil)
-	if err != nil {
-		t.Fatalf("DecryptPayload() err = %v; want passthrough with nil error", err)
-	}
-	if got != input {
-		t.Errorf("DecryptPayload() = %q, want %q (passthrough)", got, input)
+func TestAutoDetectingCodec_KindIsAutoDetect(t *testing.T) {
+	require.Equal(t, "auto-detect", autoDetectingCodec{}.Kind())
+}
+
+func TestCodecKindFor(t *testing.T) {
+	require.Equal(t, "aes-gcm", CodecKindFor("v1:abc"))
+	require.Equal(t, "plaintext", CodecKindFor(`{"version":1}`))
+	require.Equal(t, "plaintext", CodecKindFor(""))
+}
+
+func TestAffixName_WildcardLeadingLabel(t *testing.T) {
+	require.Equal(t, "cf-txt._wildcard.example.com", AffixName("cf-txt", "*.example.com"))
+	require.Equal(t, "cf-txt._wildcard.foo.bar.test", AffixName("cf-txt", "*.foo.bar.test"))
+}
+
+func TestAffixName_WildcardApexBareStar(t *testing.T) {
+	require.Equal(t, "cf-txt._wildcard", AffixName("cf-txt", "*"))
+}
+
+// TestAffixName_EndsInZone is the load-bearing S1 regression: the companion
+// FQDN MUST end with the same registrable suffix as the input hostname so
+// Cloudflare never zone-appends it (the external-jacaudi 81058 root cause).
+func TestAffixName_EndsInZone(t *testing.T) {
+	require.True(t, strings.HasSuffix(AffixName("cf-txt", "external.jacaudi.dev"), ".jacaudi.dev"))
+	require.Equal(t, "cf-txt.external.jacaudi.dev", AffixName("cf-txt", "external.jacaudi.dev"))
+}
+
+// TestAffixName_NonWildcardRegressionUnchanged: S1 intentionally changed the
+// non-apex scheme from "<prefix>-<collapsed-labels>.<lastlabel>" to
+// "<prefix>.<full-hostname>" so the companion ends in the zone (see design
+// 2026-05-19 §4.1 / the external-jacaudi 81058 root cause). Apex is unchanged.
+func TestAffixName_NonWildcardRegressionUnchanged(t *testing.T) {
+	require.Equal(t, "cf-txt.test", AffixName("cf-txt", "test"))         // apex: unchanged
+	require.Equal(t, "cf-txt.foo.test", AffixName("cf-txt", "foo.test")) // sub: NEW scheme
+	require.Equal(t, "cf-txt.foo.bar.test", AffixName("cf-txt", "foo.bar.test"))
+}
+
+func TestAffixName_NeverEmitsAsteriskOrWildcardPrefix(t *testing.T) {
+	for _, name := range []string{"*.example.com", "*", "*.a.b.c.d", "foo.bar.test", "test"} {
+		out := AffixName("cf-txt", name)
+		require.NotContains(t, out, "*", "AffixName(%q) must not contain a literal '*'", name)
+		require.False(t, strings.HasPrefix(out, "*."), "AffixName(%q) must not start with '*.'", name)
 	}
 }

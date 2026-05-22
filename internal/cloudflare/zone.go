@@ -1,3 +1,10 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
 package cloudflare
 
 import (
@@ -5,7 +12,6 @@ import (
 	"fmt"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/bot_management"
 	"github.com/cloudflare/cloudflare-go/v6/zones"
 )
 
@@ -19,54 +25,103 @@ func NewZoneClientFromCF(cf *cfgo.Client) ZoneClient {
 	return &zoneClient{cf: cf}
 }
 
-func (c *zoneClient) GetSettings(ctx context.Context, zoneID string) ([]ZoneSetting, error) {
-	// The v6 SDK does not expose a "list all settings" endpoint.
-	// The controller sets settings idempotently, so this returns nil.
-	return nil, nil
-}
+func (c *zoneClient) CreateZone(ctx context.Context, accountID string, params ZoneParams) (*Zone, error) {
+	zoneType := zones.TypeFull
+	if params.Type != "" {
+		zoneType = zones.Type(params.Type)
+	}
 
-func (c *zoneClient) UpdateSetting(ctx context.Context, zoneID, settingID string, value any) error {
-	_, err := c.cf.Zones.Settings.Edit(ctx, settingID, zones.SettingEditParams{
-		ZoneID: cfgo.F(zoneID),
-		Body: zones.SettingEditParamsBody{
-			Value: cfgo.F[any](value),
-		},
+	resp, err := c.cf.Zones.New(ctx, zones.ZoneNewParams{
+		Account: cfgo.F(zones.ZoneNewParamsAccount{
+			ID: cfgo.F(accountID),
+		}),
+		Name: cfgo.F(params.Name),
+		Type: cfgo.F(zoneType),
 	})
 	if err != nil {
-		return fmt.Errorf("update zone setting %s: %w", settingID, err)
+		return nil, fmt.Errorf("create zone %s: %w", params.Name, err)
+	}
+	return mapZoneResponse(resp), nil
+}
+
+func (c *zoneClient) GetZone(ctx context.Context, zoneID string) (*Zone, error) {
+	resp, err := c.cf.Zones.Get(ctx, zones.ZoneGetParams{
+		ZoneID: cfgo.F(zoneID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get zone %s: %w", zoneID, classifyZoneAPIErr(err))
+	}
+	return mapZoneResponse(resp), nil
+}
+
+func (c *zoneClient) ListZonesByName(ctx context.Context, accountID, name string) ([]Zone, error) {
+	page, err := c.cf.Zones.List(ctx, zones.ZoneListParams{
+		Account: cfgo.F(zones.ZoneListParamsAccount{
+			ID: cfgo.F(accountID),
+		}),
+		Name: cfgo.F(name),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list zones: %w", err)
+	}
+
+	var result []Zone
+	for _, z := range page.Result {
+		result = append(result, *mapZoneResponse(&z))
+	}
+	return result, nil
+}
+
+func (c *zoneClient) EditZone(ctx context.Context, zoneID string, params ZoneEditParams) (*Zone, error) {
+	editParams := zones.ZoneEditParams{
+		ZoneID: cfgo.F(zoneID),
+	}
+	if params.Paused != nil {
+		editParams.Paused = cfgo.F(*params.Paused)
+	}
+
+	resp, err := c.cf.Zones.Edit(ctx, editParams)
+	if err != nil {
+		return nil, fmt.Errorf("edit zone %s: %w", zoneID, err)
+	}
+	return mapZoneResponse(resp), nil
+}
+
+func (c *zoneClient) DeleteZone(ctx context.Context, zoneID string) error {
+	_, err := c.cf.Zones.Delete(ctx, zones.ZoneDeleteParams{
+		ZoneID: cfgo.F(zoneID),
+	})
+	if err != nil {
+		return fmt.Errorf("delete zone %s: %w", zoneID, classifyZoneAPIErr(err))
 	}
 	return nil
 }
 
-func (c *zoneClient) GetBotManagement(ctx context.Context, zoneID string) (*BotManagementConfig, error) {
-	resp, err := c.cf.BotManagement.Get(ctx, bot_management.BotManagementGetParams{
+func (c *zoneClient) TriggerActivationCheck(ctx context.Context, zoneID string) error {
+	_, err := c.cf.Zones.ActivationCheck.Trigger(ctx, zones.ActivationCheckTriggerParams{
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get bot management: %w", err)
-	}
-	enableJS := resp.EnableJS
-	fightMode := resp.FightMode
-	return &BotManagementConfig{
-		EnableJS:  &enableJS,
-		FightMode: &fightMode,
-	}, nil
-}
-
-func (c *zoneClient) UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error {
-	body := bot_management.BotFightModeConfigurationParam{}
-	if config.EnableJS != nil {
-		body.EnableJS = cfgo.F(*config.EnableJS)
-	}
-	if config.FightMode != nil {
-		body.FightMode = cfgo.F(*config.FightMode)
-	}
-	_, err := c.cf.BotManagement.Update(ctx, bot_management.BotManagementUpdateParams{
-		ZoneID: cfgo.F(zoneID),
-		Body:   body,
-	})
-	if err != nil {
-		return fmt.Errorf("update bot management: %w", err)
+		return fmt.Errorf("trigger activation check for zone %s: %w", zoneID, err)
 	}
 	return nil
+}
+
+// mapZoneResponse converts a cloudflare-go zones.Zone to our internal Zone type.
+func mapZoneResponse(z *zones.Zone) *Zone {
+	zone := &Zone{
+		ID:                  z.ID,
+		Name:                z.Name,
+		Status:              string(z.Status),
+		Type:                string(z.Type),
+		Paused:              z.Paused,
+		NameServers:         z.NameServers,
+		OriginalNameServers: z.OriginalNameServers,
+		OriginalRegistrar:   z.OriginalRegistrar,
+	}
+	if !z.ActivatedOn.IsZero() {
+		t := z.ActivatedOn
+		zone.ActivatedOn = &t
+	}
+	return zone
 }

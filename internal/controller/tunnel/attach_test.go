@@ -1,0 +1,789 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
+package tunnel
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
+	"github.com/jacaudi/cloudflare-operator/internal/conventions"
+	"github.com/jacaudi/cloudflare-operator/internal/tunnelsynth"
+)
+
+func TestDeriveTunnelName_WithName(t *testing.T) {
+	got, err := DeriveTunnelName("app-foo", "payments")
+	require.NoError(t, err)
+	require.Equal(t, "app-foo-payments", got)
+}
+
+func TestDeriveTunnelName_WithoutName_PerNamespacePool(t *testing.T) {
+	got, err := DeriveTunnelName("app-foo", "")
+	require.NoError(t, err)
+	require.Equal(t, "app-foo", got)
+}
+
+func TestDeriveTunnelName_NameTooLong(t *testing.T) {
+	// 52-char cap on the resulting CR name.
+	_, err := DeriveTunnelName("very-very-long-namespace-name", "very-very-long-tunnel-name-here")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNameTooLong))
+}
+
+func TestDeriveTunnelName_InvalidNamespace(t *testing.T) {
+	_, err := DeriveTunnelName("Bad_Namespace", "ok")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrInvalidName))
+}
+
+func TestDeriveTunnelName_InvalidAnnotation(t *testing.T) {
+	_, err := DeriveTunnelName("ok", "Has Space")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrInvalidName))
+}
+
+func TestDeriveTunnelName_BoundaryAt52(t *testing.T) {
+	// 52 exactly is OK; 53 is not. ns (24) + - (1) + nm (27) = 52.
+	ns := "ns-twentyfour-chars-long"    // 24
+	nm := "tunnel-name-twenty-seven-ok" // 27
+	got, err := DeriveTunnelName(ns, nm)
+	require.NoError(t, err)
+	require.Len(t, got, 52)
+
+	// One char more pushes us to 53 → ErrNameTooLong.
+	_, err = DeriveTunnelName(ns, nm+"k")
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrNameTooLong))
+}
+
+// TestDeriveTunnelName_NoCfPrefix_DropsRedundantSegment closes backlog #5:
+// the operator-derived tunnel CR name drops the `cf-` prefix. Two prod-
+// evidenced motifs: per-namespace pool ("network" without an annotation) +
+// named-tunnel-in-namespace ("network" + "edge"). Locks the new shape
+// against regression to the old "cf-<ns>" doubling pattern.
+func TestDeriveTunnelName_NoCfPrefix_DropsRedundantSegment(t *testing.T) {
+	cases := []struct {
+		ns         string
+		annotation string
+		want       string
+	}{
+		{"network", "", "network"},
+		{"network", "edge", "network-edge"},
+		{"app-foo", "", "app-foo"},
+		{"app-foo", "payments", "app-foo-payments"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.ns+"_"+tc.annotation, func(t *testing.T) {
+			got, err := DeriveTunnelName(tc.ns, tc.annotation)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got, "ns=%q ann=%q produced %q", tc.ns, tc.annotation, got)
+			require.NotContains(t, got, "cf-", "S5: cf- prefix must be dropped (got %q)", got)
+		})
+	}
+}
+
+// TestParseGatewayServiceRef exercises every parse branch of the
+// cloudflare.io/gateway-service annotation parser. The function lives in the
+// tunnel package (T12 extraction); call it directly.
+//
+// Implementation reference (attach.go): port must be 1..65535 and numeric; the
+// hostPart must be either "<name>" (uses defaultNS) or "<ns>/<name>" with both
+// halves non-empty. Empty raw is rejected.
+func TestParseGatewayServiceRef(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		defaultNS string
+		wantNS    string
+		wantName  string
+		wantPort  int32
+		wantErr   bool
+	}{
+		// Happy paths — every supported annotation form.
+		{"bare name with defaultNS", "svc", "default", "default", "svc", 0, false},
+		{"bare name with port", "svc:8080", "default", "default", "svc", 8080, false},
+		{"ns slash name", "ns1/svc", "default", "ns1", "svc", 0, false},
+		{"ns slash name with port", "ns1/svc:8080", "default", "ns1", "svc", 8080, false},
+		{"port boundary 1", "svc:1", "default", "default", "svc", 1, false},
+		{"port boundary 65535", "svc:65535", "default", "default", "svc", 65535, false},
+
+		// Error paths — port validation.
+		{"invalid port non-numeric", "ns1/svc:abc", "default", "", "", 0, true},
+		{"invalid port out of range high", "ns1/svc:70000", "default", "", "", 0, true},
+		{"invalid port zero", "ns1/svc:0", "default", "", "", 0, true},
+		{"invalid port negative", "ns1/svc:-1", "default", "", "", 0, true},
+		{"empty port after colon", "ns1/svc:", "default", "", "", 0, true},
+
+		// Error paths — malformed host part.
+		// strings.Cut splits at the FIRST occurrence, so "ns/" yields ns="ns",
+		// nm="" which the parser rejects as malformed.
+		{"trailing slash empty name", "ns1/", "default", "", "", 0, true},
+		// "/<name>" yields ns="", nm="name" → malformed.
+		{"leading slash empty namespace", "/svc", "default", "", "", 0, true},
+		// Empty raw → strings.Cut returns hostPart="" with no port; the parser
+		// rejects it via the explicit hostPart=="" guard.
+		{"empty raw", "", "default", "", "", 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ns, name, port, err := parseGatewayServiceRef(c.raw, c.defaultNS)
+			if c.wantErr {
+				require.Error(t, err)
+				// On error, the parser returns the zero value for every
+				// out-parameter — confirms the "half-set port" MINOR is fixed.
+				require.Equal(t, "", ns)
+				require.Equal(t, "", name)
+				require.Equal(t, int32(0), port)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, c.wantNS, ns)
+			require.Equal(t, c.wantName, name)
+			require.Equal(t, c.wantPort, port)
+		})
+	}
+}
+
+func TestEnsureTunnelCR_StampsAutoCreatedAnnotation(t *testing.T) {
+	s := tunnelScheme(t)
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc).Build()
+
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "ns", v2alpha1.ConnectorSpec{
+		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "true", tn.Annotations[conventions.AnnotationAutoCreated],
+		"newly-created tunnel CR must carry the auto-created marker")
+}
+
+func TestIsAutoCreated_AnnotationTrue(t *testing.T) {
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			conventions.AnnotationAutoCreated: "true",
+		}},
+	}
+	require.True(t, isAutoCreated(tn))
+}
+
+func TestIsAutoCreated_AnnotationAbsent(t *testing.T) {
+	tn := &v2alpha1.CloudflareTunnel{}
+	require.False(t, isAutoCreated(tn), "absent annotation must default to direct-create (no GC)")
+}
+
+func TestIsAutoCreated_AnnotationOtherValue(t *testing.T) {
+	for _, v := range []string{"false", "", "1", "yes", "gibberish"} {
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+				conventions.AnnotationAutoCreated: v,
+			}},
+		}
+		require.False(t, isAutoCreated(tn), "value %q should NOT count as auto-created", v)
+	}
+}
+
+func TestEnsureTunnelCR_AdoptPathDoesNotStampAutoCreatedAnnotation(t *testing.T) {
+	s := tunnelScheme(t)
+	existing := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "ns", Namespace: "ns"},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(existing, svc).Build()
+
+	tn, err := EnsureTunnelCR(context.Background(), c, s, svc, "Service", "ns", v2alpha1.ConnectorSpec{
+		Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30,
+	})
+	require.NoError(t, err)
+	require.Empty(t, tn.Annotations[conventions.AnnotationAutoCreated],
+		"adopt path must NOT retroactively stamp the annotation (no backfill)")
+}
+
+func TestNeedsOwnerTransfer_OwnerGoneSourcesExist(t *testing.T) {
+	// Auto-created marker present: needsOwnerTransfer is cascadeGCEligible-gated,
+	// so the TRUE path requires the tunnel to be cascade-GC-eligible (auto-created
+	// annotation OR operator source labels) in addition to no owner + attaching
+	// sources (a direct-create CR is never owner-transferred —
+	// see TestNeedsOwnerTransfer_DirectCreateNeverTransfers).
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.True(t, needsOwnerTransfer(tn))
+}
+
+func TestNeedsOwnerTransfer_DirectCreateNeverTransfers(t *testing.T) {
+	// No cloudflare.io/auto-created annotation: a user-authored direct-create
+	// tunnel must never be owner-transferred (else a Service becomes its
+	// k8s-controller-owner and GC deletes the user's CR — design §7).
+	tn := &v2alpha1.CloudflareTunnel{
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.False(t, needsOwnerTransfer(tn),
+		"direct-create CR (no auto-created marker) must never need owner-transfer")
+}
+
+func TestNeedsOwnerTransfer_OwnerExists(t *testing.T) {
+	// Auto-created marker present so the cascadeGCEligible gate is satisfied —
+	// the discriminating clause under test is "owner present blocks transfer",
+	// not the cascadeGCEligible gate.
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
+		},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.False(t, needsOwnerTransfer(tn), "owner present → no transfer needed (auto-created gate satisfied)")
+}
+
+func TestNeedsOwnerTransfer_OwnerGoneNoSources(t *testing.T) {
+	// Auto-created marker present so the cascadeGCEligible gate is satisfied —
+	// the discriminating clause under test is "no sources → delegated to
+	// isOrphaned", not the cascadeGCEligible gate.
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+	}
+	require.False(t, needsOwnerTransfer(tn), "no sources → delegated to isOrphaned, not transfer")
+}
+
+func TestIsOrphaned_AutoCreatedAllConditionsMet(t *testing.T) {
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+	}
+	require.True(t, isOrphaned(tn))
+}
+
+func TestIsOrphaned_DirectCreateNeverOrphaned(t *testing.T) {
+	tn := &v2alpha1.CloudflareTunnel{} // no annotation
+	require.False(t, isOrphaned(tn),
+		"direct-create CRs are never orphaned regardless of OwnerReferences or AttachedSources state")
+}
+
+func TestIsOrphaned_AutoCreatedWithSourcesNotOrphaned(t *testing.T) {
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+		},
+		Status: v2alpha1.CloudflareTunnelStatus{
+			AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a", Namespace: "ns"}},
+		},
+	}
+	require.False(t, isOrphaned(tn), "sources present → not orphaned, may need transfer")
+}
+
+func TestIsOrphaned_AutoCreatedWithOwnerNotOrphaned(t *testing.T) {
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations:     map[string]string{conventions.AnnotationAutoCreated: "true"},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: "a", UID: "uid"}},
+		},
+	}
+	require.False(t, isOrphaned(tn), "owner ref present → not orphaned")
+}
+
+func TestPredicates_MutuallyExclusive(t *testing.T) {
+	for _, tn := range []*v2alpha1.CloudflareTunnel{
+		{Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}}},
+		{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}, OwnerReferences: []metav1.OwnerReference{{UID: "u"}}}},
+		// 4th case is THE discriminator: auto-created + sources + no owners —
+		// the only state where needsOwnerTransfer is true (so nt&&io is not
+		// vacuously false here), and the only state where a regression dropping
+		// isOrphaned's AttachedSources==0 clause would make both predicates
+		// return true simultaneously. Cases 1-3 yield needsOwnerTransfer=false
+		// (case 1 lacks any cascade-GC-eligible marker — no annotation and no
+		// source labels; cases 2-3 have no sources), so nt&&io is trivially
+		// false for them — keep this 4th case so the test stays non-vacuous now
+		// that needsOwnerTransfer is cascadeGCEligible-gated.
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"},
+			},
+			Status: v2alpha1.CloudflareTunnelStatus{
+				AttachedSources: []v2alpha1.AttachedSource{{Kind: "Service", Name: "a"}},
+			},
+		},
+	} {
+		nt, io := needsOwnerTransfer(tn), isOrphaned(tn)
+		require.False(t, nt && io, "needsOwnerTransfer + isOrphaned cannot both be true: %+v", tn.Status)
+	}
+}
+
+func makeAttachedSource(kind, ns, name string) v2alpha1.AttachedSource {
+	return v2alpha1.AttachedSource{Kind: kind, Namespace: ns, Name: name}
+}
+
+func TestTransferOwnership_PicksLexSmallestLive(t *testing.T) {
+	s := tunnelScheme(t)
+	svcA := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
+	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
+	svcC := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "c-svc", Namespace: "ns", UID: "uid-c"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl",
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "c-svc"),
+			makeAttachedSource("Service", "ns", "a-svc"),
+			makeAttachedSource("Service", "ns", "b-svc"),
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svcA, svcB, svcC, tn).Build()
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.NoError(t, err)
+	require.True(t, transferred)
+	var got v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Len(t, got.OwnerReferences, 1)
+	require.Equal(t, "a-svc", got.OwnerReferences[0].Name)
+	require.Equal(t, types.UID("uid-a"), got.OwnerReferences[0].UID)
+	require.NotNil(t, got.OwnerReferences[0].Controller)
+	require.True(t, *got.OwnerReferences[0].Controller)
+	// In-memory tn must reflect the post-patch owner refs for the caller.
+	require.Len(t, tn.OwnerReferences, 1)
+	require.Equal(t, "a-svc", tn.OwnerReferences[0].Name)
+	require.Equal(t, types.UID("uid-a"), tn.OwnerReferences[0].UID)
+}
+
+func TestTransferOwnership_SkipsCandidatesWithDeletionTimestamp(t *testing.T) {
+	s := tunnelScheme(t)
+	now := metav1.Now()
+	svcA := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a",
+		DeletionTimestamp: &now, Finalizers: []string{"keep-alive-for-test"}}}
+	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl",
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc"),
+			makeAttachedSource("Service", "ns", "b-svc"),
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svcA, svcB, tn).Build()
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.NoError(t, err)
+	require.True(t, transferred)
+	var got v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Equal(t, "b-svc", got.OwnerReferences[0].Name, "lex-smallest live (non-deleting) candidate")
+}
+
+func TestTransferOwnership_AllCandidatesNotFound(t *testing.T) {
+	s := tunnelScheme(t)
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc"),
+			makeAttachedSource("Service", "ns", "b-svc"),
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).Build()
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.NoError(t, err, "all-NotFound is not an error; next reconcile retries with stable state")
+	require.False(t, transferred)
+	var got v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Empty(t, got.OwnerReferences)
+}
+
+func TestTransferOwnership_EmitsOwnerTransferredEvent(t *testing.T) {
+	s := tunnelScheme(t)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc")}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
+	rec := record.NewFakeRecorder(10)
+	_, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.NoError(t, err)
+	select {
+	case ev := <-rec.Events:
+		require.Contains(t, ev, conventions.ReasonOwnerTransferred)
+		require.Contains(t, ev, "a-svc")
+	default:
+		t.Fatal("expected OwnerTransferred event")
+	}
+}
+
+// --- branch-inventory tests beyond the 4 plan tests ---
+
+// Conflict on the optimistic-lock Patch is the optimistic-lock contract, NOT
+// an error: return (false, nil) so the next reconcile retries with a fresh
+// ResourceVersion.
+func TestTransferOwnership_ConflictReturnsFalseNil(t *testing.T) {
+	s := tunnelScheme(t)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc")}},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+			return apierrors.NewConflict(schema.GroupResource{Group: "cloudflare.io", Resource: "cloudflaretunnels"}, "tnl", errors.New("stale"))
+		},
+	})
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.NoError(t, err, "Conflict is the optimistic-lock contract, not an error")
+	require.False(t, transferred)
+}
+
+// A non-Conflict Patch error propagates as (false, err) wrapped with the
+// "patch ownerReferences" context.
+func TestTransferOwnership_GenericPatchErrorPropagates(t *testing.T) {
+	s := tunnelScheme(t)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc")}},
+	}
+	base := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+			return errors.New("boom")
+		},
+	})
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "patch ownerReferences")
+	require.False(t, transferred)
+}
+
+// A nil recorder must not panic on the success path (recorder is guarded).
+func TestTransferOwnership_NilRecorderNoPanic(t *testing.T) {
+	s := tunnelScheme(t)
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "a-svc", Namespace: "ns", UID: "uid-a"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc")}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svc, tn).Build()
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, nil)
+	require.NoError(t, err)
+	require.True(t, transferred)
+}
+
+// An unknown source Kind in AttachedSources is a config/programming error:
+// getSourceObject returns an error which propagates as (false, err).
+func TestTransferOwnership_UnknownKindErrors(t *testing.T) {
+	s := tunnelScheme(t)
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl"},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Widget", "ns", "w1")}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tn).Build()
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown source kind")
+	require.False(t, transferred)
+}
+
+// First candidate NotFound, second candidate live: confirms NotFound skips to
+// the next candidate rather than aborting the whole transfer.
+func TestTransferOwnership_NotFoundSkipsToNextLive(t *testing.T) {
+	s := tunnelScheme(t)
+	// "a-svc" is NOT created (NotFound); "b-svc" is live.
+	svcB := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "b-svc", Namespace: "ns", UID: "uid-b"}}
+	tn := &v2alpha1.CloudflareTunnel{
+		ObjectMeta: metav1.ObjectMeta{Name: "tnl", Namespace: "ns", UID: "uid-tnl",
+			Annotations: map[string]string{conventions.AnnotationAutoCreated: "true"}},
+		Status: v2alpha1.CloudflareTunnelStatus{AttachedSources: []v2alpha1.AttachedSource{
+			makeAttachedSource("Service", "ns", "a-svc"),
+			makeAttachedSource("Service", "ns", "b-svc"),
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(svcB, tn).Build()
+	rec := record.NewFakeRecorder(10)
+	transferred, err := transferOwnershipIfNeeded(context.Background(), c, s, tn, rec)
+	require.NoError(t, err)
+	require.True(t, transferred)
+	var got v2alpha1.CloudflareTunnel
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "tnl", Namespace: "ns"}, &got))
+	require.Equal(t, "b-svc", got.OwnerReferences[0].Name, "NotFound on a-svc skips to live b-svc")
+}
+
+func tnWith(ann map[string]string, lbl map[string]string) *v2alpha1.CloudflareTunnel {
+	tn := &v2alpha1.CloudflareTunnel{}
+	tn.SetAnnotations(ann)
+	tn.SetLabels(lbl)
+	return tn
+}
+
+func TestCascadeGCEligible(t *testing.T) {
+	srcL := map[string]string{
+		conventions.LabelSourceKind: "Gateway", conventions.LabelSourceName: "g",
+		conventions.LabelSourceNamespace: "n",
+	}
+	annT := map[string]string{conventions.AnnotationAutoCreated: "true"}
+
+	require.True(t, cascadeGCEligible(tnWith(annT, nil)), "annotation-only")
+	require.True(t, cascadeGCEligible(tnWith(nil, srcL)), "source-labels-only (pre-P4)")
+	require.True(t, cascadeGCEligible(tnWith(annT, srcL)), "both")
+	require.False(t, cascadeGCEligible(tnWith(nil, nil)), "neither (user-authored)")
+	require.False(t, cascadeGCEligible(tnWith(nil,
+		map[string]string{conventions.LabelSourceKind: "Gateway"})), "partial labels")
+}
+
+func TestIsOrphaned_LabelsOnly(t *testing.T) {
+	srcL := map[string]string{
+		conventions.LabelSourceKind: "Gateway", conventions.LabelSourceName: "g",
+		conventions.LabelSourceNamespace: "n",
+	}
+	tn := tnWith(nil, srcL) // no ownerRefs, no AttachedSources
+	require.True(t, isOrphaned(tn), "pre-P4 labels-only orphan must now be GC-eligible")
+
+	plain := tnWith(nil, nil)
+	require.False(t, isOrphaned(plain), "user-authored (no labels/annotation) never orphaned")
+}
+
+// TestHandleDeriveTunnelNameErr_InvalidName verifies the classify-emit-sweep-return
+// shape for the InvalidName branch (non-ErrNameTooLong errors).
+func TestHandleDeriveTunnelNameErr_InvalidName(t *testing.T) {
+	fakeRec := record.NewFakeRecorder(4)
+	rec := conventions.NewSafeRecorder(fakeRec)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"}
+	tunnelKey := tunnelsynth.TunnelKey{Namespace: "ns", Name: "prior-tunnel"}
+
+	// Seed the tracker so sweep has something to clear.
+	tracker.swap(srcKey, tunnelKey)
+	// And put a cache entry under that key.
+	cache.Set(tunnelKey, srcKey, nil)
+
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
+
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrInvalidName)
+
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+
+	// Tracker must be swept — sweep again should return no prior.
+	_, hadPrior := tracker.sweep(srcKey)
+	require.False(t, hadPrior, "tracker must be empty after handleDeriveTunnelNameErr")
+
+	// Event must carry the InvalidName reason.
+	select {
+	case ev := <-fakeRec.Events:
+		require.Contains(t, ev, conventions.ReasonInvalidName)
+	default:
+		t.Fatal("expected InvalidName event")
+	}
+}
+
+// TestHandleDeriveTunnelNameErr_NameTooLong verifies the NameTooLong branch
+// emits a distinct reason.
+func TestHandleDeriveTunnelNameErr_NameTooLong(t *testing.T) {
+	fakeRec := record.NewFakeRecorder(4)
+	rec := conventions.NewSafeRecorder(fakeRec)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Gateway", Namespace: "ns", Name: "gw"}
+
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "ns", UID: "uid-gw"}}
+
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrNameTooLong)
+
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+
+	select {
+	case ev := <-fakeRec.Events:
+		require.Contains(t, ev, conventions.ReasonNameTooLong)
+	default:
+		t.Fatal("expected NameTooLong event")
+	}
+}
+
+// TestHandleDeriveTunnelNameErr_NilRecorder verifies the helper does not panic
+// when the SafeRecorder wraps a nil EventRecorder (e.g. unit-test without a
+// real recorder wired).
+func TestHandleDeriveTunnelNameErr_NilRecorder(t *testing.T) {
+	rec := conventions.NewSafeRecorder(nil)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns"}}
+
+	// Must not panic.
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrInvalidName)
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+}
+
+// TestHandleDeriveTunnelNameErr_NoTrackerEntry verifies the helper is a no-op
+// on cache.Clear when the tracker has no prior entry for the source key
+// (e.g. first reconcile failing at DeriveTunnelName before any cache write).
+func TestHandleDeriveTunnelNameErr_NoTrackerEntry(t *testing.T) {
+	fakeRec := record.NewFakeRecorder(4)
+	rec := conventions.NewSafeRecorder(fakeRec)
+	dedupe := newEventDedupe(0, 0)
+	tracker := newCacheTracker()
+	cache := tunnelsynth.NewCache()
+
+	srcKey := tunnelsynth.SourceKey{Kind: "Service", Namespace: "ns", Name: "svc"}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "ns", UID: "uid-svc"}}
+
+	// No prior tracker entry — cache.Clear should not be called (but must not panic).
+	result, err := handleDeriveTunnelNameErr(rec, svc, dedupe, tracker, cache, srcKey, ErrInvalidName)
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+}
+
+// TestFindTunnelTargetedParentRef exercises the to-be-extracted shared helper
+// findTunnelTargetedParentRef that will delegate the near-identical per-controller
+// findTunnelTargetedParent methods in httproute_source_controller.go and
+// tlsroute_source_controller.go.
+//
+// Positive case: a tunnel-targeted Gateway with the required
+// cloudflare.io/gateway-service annotation yields all five non-nil return values.
+//
+// Negative case: a plain Gateway without the cloudflare.io/tunnel annotation
+// yields all-nil/zero returns (no match, no error).
+func TestFindTunnelTargetedParentRef(t *testing.T) {
+	t.Run("positive: tunnel-targeted gateway resolves all fields", func(t *testing.T) {
+		// Build the tunnel-targeted Gateway (mirrors mkParentGw("gw","ns1")).
+		gw := mkParentGw("gw", "ns1")
+
+		// Build the Gateway's backing Service (mirrors mkGwSvc("gw-svc","ns1")).
+		// Port is 80 — the Service's first port, used when the annotation omits
+		// an explicit port (mirrored from the assertion in TestHTTPRouteSource_HappyPath:
+		//   "http://gw-svc.gw-ns.svc.cluster.local:80").
+		gwSvc := mkGwSvc("gw-svc", "ns1")
+
+		// Build the CloudflareTunnel CR the helper must locate.
+		// Name = DeriveTunnelName("ns1","edge") = "ns1-edge", matching the
+		// pattern used by every existing test (e.g. Name: "gw-ns-edge" in
+		// TestHTTPRouteSource_HappyPath for namespace "gw-ns" and tunnel-name "edge").
+		tnName, err := DeriveTunnelName("ns1", "edge")
+		require.NoError(t, err)
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: tnName, Namespace: "ns1"},
+		}
+
+		c := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(gw, tn, gwSvc).
+			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, pr)
+		require.Equal(t, gwv1.ObjectName("gw"), pr.Name)
+		require.NotNil(t, foundGw)
+		require.Equal(t, "gw", foundGw.Name)
+		require.NotNil(t, foundTn)
+		require.Equal(t, tnName, foundTn.Name)
+		require.NotNil(t, svc)
+		require.Equal(t, "gw-svc", svc.Name)
+		// Port falls back to Service.Spec.Ports[0].Port (80) because the
+		// gateway-service annotation omits an explicit port — same expectation
+		// as TestHTTPRouteSource_HappyPath's "port from the Service's first port".
+		require.Equal(t, int32(80), port)
+	})
+
+	t.Run("negative: plain gateway without tunnel annotation returns all-nil", func(t *testing.T) {
+		// A Gateway with no cloudflare.io/tunnel annotation must not qualify.
+		plainGw := &gwv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "ns1"},
+		}
+
+		c := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(plainGw).
+			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("plain")}},
+		)
+
+		require.NoError(t, err)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
+
+	t.Run("negative: tunnel-annotated gateway but missing CloudflareTunnel CR returns all-nil", func(t *testing.T) {
+		// Gateway opts in (tunnel=true, derivable name) but no matching
+		// CloudflareTunnel exists — exercises the continue-after-tunnel-Get-fail
+		// branch. The helper must skip the parent and return all-nil.
+		gw := mkParentGw("gw", "ns1")
+		gwSvc := mkGwSvc("gw-svc", "ns1")
+
+		c := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(gw, gwSvc). // deliberately NO CloudflareTunnel
+			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.NoError(t, err)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
+}

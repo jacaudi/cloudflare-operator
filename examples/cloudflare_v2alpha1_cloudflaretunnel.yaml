@@ -1,0 +1,49 @@
+# CloudflareTunnel — operator-managed Cloudflare Tunnel + cloudflared dataplane.
+#
+# Direct-create path: applying this CR creates the tunnel in Cloudflare via the
+# remote-config API and spawns the cloudflared Deployment in the same namespace.
+# For annotation-driven attachment, opt a Service or Gateway in via
+# `cloudflare.io/tunnel: "true"` instead — the operator auto-creates a tunnel
+# CR named cf-<namespace>[-<tunnel-name>] per design §6.
+apiVersion: cloudflare.io/v2alpha1
+kind: CloudflareTunnel
+metadata:
+  name: example-tunnel
+  namespace: default
+spec:
+  # Tunnel name in Cloudflare. Immutable after create; capped at 52 chars so
+  # derived resource names (cloudflared-<name>) fit the 63-char DNS-label limit.
+  name: cf-default-example
+
+  # Per-CR credential override. Omit entirely to inherit the operator-level
+  # default. The API token and account ID are treated as a paired unit and
+  # must both be supplied via the same CloudflareCredentialRef block.
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
+
+  # Reconciliation interval (default 30m).
+  interval: 30m
+
+  # cloudflared Deployment shape.
+  connector:
+    replicas: 2
+    protocol: auto         # auto | http2 | quic
+    logLevel: info         # debug | info | warn | error
+    gracePeriodSeconds: 30
+    # resources, nodeSelector, tolerations, affinity, topologySpreadConstraints,
+    # originCASecretRef are all optional pass-throughs.
+
+  # Tunnel-wide routing defaults.
+  routing:
+    fallback:
+      httpStatus: 404      # served when no source matches; OR url: "https://default.example.com"
+    originRequest:
+      noTLSVerify: false   # set true to skip TLS verification to the origin
+      # originServerName: "expected SAN on the origin certificate"

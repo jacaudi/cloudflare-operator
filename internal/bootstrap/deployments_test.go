@@ -1,0 +1,175 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
+package bootstrap
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+)
+
+func TestBuildControllerDeployment_ZoneMode(t *testing.T) {
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle:         "zone",
+		Namespace:      "cloudflare-system",
+		Image:          "ghcr.io/foo/manager:1.0",
+		Replicas:       2,
+		LogLevel:       "info",
+		MetricsAddress: ":8080",
+		HealthAddress:  ":8081",
+	})
+	require.Equal(t, "cloudflare-zone-controller", dep.Name)
+	require.Equal(t, "cloudflare-system", dep.Namespace)
+	require.Equal(t, int32(2), *dep.Spec.Replicas)
+	require.Equal(t, "ghcr.io/foo/manager:1.0", dep.Spec.Template.Spec.Containers[0].Image)
+	require.Contains(t, dep.Spec.Template.Spec.Containers[0].Args, "--mode=zone")
+	require.Contains(t, dep.Spec.Template.Spec.Containers[0].Args, "--log-level=info")
+}
+
+func TestBuildControllerDeployment_TunnelMode(t *testing.T) {
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle:    "tunnel",
+		Namespace: "cf",
+		Image:     "img:t",
+		Replicas:  1,
+	})
+	require.Equal(t, "cloudflare-tunnel-controller", dep.Name)
+	require.Contains(t, dep.Spec.Template.Spec.Containers[0].Args, "--mode=tunnel")
+}
+
+func TestBuildControllerDeployment_EnvCredentialPassthrough(t *testing.T) {
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle:                  "zone",
+		Namespace:               "cf",
+		Image:                   "img:1",
+		Replicas:                1,
+		CredentialsSecretName:   "cf-token",
+		CredentialsTokenKey:     "apiToken",
+		CredentialsAccountIDKey: "accountID",
+	})
+	env := dep.Spec.Template.Spec.Containers[0].Env
+	var sawAccount, sawToken bool
+	for _, e := range env {
+		if e.Name == "CLOUDFLARE_ACCOUNT_ID" {
+			require.NotNil(t, e.ValueFrom)
+			require.NotNil(t, e.ValueFrom.SecretKeyRef)
+			require.Equal(t, "cf-token", e.ValueFrom.SecretKeyRef.Name)
+			require.Equal(t, "accountID", e.ValueFrom.SecretKeyRef.Key)
+			sawAccount = true
+		}
+		if e.Name == "CLOUDFLARE_API_TOKEN" {
+			require.NotNil(t, e.ValueFrom)
+			require.NotNil(t, e.ValueFrom.SecretKeyRef)
+			require.Equal(t, "cf-token", e.ValueFrom.SecretKeyRef.Name)
+			require.Equal(t, "apiToken", e.ValueFrom.SecretKeyRef.Key)
+			sawToken = true
+		}
+	}
+	require.True(t, sawAccount, "expected CLOUDFLARE_ACCOUNT_ID via secretKeyRef")
+	require.True(t, sawToken, "expected CLOUDFLARE_API_TOKEN via secretKeyRef")
+}
+
+func TestBuildControllerDeployment_SecurityContext(t *testing.T) {
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle:    "zone",
+		Namespace: "cf",
+		Image:     "img:1",
+		Replicas:  1,
+	})
+	podSC := dep.Spec.Template.Spec.SecurityContext
+	require.NotNil(t, podSC, "pod security context must be set")
+	require.NotNil(t, podSC.RunAsNonRoot)
+	require.True(t, *podSC.RunAsNonRoot, "runAsNonRoot must be true")
+
+	ctrSC := dep.Spec.Template.Spec.Containers[0].SecurityContext
+	require.NotNil(t, ctrSC, "container security context must be set")
+	require.NotNil(t, ctrSC.AllowPrivilegeEscalation)
+	require.False(t, *ctrSC.AllowPrivilegeEscalation, "allowPrivilegeEscalation must be false")
+	require.NotNil(t, ctrSC.Capabilities)
+	require.Contains(t, ctrSC.Capabilities.Drop, corev1.Capability("ALL"))
+}
+
+func TestBuildControllerDeployment_LeaderElectionArg(t *testing.T) {
+	enabled := BuildControllerDeployment(BuildArgs{
+		Bundle:         "zone",
+		Namespace:      "cf",
+		Image:          "img:1",
+		Replicas:       1,
+		LeaderElection: true,
+	})
+	require.Contains(t, enabled.Spec.Template.Spec.Containers[0].Args, "--leader-election=true")
+
+	disabled := BuildControllerDeployment(BuildArgs{
+		Bundle:         "zone",
+		Namespace:      "cf",
+		Image:          "img:1",
+		Replicas:       1,
+		LeaderElection: false,
+	})
+	require.Contains(t, disabled.Spec.Template.Spec.Containers[0].Args, "--leader-election=false")
+}
+
+func TestBuildControllerDeployment_TunnelConnectorResourcesEnv(t *testing.T) {
+	js := `{"requests":{"cpu":"10m"}}`
+	// tunnel bundle + value set → env present
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorResourcesJSON: js})
+	require.True(t, hasEnv(dep, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES", js))
+
+	// zone bundle + value set → env ABSENT (tunnel-only)
+	depZ := BuildControllerDeployment(BuildArgs{
+		Bundle: "zone", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorResourcesJSON: js})
+	require.False(t, hasEnvName(depZ, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES"))
+
+	// tunnel bundle + unset → env ABSENT
+	depU := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1})
+	require.False(t, hasEnvName(depU, "CLOUDFLARE_TUNNEL_CONNECTOR_RESOURCES"))
+}
+
+func TestBuildControllerDeployment_TunnelConnectorImageEnv(t *testing.T) {
+	js := `{"tag":"2026.6.0"}`
+	// tunnel bundle + value set → env present
+	dep := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorImageJSON: js})
+	require.True(t, hasEnv(dep, "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE", js))
+
+	// tunnel bundle + unset → env ABSENT
+	depU := BuildControllerDeployment(BuildArgs{
+		Bundle: "tunnel", Namespace: "cf", Image: "img:1", Replicas: 1})
+	require.False(t, hasEnvName(depU, "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE"))
+
+	// zone bundle + value set → env ABSENT (tunnel-only)
+	depZ := BuildControllerDeployment(BuildArgs{
+		Bundle: "zone", Namespace: "cf", Image: "img:1", Replicas: 1,
+		TunnelConnectorImageJSON: `{"tag":"x"}`})
+	require.False(t, hasEnvName(depZ, "CLOUDFLARE_TUNNEL_CONNECTOR_IMAGE"))
+}
+
+func hasEnvName(d *appsv1.Deployment, name string) bool {
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(d *appsv1.Deployment, name, val string) bool {
+	for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == name && e.Value == val {
+			return true
+		}
+	}
+	return false
+}

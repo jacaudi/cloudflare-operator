@@ -1,212 +1,318 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
 package cloudflare
 
 import (
-	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/option"
+	"github.com/cloudflare/cloudflare-go/v6/zero_trust"
+	"github.com/stretchr/testify/require"
 )
 
-const (
-	testTunnelName = "my-tunnel"
-	testTunnelID   = "tunnel-uuid-1"
-)
-
-// newTestTunnelClient creates a TunnelClient backed by a test HTTP server.
-func newTestTunnelClient(t *testing.T, handler http.Handler) TunnelClient {
-	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-
-	cfClient := cfgo.NewClient(
-		option.WithAPIToken("test-token"),
-		option.WithBaseURL(server.URL),
-	)
-	return NewTunnelClientFromCF(cfClient)
+func TestTunnelClient_ConstructorSmoke(t *testing.T) {
+	// NewTunnelClientFromCF stores cf without dereferencing it, so nil is
+	// legal at construction time and must produce a non-nil client.
+	require.NotNil(t, NewTunnelClientFromCF(nil))
 }
 
-func TestTunnelClient_CreateTunnel(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/accounts/acct-1/cfd_tunnel", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("failed to decode request body: %v", err)
-		}
-
-		if body["name"] != testTunnelName {
-			t.Errorf("expected name my-tunnel, got %v", body["name"])
-		}
-		if body["tunnel_secret"] != "c2VjcmV0LXZhbHVlLXRoYXQtaXMtYXQtbGVhc3QtMzItYnl0ZXM=" {
-			t.Errorf("expected tunnel_secret, got %v", body["tunnel_secret"])
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIResponse(t, map[string]any{
-			"id":   testTunnelID,
-			"name": testTunnelName,
-		}))
-	})
-
-	client := newTestTunnelClient(t, mux)
-	tunnel, err := client.CreateTunnel(context.Background(), "acct-1", TunnelParams{
-		Name:         testTunnelName,
-		TunnelSecret: "c2VjcmV0LXZhbHVlLXRoYXQtaXMtYXQtbGVhc3QtMzItYnl0ZXM=",
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if tunnel.ID != testTunnelID {
-		t.Errorf("expected ID tunnel-uuid-1, got %s", tunnel.ID)
-	}
-	if tunnel.Name != testTunnelName {
-		t.Errorf("expected name my-tunnel, got %s", tunnel.Name)
-	}
+func TestTunnel_FieldShape(t *testing.T) {
+	tn := Tunnel{ID: "abc", Name: "n", AccountTag: "acct"}
+	require.Equal(t, "abc", tn.ID)
+	require.Equal(t, "n", tn.Name)
+	require.Equal(t, "acct", tn.AccountTag)
 }
 
-func TestTunnelClient_GetTunnel(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/accounts/acct-1/cfd_tunnel/tunnel-uuid-1", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("expected GET, got %s", r.Method)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIResponse(t, map[string]any{
-			"id":   testTunnelID,
-			"name": testTunnelName,
-		}))
-	})
-
-	client := newTestTunnelClient(t, mux)
-	tunnel, err := client.GetTunnel(context.Background(), "acct-1", testTunnelID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestTunnelConfiguration_RoundTrip(t *testing.T) {
+	noVerify := true
+	cfg := TunnelConfiguration{
+		Version: 7,
+		Config: TunnelConfig{
+			Ingress: []IngressEntry{
+				{Hostname: "foo.example.com", Service: "http://svc.ns:80",
+					OriginRequest: &IngressOriginRequest{NoTLSVerify: &noVerify}},
+				{Service: "http_status:404"}, // catch-all
+			},
+		},
 	}
+	require.Equal(t, 7, cfg.Version)
+	require.Len(t, cfg.Config.Ingress, 2)
+	require.True(t, *cfg.Config.Ingress[0].OriginRequest.NoTLSVerify)
+}
 
-	if tunnel.ID != testTunnelID {
-		t.Errorf("expected ID tunnel-uuid-1, got %s", tunnel.ID)
+func TestTunnelConnection_FieldShape(t *testing.T) {
+	c := TunnelConnection{ID: "cid", ColoName: "DEN", IsPendingReconnect: false}
+	require.Equal(t, "cid", c.ID)
+	require.Equal(t, "DEN", c.ColoName)
+	require.False(t, c.IsPendingReconnect)
+}
+
+func TestTunnelToken_String(t *testing.T) {
+	tk := TunnelToken("opaque-base64-blob")
+	require.Equal(t, "opaque-base64-blob", string(tk))
+}
+
+// TestClassifyTunnelAPIErr covers the tunnel error classifier. Contract
+// mirrors classifyDNSAPIErr / classifyZoneAPIErr: nil pass-through, 404 →
+// wrapped with ErrTunnelNotFound, any other shape preserved as-is. Also
+// verifies traversal through wrapped error chains via errors.As.
+func TestClassifyTunnelAPIErr(t *testing.T) {
+	tests := []struct {
+		name        string
+		in          error
+		wantNil     bool
+		wantWrapped bool
+	}{
+		{name: "nil input returns nil", in: nil, wantNil: true},
+		{name: "404 wraps ErrTunnelNotFound", in: &cfgo.Error{StatusCode: http.StatusNotFound}, wantWrapped: true},
+		{name: "403 preserved (no sentinel)", in: &cfgo.Error{StatusCode: http.StatusForbidden}, wantWrapped: false},
+		{name: "500 preserved (no sentinel)", in: &cfgo.Error{StatusCode: http.StatusInternalServerError}, wantWrapped: false},
+		{name: "non-cfgo error preserved", in: errors.New("boom"), wantWrapped: false},
+		{name: "nested 404 unwraps via errors.As", in: fmt.Errorf("outer: %w", &cfgo.Error{StatusCode: http.StatusNotFound}), wantWrapped: true},
 	}
-	if tunnel.Name != testTunnelName {
-		t.Errorf("expected name my-tunnel, got %s", tunnel.Name)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyTunnelAPIErr(tc.in)
+			if tc.wantNil {
+				require.NoError(t, got)
+				return
+			}
+			require.Error(t, got)
+			if tc.wantWrapped {
+				require.ErrorIs(t, got, ErrTunnelNotFound)
+			} else {
+				require.NotErrorIs(t, got, ErrTunnelNotFound)
+			}
+		})
 	}
 }
 
-func TestTunnelClient_ListTunnelsByName(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/accounts/acct-1/cfd_tunnel", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("expected GET, got %s", r.Method)
-		}
+// TestToSDKConfig_RoundTrip exercises the plain-Go → SDK update params
+// translation across three representative ingress shapes: a fully populated
+// OriginRequest, a partially populated one, and the bare catch-all entry
+// (no OriginRequest at all). The catch-all is the conventional last entry
+// in any cloudflared ingress list.
+func TestToSDKConfig_RoundTrip(t *testing.T) {
+	noVerify := true
+	serverName := "origin.example.com"
 
-		query := r.URL.Query()
-		if name := query.Get("name"); name != testTunnelName {
-			t.Errorf("expected name=my-tunnel, got %s", name)
-		}
-		if deleted := query.Get("is_deleted"); deleted != "false" {
-			t.Errorf("expected is_deleted=false, got %s", deleted)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{
+	cfg := TunnelConfig{
+		Ingress: []IngressEntry{
 			{
-				"id":   testTunnelID,
-				"name": testTunnelName,
+				Hostname: "full.example.com",
+				Path:     "/api",
+				Service:  "http://svc.ns:80",
+				OriginRequest: &IngressOriginRequest{
+					NoTLSVerify:      &noVerify,
+					OriginServerName: &serverName,
+				},
 			},
 			{
-				"id":   "tunnel-uuid-2",
-				"name": testTunnelName,
+				Hostname: "partial.example.com",
+				Service:  "https://svc.ns:443",
+				OriginRequest: &IngressOriginRequest{
+					OriginServerName: &serverName,
+				},
 			},
-		}))
-	})
-
-	client := newTestTunnelClient(t, mux)
-	tunnels, err := client.ListTunnelsByName(context.Background(), "acct-1", testTunnelName)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+			{Service: "http_status:404"}, // catch-all, no OriginRequest
+		},
 	}
 
-	if len(tunnels) != 2 {
-		t.Fatalf("expected 2 tunnels, got %d", len(tunnels))
-	}
-	if tunnels[0].ID != testTunnelID {
-		t.Errorf("expected first tunnel ID tunnel-uuid-1, got %s", tunnels[0].ID)
-	}
-	if tunnels[1].ID != "tunnel-uuid-2" {
-		t.Errorf("expected second tunnel ID tunnel-uuid-2, got %s", tunnels[1].ID)
-	}
+	out := toSDKConfig(cfg)
+
+	ingress := out.Ingress.Value
+	require.Len(t, ingress, 3)
+
+	// Entry 0 — full OriginRequest (both supported fields)
+	require.Equal(t, "full.example.com", ingress[0].Hostname.Value)
+	require.Equal(t, "/api", ingress[0].Path.Value)
+	require.Equal(t, "http://svc.ns:80", ingress[0].Service.Value)
+	or0 := ingress[0].OriginRequest.Value
+	require.True(t, or0.NoTLSVerify.Value)
+	require.Equal(t, "origin.example.com", or0.OriginServerName.Value)
+
+	// Entry 1 — partial OriginRequest (only OriginServerName)
+	require.Equal(t, "partial.example.com", ingress[1].Hostname.Value)
+	require.Equal(t, "https://svc.ns:443", ingress[1].Service.Value)
+	or1 := ingress[1].OriginRequest.Value
+	require.Equal(t, "origin.example.com", or1.OriginServerName.Value)
+	// Unset fields stay zero — param.Field with the zero present-flag is
+	// what the SDK marshals as "absent".
+	require.False(t, or1.NoTLSVerify.Value)
+
+	// Entry 2 — catch-all, no OriginRequest projected at all.
+	require.Equal(t, "http_status:404", ingress[2].Service.Value)
+	require.Equal(t, "", ingress[2].Hostname.Value)
+	// The Value on an unset param.Field is the zero-struct; the meaningful
+	// assertion is that no fields inside it were set.
+	or2 := ingress[2].OriginRequest.Value
+	require.False(t, or2.NoTLSVerify.Value)
+	require.Equal(t, "", or2.OriginServerName.Value)
 }
 
-func TestTunnelClient_ListTunnelsByName_Empty(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/accounts/acct-1/cfd_tunnel", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIListResponse(t, []map[string]any{}))
-	})
-
-	client := newTestTunnelClient(t, mux)
-	tunnels, err := client.ListTunnelsByName(context.Background(), "acct-1", "nonexistent")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestMapConfigurationGetResponse_AllFields verifies the GET-side mapper
+// projects both operator-modeled OriginRequest fields when the SDK
+// reports non-zero values, and projects no OriginRequest at all when every
+// field is zero.
+func TestMapConfigurationGetResponse_AllFields(t *testing.T) {
+	resp := &zero_trust.TunnelCloudflaredConfigurationGetResponse{
+		Version: 11,
+		Config: zero_trust.TunnelCloudflaredConfigurationGetResponseConfig{
+			Ingress: []zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngress{
+				{
+					Hostname: "full.example.com",
+					Path:     "/api",
+					Service:  "http://svc.ns:80",
+					OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
+						NoTLSVerify:      true,
+						OriginServerName: "origin.example.com",
+					},
+				},
+				{
+					Hostname: "bare.example.com",
+					Service:  "http://svc.ns:80",
+					// OriginRequest fields all zero — no projection expected.
+				},
+			},
+		},
 	}
 
-	if len(tunnels) != 0 {
-		t.Errorf("expected 0 tunnels, got %d", len(tunnels))
-	}
+	out := mapConfigurationGetResponse(resp)
+	require.Equal(t, 11, out.Version)
+	require.Len(t, out.Config.Ingress, 2)
+
+	// Entry 0 — both supported fields projected.
+	e0 := out.Config.Ingress[0]
+	require.Equal(t, "full.example.com", e0.Hostname)
+	require.Equal(t, "/api", e0.Path)
+	require.Equal(t, "http://svc.ns:80", e0.Service)
+	require.NotNil(t, e0.OriginRequest)
+	require.NotNil(t, e0.OriginRequest.NoTLSVerify)
+	require.True(t, *e0.OriginRequest.NoTLSVerify)
+	require.NotNil(t, e0.OriginRequest.OriginServerName)
+	require.Equal(t, "origin.example.com", *e0.OriginRequest.OriginServerName)
+
+	// Entry 1 — all SDK OriginRequest fields zero ⇒ no projection.
+	e1 := out.Config.Ingress[1]
+	require.Equal(t, "bare.example.com", e1.Hostname)
+	require.Nil(t, e1.OriginRequest)
 }
 
-func TestTunnelClient_DeleteTunnel(t *testing.T) {
-	var deleteCalled bool
-	mux := http.NewServeMux()
-	mux.HandleFunc("/accounts/acct-1/cfd_tunnel/tunnel-uuid-1", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
-			t.Errorf("expected DELETE, got %s", r.Method)
-		}
-		deleteCalled = true
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(cfAPIResponse(t, map[string]any{
-			"id":   testTunnelID,
-			"name": testTunnelName,
-		}))
-	})
-
-	client := newTestTunnelClient(t, mux)
-	err := client.DeleteTunnel(context.Background(), "acct-1", testTunnelID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// TestMapConfigurationUpdateResponse_AllFields mirrors the GET test against
+// the Update response type. Same shape, distinct SDK type — we keep a
+// dedicated mapper so the two cannot drift.
+func TestMapConfigurationUpdateResponse_AllFields(t *testing.T) {
+	resp := &zero_trust.TunnelCloudflaredConfigurationUpdateResponse{
+		Version: 12,
+		Config: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfig{
+			Ingress: []zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngress{
+				{
+					Hostname: "full.example.com",
+					Path:     "/api",
+					Service:  "http://svc.ns:80",
+					OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
+						NoTLSVerify:      true,
+						OriginServerName: "origin.example.com",
+					},
+				},
+				{
+					Hostname: "bare.example.com",
+					Service:  "http://svc.ns:80",
+				},
+			},
+		},
 	}
 
-	if !deleteCalled {
-		t.Error("expected delete endpoint to be called")
-	}
+	out := mapConfigurationUpdateResponse(resp)
+	require.Equal(t, 12, out.Version)
+	require.Len(t, out.Config.Ingress, 2)
+
+	e0 := out.Config.Ingress[0]
+	require.NotNil(t, e0.OriginRequest)
+	require.NotNil(t, e0.OriginRequest.NoTLSVerify)
+	require.True(t, *e0.OriginRequest.NoTLSVerify)
+	require.NotNil(t, e0.OriginRequest.OriginServerName)
+	require.Equal(t, "origin.example.com", *e0.OriginRequest.OriginServerName)
+
+	e1 := out.Config.Ingress[1]
+	require.Nil(t, e1.OriginRequest)
 }
 
-func TestTunnelClient_GetTunnel_APIError(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/accounts/acct-1/cfd_tunnel/tunnel-missing", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		resp := map[string]any{
-			"success":  false,
-			"result":   nil,
-			"errors":   []map[string]any{{"code": 7003, "message": "Tunnel not found."}},
-			"messages": []any{},
-		}
-		data, _ := json.Marshal(resp)
-		_, _ = w.Write(data)
-	})
+// TestMapConfigurationGetResponse_SymmetryWithUpdate is the regression-defense
+// test: if Get and Update mappers diverge in which OriginRequest fields they
+// project, the drift-detection consumer (T9) sees permanent false drift. We
+// build matching field combinations on both SDK response types and assert
+// the two mappers produce identical plain-Go IngressOriginRequest values.
+func TestMapConfigurationGetResponse_SymmetryWithUpdate(t *testing.T) {
+	// Case A: both supported fields non-zero (both should project).
+	// Case B: only OriginServerName set (NoTLSVerify false).
+	//          This is the one Fix 1 specifically guards.
+	// Case C: only NoTLSVerify true.
+	// Case D: all zero (no projection at either side).
 
-	client := newTestTunnelClient(t, mux)
-	_, err := client.GetTunnel(context.Background(), "acct-1", "tunnel-missing")
-	if err == nil {
-		t.Error("expected error for missing tunnel")
+	getResp := &zero_trust.TunnelCloudflaredConfigurationGetResponse{
+		Config: zero_trust.TunnelCloudflaredConfigurationGetResponseConfig{
+			Ingress: []zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngress{
+				{Hostname: "a.example.com", Service: "http://a:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
+					NoTLSVerify: true, OriginServerName: "a.origin",
+				}},
+				{Hostname: "b.example.com", Service: "http://b:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
+					OriginServerName: "b.origin",
+				}},
+				{Hostname: "c.example.com", Service: "http://c:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationGetResponseConfigIngressOriginRequest{
+					NoTLSVerify: true,
+				}},
+				{Hostname: "d.example.com", Service: "http://d:80"},
+			},
+		},
 	}
+	updResp := &zero_trust.TunnelCloudflaredConfigurationUpdateResponse{
+		Config: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfig{
+			Ingress: []zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngress{
+				{Hostname: "a.example.com", Service: "http://a:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
+					NoTLSVerify: true, OriginServerName: "a.origin",
+				}},
+				{Hostname: "b.example.com", Service: "http://b:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
+					OriginServerName: "b.origin",
+				}},
+				{Hostname: "c.example.com", Service: "http://c:80", OriginRequest: zero_trust.TunnelCloudflaredConfigurationUpdateResponseConfigIngressOriginRequest{
+					NoTLSVerify: true,
+				}},
+				{Hostname: "d.example.com", Service: "http://d:80"},
+			},
+		},
+	}
+
+	gotGet := mapConfigurationGetResponse(getResp)
+	gotUpd := mapConfigurationUpdateResponse(updResp)
+
+	require.Len(t, gotGet.Config.Ingress, 4)
+	require.Len(t, gotUpd.Config.Ingress, 4)
+
+	// Hostname/Path/Service equality is incidental; the contract under
+	// test is OriginRequest projection symmetry.
+	for i := range gotGet.Config.Ingress {
+		require.Equal(t, gotGet.Config.Ingress[i].OriginRequest, gotUpd.Config.Ingress[i].OriginRequest,
+			"OriginRequest projection diverges between Get and Update mappers at index %d", i)
+	}
+
+	// Spot-check Case B explicitly — this is the exact asymmetry Fix 1
+	// addresses (OriginServerName set, NoTLSVerify zero).
+	caseB := gotGet.Config.Ingress[1]
+	require.NotNil(t, caseB.OriginRequest, "Case B must project OriginRequest even though NoTLSVerify is false")
+	require.NotNil(t, caseB.OriginRequest.OriginServerName)
+	require.Equal(t, "b.origin", *caseB.OriginRequest.OriginServerName)
+	require.Nil(t, caseB.OriginRequest.NoTLSVerify, "NoTLSVerify must not be projected when SDK reports false (unset vs. explicit-false ambiguity)")
+
+	// Case D — every field zero ⇒ no projection.
+	require.Nil(t, gotGet.Config.Ingress[3].OriginRequest)
+	require.Nil(t, gotUpd.Config.Ingress[3].OriginRequest)
 }

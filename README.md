@@ -1,206 +1,214 @@
-# cloudflare-operator
+# Cloudflare Operator
 
-A Kubernetes operator that manages Cloudflare resources declaratively via Custom Resources. Define DNS records, tunnels, security + transform rulesets, zone settings, and zone lifecycle as Kubernetes objects with drift detection and automatic reconciliation.
+A Kubernetes operator for managing Cloudflare DNS records, Zones, Rulesets, and
+Cloudflare Tunnels declaratively using Custom Resources.
 
-> **Unofficial — community project.** This is not an official Cloudflare product and is not endorsed by or affiliated with Cloudflare, Inc. The operator implements its Cloudflare API access on top of the official [`cloudflare/cloudflare-go`](https://github.com/cloudflare/cloudflare-go) Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc. Use at your own discretion.
+## Disclaimer
+
+**Unofficial — community project.** This is not an official Cloudflare
+product and is not endorsed by or affiliated with Cloudflare, Inc.
+The operator implements its Cloudflare API access on top of the
+official [cloudflare/cloudflare-go](https://github.com/cloudflare/cloudflare-go)
+Go SDK; the Cloudflare name and trademarks belong to Cloudflare, Inc.
+Use at your own discretion.
+
+**Agentically generated.** This codebase was produced through agentic,
+spec-driven development: each feature began as a written design and
+implementation spec, then a coding agent executed the plan under human
+review. Tests, code review, and CI gates apply as they would for any
+project, but the authorship pattern is not a single human contributor —
+keep that in mind when evaluating fit for your environment.
+
+## Features
+
+- Manage Cloudflare DNS, Zones, and Rulesets as Kubernetes resources
+- Spin up Cloudflare Tunnels (tunnel + cloudflared pods + remote routing) from a single CR
+- Attach tunnels to Gateway API objects and Services by adding one annotation
+- Each CR can use its own Cloudflare credentials
+- Adopt existing Cloudflare records safely (Observe mode reads, Managed mode writes)
 
 ## Custom Resources
 
-| CRD | Purpose |
-|-----|---------|
-| `CloudflareZone` | Onboard and manage domain lifecycle (create, adopt, activate, delete) |
-| `CloudflareDNSRecord` | Manage DNS records (A, AAAA, CNAME, SRV, MX, TXT, NS) with dynamic IP support |
-| `CloudflareTunnel` | Create tunnels, auto-generate `cloudflared` credentials Secrets, and (optionally) reconcile the operator-managed cloudflared Deployment + ingress config |
-| `CloudflareTunnelRule` | Author a single hostname → backend ingress rule for a tunnel (also emitted automatically by the Gateway API / Service source controllers) |
-| `CloudflareZoneConfig` | Declaratively configure zone settings (SSL, security, performance, network, DNS) |
-| `CloudflareRuleset` | Manage a zone's phase entrypoint ruleset (security / custom rules, rate limiting, transforms, redirects, …) across 14+ Rulesets-Engine phases |
-
-For end-to-end walkthroughs and topical guides, see [`docs/README.md`](docs/README.md). For field-by-field specs, see [`docs/crd-reference.md`](docs/crd-reference.md).
-
-## Quickstart
-
-New to cloudflare-operator? Start here: **[docs/domain-onboarding.md](docs/domain-onboarding.md)** — an end-to-end walkthrough from creating an API token to a first workload served via tunnel.
-
-Already familiar with the CRDs? See:
-- [Gateway API + Service annotations](docs/gateway-api-source.md) — the primary user interface in v1.
-- [Tunnels](docs/tunnels.md) — tunnel CRDs and the operator-managed cloudflared runtime.
-- [CRD reference](docs/crd-reference.md) — every field on every CRD.
-- [Migrating from external-dns](docs/external-dns-migration.md).
-- [Troubleshooting](docs/troubleshooting.md).
+| CRD | Description |
+|-----|-------------|
+| `CloudflareZone` | Cloudflare zone settings + zone-level metadata |
+| `CloudflareZoneConfig` | Per-zone configuration knobs (security, performance, TLS) |
+| `CloudflareRuleset` | WAF / transform / redirect / origin rulesets |
+| `CloudflareDNSRecord` | DNS records (A / AAAA / CNAME / TXT / …) with Observe + Managed modes |
+| `CloudflareTunnel` | Cloudflare Tunnel + cloudflared dataplane Deployment |
 
 ## Installation
 
-### Prerequisites
+### Helm (recommended)
 
-- Kubernetes 1.28+
-- Helm 3.8+ (for OCI chart support)
-- A [Cloudflare API token](https://dash.cloudflare.com/profile/api-tokens) with permissions for the resources you plan to manage (see [authentication](docs/crd-reference.md#authentication))
-
-### 1. Install the operator
-
-The Helm chart is published as an OCI artifact to GHCR. It installs the CRDs, the controller Deployment, and RBAC.
-
-```sh
-helm install cloudflare-operator \
-  oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version 0.8.0 \
-  --namespace cloudflare-operator \
+```bash
+# Replace <version> with a tagged chart release (e.g. 0.1.0).
+helm install cloudflare-operator oci://ghcr.io/jacaudi/charts/cloudflare-operator \
+  --version <version> \
+  --namespace cloudflare-system \
   --create-namespace
 ```
 
-Override defaults with `--set` or `-f values.yaml`. Common values (see [`chart/values.yaml`](chart/values.yaml)):
+The chart ships the operator and the v2alpha1 CRDs. See
+[`chart/README.md`](chart/README.md) for the full value reference.
 
-```yaml
-image:
-  tag: ""               # defaults to chart appVersion
-controller:
-  replicas: 1
-leaderElection:
-  enabled: true         # required if replicas > 1
-metrics:
-  serviceMonitor:
-    enabled: false      # set true if you run the Prometheus Operator
+### Local development
+
+```bash
+# Regenerate CRD bundles from the Go types under api/v2alpha1/.
+# Outputs to bin/crd-staging/ (gitignored) and copies into chart/templates/.
+make generate
+
+# Apply the regenerated CRDs into the current kube context.
+kubectl apply -f bin/crd-staging/
+
+# Run the operator locally against the current kube context.
+go run ./cmd/manager
 ```
 
-### 2. Create the credentials Secret
+To install the chart from a local checkout instead of OCI:
 
-```sh
-kubectl create secret generic cloudflare-api-token \
-  --namespace cloudflare-operator \
-  --from-literal=apiToken=<your-cloudflare-api-token> \
-  --from-literal=accountID=<your-cloudflare-account-id>
-
-kubectl label secret cloudflare-api-token \
-  --namespace cloudflare-operator \
-  cloudflare.io/managed=true
+```bash
+helm install cloudflare-operator ./chart \
+  --namespace cloudflare-system \
+  --create-namespace
 ```
 
-Every CR references this Secret via `secretRef.name`. Place the Secret in the same namespace as the CRs that use it. `accountID` is required for `CloudflareZone` and `CloudflareTunnel`; other CRs only read `apiToken`.
+## Quick Start
 
-The `cloudflare.io/managed=true` label is required: the operator's manager cache filters Secrets by this label so it only loads Secrets you've explicitly opted in. A Secret without the label produces `Ready=False` with `Reason=SecretNotLabeled` on any CR that references it. To stage a migration across many existing Secrets, set the chart value `secretCacheLabelSelector: ""` (or the env `SECRET_CACHE_LABEL_SELECTOR=""`) to disable the filter, label your Secrets, then restore the default. The operator-owned tunnel credentials Secret is auto-labeled.
+After the operator is installed:
 
-### 3. Onboard your zone
-
-`CloudflareZone` both creates new zones and adopts existing ones, so this works whether the domain is already in Cloudflare or not. Other CRs reference it via `zoneRef` instead of a raw zone ID.
+### 1. Create a Cloudflare credentials Secret
 
 ```yaml
-apiVersion: cloudflare.io/v1alpha1
-kind: CloudflareZone
+apiVersion: v1
+kind: Secret
 metadata:
-  name: example-com
-  namespace: cloudflare-operator
-spec:
-  name: "example.com"
-  deletionPolicy: Retain   # leaves the zone in Cloudflare on CR delete
-  secretRef:
-    name: cloudflare-api-token
+  name: cloudflare-credentials
+  namespace: cloudflare-system
+  # Required: the operator's Secret cache is label-scoped.
+  labels:
+    app.kubernetes.io/part-of: cloudflare-operator
+type: Opaque
+stringData:
+  token: "your-cloudflare-api-token"
+  accountID: "your-cloudflare-account-id"
 ```
 
-```sh
-kubectl apply -f zone.yaml
-kubectl get cloudflarezone -n cloudflare-operator
-```
+> **Why the label?** The operator's Secret cache is label-scoped to objects
+> carrying `app.kubernetes.io/part-of: cloudflare-operator` so it avoids a
+> cluster-wide LIST/WATCH on every Secret. Unlabeled credential Secrets are
+> invisible to the operator and credential resolution fails with
+> `ErrSecretNotFound`.
 
-For new zones, `status.nameServers` lists the nameservers to configure at your registrar. `Ready=True` once the zone is active.
-
-### 4. Create a DNS record
+### 2. Declare a DNS record
 
 ```yaml
-apiVersion: cloudflare.io/v1alpha1
+apiVersion: cloudflare.io/v2alpha1
 kind: CloudflareDNSRecord
 metadata:
-  name: homelab
-  namespace: cloudflare-operator
+  name: example
+  namespace: default
 spec:
-  zoneRef:
-    name: example-com      # the CloudflareZone above (same namespace)
-  name: "home.example.com"
-  type: A
-  dynamicIP: true          # auto-resolves and tracks your external IP
+  name: app.example.com
+  type: CNAME
+  content: origin.example.net
   proxied: true
-  ttl: 1                   # automatic
-  interval: 5m             # drift-check cadence
-  secretRef:
-    name: cloudflare-api-token
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
 ```
 
-```sh
-kubectl apply -f dns-record.yaml
-kubectl describe cloudflarednsrecord homelab -n cloudflare-operator
+### 3. (Optional) Declare a Cloudflare Tunnel
+
+```yaml
+apiVersion: cloudflare.io/v2alpha1
+kind: CloudflareTunnel
+metadata:
+  name: example-tunnel
+  namespace: default
+spec:
+  name: example-tunnel
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
+  connector:
+    replicas: 2
+    protocol: auto
+  routing:
+    fallback:
+      httpStatus: 404      # served when no source matches
 ```
 
-`Ready=True` means the record is in sync with Cloudflare. Prefer `zoneRef` — the controller resolves the zone ID from status and waits for the zone to be ready. `zoneID: "<id>"` is still supported for standalone cases.
+### 4. Apply + check
 
-More examples — CNAME, SRV, tunnels, rulesets, zone settings — live in [`config/samples/`](config/samples) and [`docs/crd-reference.md`](docs/crd-reference.md).
-
-## Upgrading
-
-```sh
-helm upgrade cloudflare-operator \
-  oci://ghcr.io/jacaudi/charts/cloudflare-operator \
-  --version <new-version> \
-  --namespace cloudflare-operator
+```bash
+kubectl apply -f credentials-secret.yaml -f dnsrecord.yaml
+kubectl get cloudflarednsrecord example -o yaml
+kubectl get cloudflaretunnel example-tunnel -o yaml
 ```
 
-Helm does not upgrade CRDs on `helm upgrade`. When a release changes CRD schemas, reapply them first:
+The status block carries `Ready` / reconciliation timestamps / the
+Cloudflare resource IDs once the loop converges.
 
-```sh
-helm pull oci://ghcr.io/jacaudi/charts/cloudflare-operator --version <new-version> --untar
-kubectl apply -f cloudflare-operator/crds/
+### Forcing an immediate reconcile
+
+If a CR is sitting in `Phase=Error` and you don't want to wait the default
+30-minute interval, annotate it:
+
+```bash
+TOKEN=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl annotate cloudflaretunnel/example-tunnel \
+  "cloudflare.io/reconcile-at=$TOKEN" --overwrite
 ```
 
-Check [`CHANGELOG.md`](CHANGELOG.md) for breaking changes before upgrading.
+See [docs/reconciliation.md](docs/reconciliation.md) for the full design
+and the other levers available.
 
-### Stuck-deleting CRs
+## Examples
 
-If a CR is stuck deleting because the credentials Secret it references is missing or unlabeled, the operator's `Ready` condition will surface `Reason=SecretNotFound` or `Reason=SecretNotLabeled`. The `Condition.Message` no longer carries the manual-finalizer guidance for credential-load failures during delete (it does on remote-API delete failures); check the operator logs for `"Remove the finalizer manually to force deletion"`. To unstick, label the Secret (or set the chart's `secretCacheLabelSelector: ""` to disable the filter) so the credential load succeeds, then let the finalizer drain. As a last resort, `kubectl patch` to remove the finalizer manually.
+See the [`examples/`](examples/) directory for ready-to-apply CR manifests
+covering every CRD plus the annotation-driven attachment patterns
+(Gateway, HTTPRoute, Service).
 
-## Uninstall
-
-```sh
-kubectl delete cloudflarednsrecord,cloudflarezone,cloudflaretunnel,cloudflarezoneconfig,cloudflareruleset --all -A
-helm uninstall cloudflare-operator --namespace cloudflare-operator
-kubectl delete crd \
-  cloudflarednsrecords.cloudflare.io \
-  cloudflarezones.cloudflare.io \
-  cloudflaretunnels.cloudflare.io \
-  cloudflarezoneconfigs.cloudflare.io \
-  cloudflarerulesets.cloudflare.io
-```
-
-Delete the CRs **before** uninstalling the chart so finalizers can run. `CloudflareZone` defaults to `deletionPolicy: Retain`, which leaves zones intact in Cloudflare.
-
-## Development
-
-Clone the repo and run the controller against your current kube context:
-
-```sh
-make install        # apply CRDs
-make run            # run controller locally
-make test           # unit tests (fake-client based)
-make lint           # golangci-lint
-```
-
-Build and deploy a local image to a Kind cluster:
-
-```sh
-make docker-build IMG=cloudflare-operator:dev
-kind load docker-image cloudflare-operator:dev
-make deploy IMG=cloudflare-operator:dev
-```
-
-See [`AGENTS.md`](AGENTS.md) for project conventions (kubebuilder layout, generated files, controller patterns).
+---
 
 ## Documentation
 
-- [`docs/README.md`](docs/README.md) — topical-doc index (onboarding, Gateway API, tunnels, migration, troubleshooting)
-- [`docs/crd-reference.md`](docs/crd-reference.md) — field-by-field CRD reference
-- [`config/samples/`](config/samples) — runnable sample manifests for each CRD
-- [`chart/values.yaml`](chart/values.yaml) — all Helm chart configuration options
-- [`CHANGELOG.md`](CHANGELOG.md) — release notes
+| Page | Covers |
+|------|--------|
+| [chart/README.md](chart/README.md) | Helm chart values reference (auto-generated from `chart/values.yaml`). |
+| [docs/adopting-existing-records.md](docs/adopting-existing-records.md) | Safe-adopt flow with TXT-companion verification: Observe-mode reconnaissance, the `AdoptRefusedNoTXT` / `AdoptRefusedForeign` safety net, the migration path for pre-companion records |
+| [docs/crd-reference.md](docs/crd-reference.md) | Field-by-field reference for all 5 CRDs and their sub-types (auto-generated from the `api/v2alpha1` Go types) |
+| [docs/annotations.md](docs/annotations.md) | Full operator-read annotation reference: every `cloudflare.io/*` annotation, where it's settable, the inheritance precedence chain, truthy-value vocabulary |
+| [docs/credentials.md](docs/credentials.md) | The `(API token, account ID)` model end-to-end: token Secret shape, the `part-of` label requirement, inline vs Secret-backed account ID, rotation semantics, common errors |
+| [docs/gateway-api.md](docs/gateway-api.md) | End-to-end Gateway-API integration: Gateway opt-in, HTTPRoute / TLSRoute attachment, per-Route overrides, cascade-GC, generated-object inventory, common gotchas |
+| [docs/reconciliation.md](docs/reconciliation.md) | Reconcile cadence, `Phase=Error` retry semantics, the `cloudflare.io/reconcile-at` force-reconcile annotation |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Field guide for diagnosing the operator: Status → Conditions → Logs → Events flow, the `Ready=False` reason vocabulary mapped to fixes, the verify-reconcile-actually-ran annotation-ack trick |
+| [docs/tunnels.md](docs/tunnels.md) | `CloudflareTunnel` deep-dive: direct-create vs auto-created, the 52-char naming budget, the cloudflared dataplane sizing knobs, the cloudflared image override precedence chain, the Status surface, cascade-GC rules |
+| [docs/txt-registry.md](docs/txt-registry.md) | TXT companion ownership-marking: the `cf-txt.<hostname>` companion shape, the JSON payload format (or AES-256-GCM `v1:nonce:ciphertext` envelope), enabling encryption via `TxtRegistryKeySecretRef`, rolling between plaintext + AES, the engineering migration procedure |
+
+## Acknowledgements
+
+This project stands on the shoulders of giants:
+
+- **[bjw-s](https://github.com/bjw-s)** — for the [helm-charts](https://github.com/bjw-s-labs/helm-charts) common library that powers this operator's Helm chart. The common library pattern keeps the chart small and consistent with the rest of the ecosystem.
+- **[cloudflare/cloudflare-go](https://github.com/cloudflare/cloudflare-go)** — the official Cloudflare Go SDK that backs every API call this operator makes.
+- **[kubernetes-sigs/controller-runtime](https://github.com/kubernetes-sigs/controller-runtime)** — the operator framework: managers, caches, watches, leader election, and the reconcile loop semantics this operator builds on.
+- **[Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/)** — the HTTPRoute / TLSRoute / Gateway primitives the tunnel-source controllers attach to.
 
 ## License
 
-Copyright 2026. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
-
-"Cloudflare" and the Cloudflare logo are trademarks of Cloudflare, Inc. This project is not endorsed by or affiliated with Cloudflare, Inc. Cloudflare API access is implemented via the official [`cloudflare/cloudflare-go`](https://github.com/cloudflare/cloudflare-go) Go SDK.
+Licensed under the [MIT License](LICENSE).

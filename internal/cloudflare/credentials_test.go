@@ -1,0 +1,146 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
+package cloudflare
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v2alpha1 "github.com/jacaudi/cloudflare-operator/api/v2alpha1"
+)
+
+func newFakeClient(t *testing.T, objs ...runtime.Object) *fake.ClientBuilder {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, v2alpha1.AddToScheme(scheme))
+	return fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...)
+}
+
+func TestResolveCredentials_HappyPath(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-token", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("test-token-abc")},
+	}
+	c := newFakeClient(t, secret).Build()
+
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+		AccountID:      "acct-123",
+	}
+	creds, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.NoError(t, err)
+	require.Equal(t, Secret("test-token-abc"), creds.Token)
+	require.Equal(t, "acct-123", creds.AccountID)
+}
+
+func TestResolveCredentials_MissingSecret(t *testing.T) {
+	c := newFakeClient(t).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "missing", Namespace: "default", Key: "token"},
+		AccountID:      "acct-123",
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrSecretNotFound)
+}
+
+func TestResolveCredentials_MissingKey(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-token", Namespace: "default"},
+		Data:       map[string][]byte{"other": []byte("x")},
+	}
+	c := newFakeClient(t, secret).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+		AccountID:      "acct-123",
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrSecretKeyMissing)
+}
+
+func TestResolveCredentials_DefaultsNamespace(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-token", Namespace: "media"},
+		Data:       map[string][]byte{"token": []byte("token-xyz")},
+	}
+	c := newFakeClient(t, secret).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Key: "token"}, // Namespace empty
+		AccountID:      "acct-123",
+	}
+	creds, err := ResolveCredentials(context.Background(), c, ref, "media")
+	require.NoError(t, err)
+	require.Equal(t, Secret("token-xyz"), creds.Token)
+}
+
+func TestResolveCredentials_MissingAccountID(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf-token", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("abc")},
+	}
+	c := newFakeClient(t, secret).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef: v2alpha1.SecretReference{Name: "cf-token", Namespace: "default", Key: "token"},
+		AccountID:      "",
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrAccountIDUnset)
+}
+
+func TestResolveCredentials_AccountIDFromSecret(t *testing.T) {
+	tokenSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("tok"), "accountID": []byte("  acct-from-secret\n")},
+	}
+	c := newFakeClient(t, tokenSec).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef:     v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "token"},
+		AccountIDSecretRef: &v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "accountID"},
+	}
+	creds, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.NoError(t, err)
+	require.Equal(t, Secret("tok"), creds.Token)
+	require.Equal(t, "acct-from-secret", creds.AccountID) // whitespace-trimmed
+}
+
+func TestResolveCredentials_AccountIDSecretMissing(t *testing.T) {
+	tokenSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("tok")},
+	}
+	c := newFakeClient(t, tokenSec).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef:     v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "token"},
+		AccountIDSecretRef: &v2alpha1.SecretReference{Name: "absent", Namespace: "default", Key: "accountID"},
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.ErrorIs(t, err, ErrSecretNotFound)
+}
+
+func TestResolveCredentials_AccountIDSecretKeyMissing(t *testing.T) {
+	tokenSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "cf", Namespace: "default"},
+		Data:       map[string][]byte{"token": []byte("tok"), "accountID": []byte("   ")},
+	}
+	c := newFakeClient(t, tokenSec).Build()
+	ref := v2alpha1.CloudflareCredentialRef{
+		TokenSecretRef:     v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "token"},
+		AccountIDSecretRef: &v2alpha1.SecretReference{Name: "cf", Namespace: "default", Key: "accountID"},
+	}
+	_, err := ResolveCredentials(context.Background(), c, ref, "default")
+	require.ErrorIs(t, err, ErrSecretKeyMissing) // whitespace-only treated as empty
+}

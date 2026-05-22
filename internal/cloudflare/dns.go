@@ -1,12 +1,37 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
 package cloudflare
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	cfgo "github.com/cloudflare/cloudflare-go/v6"
 	"github.com/cloudflare/cloudflare-go/v6/dns"
 )
+
+// ErrRecordNotFound is returned when the Cloudflare API responds with 404
+// to a DNS record lookup. Use errors.Is to match.
+var ErrRecordNotFound = errors.New("dns record not found")
+
+// classifyDNSAPIErr maps cloudflare-go errors to ErrRecordNotFound when
+// the API responds with 404 on a record path. Other errors pass through.
+func classifyDNSAPIErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if apiErr, ok := errors.AsType[*cfgo.Error](err); ok && apiErr.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("%w: %w", ErrRecordNotFound, err)
+	}
+	return err
+}
 
 // dnsClient wraps the cloudflare-go v6 SDK to implement DNSClient.
 type dnsClient struct {
@@ -23,7 +48,7 @@ func (c *dnsClient) GetRecord(ctx context.Context, zoneID, recordID string) (*DN
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get DNS record %s: %w", recordID, err)
+		return nil, fmt.Errorf("get DNS record %s: %w", recordID, classifyDNSAPIErr(err))
 	}
 	return mapRecordResponse(resp), nil
 }
@@ -49,7 +74,7 @@ func (c *dnsClient) CreateRecord(ctx context.Context, zoneID string, params DNSR
 	body := dns.RecordNewParamsBody{
 		Name:    cfgo.F(params.Name),
 		Type:    cfgo.F(dns.RecordNewParamsBodyType(params.Type)),
-		Content: cfgo.F(params.Content),
+		Content: cfgo.F(wireContent(params.Type, params.Content)),
 		TTL:     cfgo.F(dns.TTL(params.TTL)),
 	}
 	if params.Proxied != nil {
@@ -76,7 +101,7 @@ func (c *dnsClient) UpdateRecord(ctx context.Context, zoneID, recordID string, p
 	body := dns.RecordUpdateParamsBody{
 		Name:    cfgo.F(params.Name),
 		Type:    cfgo.F(dns.RecordUpdateParamsBodyType(params.Type)),
-		Content: cfgo.F(params.Content),
+		Content: cfgo.F(wireContent(params.Type, params.Content)),
 		TTL:     cfgo.F(dns.TTL(params.TTL)),
 	}
 	if params.Proxied != nil {
@@ -94,7 +119,7 @@ func (c *dnsClient) UpdateRecord(ctx context.Context, zoneID, recordID string, p
 		Body:   body,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("update DNS record %s: %w", recordID, err)
+		return nil, fmt.Errorf("update DNS record %s: %w", recordID, classifyDNSAPIErr(err))
 	}
 	return mapRecordResponse(resp), nil
 }
@@ -104,12 +129,46 @@ func (c *dnsClient) DeleteRecord(ctx context.Context, zoneID, recordID string) e
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		return fmt.Errorf("delete DNS record %s: %w", recordID, err)
+		return fmt.Errorf("delete DNS record %s: %w", recordID, classifyDNSAPIErr(err))
 	}
 	return nil
 }
 
-// mapRecordResponse converts a Cloudflare SDK RecordResponse to our internal DNSRecord.
+// recordTypeTXT is the DNS record-type string for TXT records on the write
+// path. It matches dns.RecordResponseTypeTXT used by the read side
+// (mapRecordResponse); keep the two in sync.
+const recordTypeTXT = "TXT"
+
+// wireContent returns the value to send as a record's Content field. TXT
+// content is rendered into RFC 1035 presentation form (EncodeTXT) so
+// Cloudflare stores quote-bearing content losslessly; all other types pass
+// through unchanged. TXT-only inverse of the read-side CanonicalizeTXT
+// applied (also TXT-gated) in mapRecordResponse.
+func wireContent(recordType, content string) string {
+	if recordType == recordTypeTXT {
+		return EncodeTXT(content)
+	}
+	return content
+}
+
+// mapRecordResponse converts a Cloudflare SDK RecordResponse to our internal
+// DNSRecord. The Priority field on DNSRecord is populated only for record
+// types that carry a top-level Priority on the Cloudflare API: MX and URI.
+// Gating on r.Type (rather than r.Priority != 0) preserves legitimate
+// priority-0 records — notably RFC 7505 null MX (`. MX 0 "."`) — which
+// would otherwise round-trip as nil and cause spurious drift in the
+// reconciler. SRV's priority lives inside Data, not at the top level.
+//
+// TXT canonicalization: the Cloudflare API returns TXT record content in
+// RFC 1035 presentation form — whitespace-separated double-quoted
+// character-strings (e.g. `"foo" "bar"`), with values longer than 255 bytes
+// split automatically. mapRecordResponse is the single read chokepoint for
+// all DNS API responses, so CanonicalizeTXT is applied here (TXT only).
+// Every downstream consumer — drift comparison, codec decode,
+// verifyTXTOwnership, and status — therefore receives logical content and
+// need not repeat the transformation. Callers extending the switch must
+// preserve this invariant: rec.Content for TXT is already canonical before
+// the switch body executes.
 func mapRecordResponse(r *dns.RecordResponse) *DNSRecord {
 	rec := &DNSRecord{
 		ID:      r.ID,
@@ -119,7 +178,14 @@ func mapRecordResponse(r *dns.RecordResponse) *DNSRecord {
 		Proxied: r.Proxied,
 		TTL:     int(r.TTL),
 	}
-	// Map the Data field if it's a map
+	if r.Type == dns.RecordResponseTypeTXT {
+		rec.Content = CanonicalizeTXT(r.Content)
+	}
+	switch r.Type {
+	case dns.RecordResponseTypeMX, dns.RecordResponseTypeURI:
+		p := int(r.Priority)
+		rec.Priority = &p
+	}
 	if m, ok := r.Data.(map[string]any); ok {
 		rec.Data = m
 	}

@@ -1,4 +1,10 @@
-// internal/cloudflare/interfaces.go
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
 package cloudflare
 
 import (
@@ -6,18 +12,21 @@ import (
 	"time"
 )
 
-// DNSRecord represents a Cloudflare DNS record.
+// --- DNS ---
+
+// DNSRecord is the operator-side representation of a Cloudflare DNS record.
 type DNSRecord struct {
-	ID      string
-	Name    string
-	Type    string
-	Content string
-	Proxied bool
-	TTL     int
-	Data    map[string]any
+	ID       string
+	Name     string
+	Type     string
+	Content  string
+	Proxied  bool
+	TTL      int
+	Priority *int
+	Data     map[string]any
 }
 
-// DNSRecordParams are parameters for creating/updating a DNS record.
+// DNSRecordParams are the inputs to Create / Update.
 type DNSRecordParams struct {
 	Name     string
 	Type     string
@@ -28,7 +37,7 @@ type DNSRecordParams struct {
 	Data     map[string]any
 }
 
-// DNSClient manages Cloudflare DNS records.
+// DNSClient manages Cloudflare DNS records under /zones/{zone_id}/dns_records.
 type DNSClient interface {
 	GetRecord(ctx context.Context, zoneID, recordID string) (*DNSRecord, error)
 	ListRecordsByNameAndType(ctx context.Context, zoneID, name, recordType string) ([]DNSRecord, error)
@@ -37,27 +46,67 @@ type DNSClient interface {
 	DeleteRecord(ctx context.Context, zoneID, recordID string) error
 }
 
-// Tunnel represents a Cloudflare Tunnel.
-type Tunnel struct {
-	ID   string
+// --- Zone (lifecycle) ---
+
+// Zone is the operator-side representation of a Cloudflare zone.
+type Zone struct {
+	ID                  string
+	Name                string
+	Status              string // initializing | pending | active | moved
+	Type                string // full | partial | secondary
+	Paused              bool
+	NameServers         []string
+	OriginalNameServers []string
+	OriginalRegistrar   string
+	ActivatedOn         *time.Time
+}
+
+// ZoneParams are the inputs to Create.
+type ZoneParams struct {
 	Name string
+	Type string
 }
 
-// TunnelParams are parameters for creating a tunnel.
-type TunnelParams struct {
-	Name         string
-	TunnelSecret string
+// ZoneEditParams are the inputs to Edit.
+type ZoneEditParams struct {
+	Paused *bool
 }
 
-// TunnelClient manages Cloudflare Tunnels.
-type TunnelClient interface {
-	GetTunnel(ctx context.Context, accountID, tunnelID string) (*Tunnel, error)
-	ListTunnelsByName(ctx context.Context, accountID, name string) ([]Tunnel, error)
-	CreateTunnel(ctx context.Context, accountID string, params TunnelParams) (*Tunnel, error)
-	DeleteTunnel(ctx context.Context, accountID, tunnelID string) error
+// ZoneClient manages zone lifecycle under /zones.
+type ZoneClient interface {
+	CreateZone(ctx context.Context, accountID string, params ZoneParams) (*Zone, error)
+	GetZone(ctx context.Context, zoneID string) (*Zone, error)
+	ListZonesByName(ctx context.Context, accountID, name string) ([]Zone, error)
+	EditZone(ctx context.Context, zoneID string, params ZoneEditParams) (*Zone, error)
+	DeleteZone(ctx context.Context, zoneID string) error
+	TriggerActivationCheck(ctx context.Context, zoneID string) error
 }
 
-// Ruleset represents a Cloudflare Ruleset.
+// --- ZoneConfig (settings + bot management) ---
+
+// ZoneSetting is a key-value pair for a zone setting.
+type ZoneSetting struct {
+	ID    string
+	Value any
+}
+
+// BotManagementConfig represents bot management settings.
+// Pointer fields distinguish "unset" from "set to false".
+type BotManagementConfig struct {
+	EnableJS  *bool
+	FightMode *bool
+}
+
+// ZoneConfigClient manages /zones/{zone_id}/settings and /zones/{zone_id}/bot_management.
+type ZoneConfigClient interface {
+	UpdateSetting(ctx context.Context, zoneID, settingID string, value any) error
+	GetBotManagement(ctx context.Context, zoneID string) (*BotManagementConfig, error)
+	UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error
+}
+
+// --- Ruleset ---
+
+// Ruleset is the operator-side representation of a zone ruleset.
 type Ruleset struct {
 	ID          string
 	Name        string
@@ -66,13 +115,12 @@ type Ruleset struct {
 	Rules       []RulesetRule
 }
 
-// RuleLogging configures per-rule logging behavior.
-// Pointer Enabled so callers can distinguish "unset" (nil) from "set to false".
+// RuleLogging is the per-rule logging override.
 type RuleLogging struct {
 	Enabled *bool
 }
 
-// RulesetRule is a single rule in a ruleset.
+// RulesetRule is one rule inside a ruleset.
 type RulesetRule struct {
 	ID               string
 	Action           string
@@ -83,7 +131,7 @@ type RulesetRule struct {
 	Logging          *RuleLogging
 }
 
-// RulesetParams are parameters for creating/updating a ruleset.
+// RulesetParams are the inputs to UpsertPhaseEntrypoint.
 type RulesetParams struct {
 	Name        string
 	Description string
@@ -91,78 +139,40 @@ type RulesetParams struct {
 	Rules       []RulesetRule
 }
 
-// RulesetClient manages a zone's phase-entrypoint rulesets.
-//
-// Cloudflare has two ruleset kinds: "zone" (the phase entrypoint — one per
-// phase per zone, what the dashboard surfaces as Security rules / Custom
-// rules / Rate limiting rules / etc.) and "custom" (standalone rulesets, a
-// Business+ feature). The operator manages the phase entrypoint so it works
-// on all plans.
+// RulesetClient manages the zone's phase-entrypoint rulesets via the
+// PUT /zones/{zone_id}/rulesets/phases/{phase}/entrypoint write path.
 type RulesetClient interface {
-	// GetPhaseEntrypoint returns the zone's entrypoint ruleset for the given
-	// phase. Returns ErrPhaseEntrypointNotFound when the entrypoint has not
-	// been created yet (no Update has ever been made for that phase on this
-	// zone). Any other error indicates an API / transport failure.
 	GetPhaseEntrypoint(ctx context.Context, zoneID, phase string) (*Ruleset, error)
-
-	// UpsertPhaseEntrypoint writes the given rules to the zone's entrypoint
-	// ruleset for the given phase. Creates the entrypoint if it does not
-	// already exist, otherwise replaces its rule set.
 	UpsertPhaseEntrypoint(ctx context.Context, zoneID, phase string, params RulesetParams) (*Ruleset, error)
 }
 
-// ZoneSetting is a key-value pair for a zone setting.
-type ZoneSetting struct {
-	ID    string
-	Value any
-}
+// --- Spec 3 append: TunnelClient + supporting types ---
 
-// BotManagementConfig represents bot management settings.
-// Pointer fields allow distinguishing between "unset" and "set to false".
-type BotManagementConfig struct {
-	EnableJS  *bool
-	FightMode *bool
-}
+// TunnelClient is the spec-3 surface over the Cloudflare cfd_tunnel API.
+// All per-tunnel-ID methods classify 404 responses into ErrTunnelNotFound
+// via errors.Is so callers can branch on the not-found case without
+// inspecting the underlying SDK error type.
+//
+// The plain-Go request/response types (Tunnel, CreateTunnelParams,
+// PatchTunnelParams, TunnelToken, TunnelConfiguration, TunnelConfig,
+// TunnelConnection) live in tunnel.go alongside the production wrapper so
+// callers do not depend on cloudflare-go SDK types directly.
+type TunnelClient interface {
+	// Lifecycle.
+	GetTunnel(ctx context.Context, accountID, tunnelID string) (*Tunnel, error)
+	ListTunnelsByName(ctx context.Context, accountID, name string) ([]Tunnel, error)
+	CreateTunnel(ctx context.Context, accountID string, params CreateTunnelParams) (*Tunnel, error)
+	PatchTunnel(ctx context.Context, accountID, tunnelID string, params PatchTunnelParams) (*Tunnel, error)
+	DeleteTunnel(ctx context.Context, accountID, tunnelID string) error
 
-// ZoneClient manages Cloudflare Zone settings and bot management.
-type ZoneClient interface {
-	GetSettings(ctx context.Context, zoneID string) ([]ZoneSetting, error)
-	UpdateSetting(ctx context.Context, zoneID, settingID string, value any) error
-	GetBotManagement(ctx context.Context, zoneID string) (*BotManagementConfig, error)
-	UpdateBotManagement(ctx context.Context, zoneID string, config BotManagementConfig) error
-}
+	// Remote-config (PUT is full replace; no merge semantics).
+	GetConfiguration(ctx context.Context, accountID, tunnelID string) (*TunnelConfiguration, error)
+	PutConfiguration(ctx context.Context, accountID, tunnelID string, cfg TunnelConfig) (*TunnelConfiguration, error)
 
-// Zone represents a Cloudflare Zone (lifecycle information).
-type Zone struct {
-	ID                  string
-	Name                string
-	Status              string // initializing, pending, active, moved
-	Type                string // full, partial, secondary
-	Paused              bool
-	NameServers         []string
-	OriginalNameServers []string
-	OriginalRegistrar   string
-	VerificationKey     string
-	ActivatedOn         *time.Time
-}
-
-// ZoneLifecycleParams are parameters for creating a zone.
-type ZoneLifecycleParams struct {
-	Name string
-	Type string // full, partial, secondary
-}
-
-// ZoneLifecycleEditParams are parameters for editing a zone.
-type ZoneLifecycleEditParams struct {
-	Paused *bool
-}
-
-// ZoneLifecycleClient manages Cloudflare Zone lifecycle (create/get/list/edit/delete).
-type ZoneLifecycleClient interface {
-	CreateZone(ctx context.Context, accountID string, params ZoneLifecycleParams) (*Zone, error)
-	GetZone(ctx context.Context, zoneID string) (*Zone, error)
-	ListZonesByName(ctx context.Context, accountID, name string) ([]Zone, error)
-	EditZone(ctx context.Context, zoneID string, params ZoneLifecycleEditParams) (*Zone, error)
-	DeleteZone(ctx context.Context, zoneID string) error
-	TriggerActivationCheck(ctx context.Context, zoneID string) error
+	// Connector token + connection lifecycle. DeleteConnections must run
+	// before DeleteTunnel; the API rejects tunnel deletion while any
+	// connection is registered.
+	GetToken(ctx context.Context, accountID, tunnelID string) (TunnelToken, error)
+	ListConnections(ctx context.Context, accountID, tunnelID string) ([]TunnelConnection, error)
+	DeleteConnections(ctx context.Context, accountID, tunnelID string) error
 }

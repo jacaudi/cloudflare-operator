@@ -1,0 +1,67 @@
+# Annotated Gateway — opt a Gateway API Gateway into auto-tunnel creation.
+#
+# When a Gateway carries `cloudflare.io/tunnel: "true"`, the operator
+# auto-creates a CloudflareTunnel CR in the same namespace and spawns the
+# cloudflared dataplane Deployment. Routes (HTTPRoute / TLSRoute) attached
+# to this Gateway via `parentRefs` are picked up and their hostnames are
+# emitted as `CloudflareDNSRecord` CRs pointing at the tunnel's CNAME
+# (<tunnel-id>.cfargotunnel.com).
+#
+# Other annotations on this Gateway become the inheritance default for
+# every Route that attaches — Routes can still override individual values
+# by setting the same annotation on themselves (see annotated_httproute_
+# override.yaml).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: example-gateway
+  namespace: default
+  annotations:
+    # OPT-IN — required. Without this, the operator ignores the Gateway.
+    cloudflare.io/tunnel: "true"
+
+    # Optional. Override the auto-derived tunnel name (default: cf-<ns>[-<tunnel-name-annotation>]).
+    # cloudflare.io/tunnel-name: "frontend"
+
+    # Resolve the target zone. Reference a CloudflareZone CR by name.
+    cloudflare.io/zone-ref: example-com
+
+    # Cross-namespace zone reference. Use when the CloudflareZone CR lives
+    # in a different namespace than this Gateway (common pattern: zones
+    # in a `cloudflare-system` namespace, Gateways in app namespaces).
+    # cloudflare.io/zone-ref-namespace: cloudflare-system
+
+    # Inheritance defaults for emitted DNSRecord CRs. Each Route attached
+    # to this Gateway picks these up unless it overrides them on itself.
+    cloudflare.io/proxied: "true"
+    cloudflare.io/ttl: "1"
+    # cloudflare.io/no-tls-verify: "false"
+    # cloudflare.io/origin-server-name: "expected SAN on origin cert"
+
+    # Apex-hostname routing. Set when the Gateway has a wildcard listener
+    # (e.g. `*.example.com`) and you also want the apex (`example.com`)
+    # routed through the tunnel. The operator emits an additional
+    # CloudflareDNSRecord for the apex when this is set.
+    # cloudflare.io/gateway-apex: example.com
+spec:
+  gatewayClassName: example-gateway-class
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      hostname: "*.example.com"
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.example.com"
+      allowedRoutes:
+        namespaces:
+          from: Same
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: example-com-tls

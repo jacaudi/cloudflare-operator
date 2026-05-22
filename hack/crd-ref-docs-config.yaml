@@ -1,0 +1,22 @@
+# crd-ref-docs configuration. Generates docs/crd-reference.md from the Go
+# types in api/v2alpha1/. Invoked by `make generate`.
+
+processor:
+  # Ignore fields populated automatically by Kubernetes / controller-runtime.
+  ignoreFields:
+    - "TypeMeta$"
+    - "ObjectMeta$"
+    # Suppress duplicate Conditions (rendered as a separate type).
+    - "status.conditions"
+  # Filter out the auto-generated *List wrapper types — never instantiated
+  # by users; used only by the API machinery.
+  ignoreTypes:
+    - "CloudflareZoneList"
+    - "CloudflareZoneConfigList"
+    - "CloudflareRulesetList"
+    - "CloudflareDNSRecordList"
+    - "CloudflareTunnelList"
+
+render:
+  # Target Kubernetes API version for cross-references in the rendered docs.
+  kubernetesVersion: "1.30"

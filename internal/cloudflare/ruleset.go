@@ -1,3 +1,10 @@
+/*
+Copyright (c) 2026 jacaudi
+
+Licensed under the MIT License. See LICENSE in the project root for the
+full license text.
+*/
+
 package cloudflare
 
 import (
@@ -31,8 +38,7 @@ func (c *rulesetClient) GetPhaseEntrypoint(ctx context.Context, zoneID, phase st
 		ZoneID: cfgo.F(zoneID),
 	})
 	if err != nil {
-		var apiErr *cfgo.Error
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+		if apiErr, ok := errors.AsType[*cfgo.Error](err); ok && apiErr.StatusCode == http.StatusNotFound {
 			return nil, fmt.Errorf("%w: phase %s in zone %s", ErrPhaseEntrypointNotFound, phase, zoneID)
 		}
 		return nil, fmt.Errorf("get phase entrypoint %s: %w", phase, err)
@@ -40,6 +46,12 @@ func (c *rulesetClient) GetPhaseEntrypoint(ctx context.Context, zoneID, phase st
 	return mapPhaseGetResponse(resp), nil
 }
 
+// UpsertPhaseEntrypoint replaces the entire phase-entrypoint ruleset
+// (rules list, name, description) at the Cloudflare API. The Cloudflare
+// API's PUT semantics are whole-list replace — partial updates / per-rule
+// PATCH are not used by this operator (matches main's pattern). On first
+// call for a (zoneID, phase) pair the entrypoint is created; subsequent
+// calls overwrite.
 func (c *rulesetClient) UpsertPhaseEntrypoint(ctx context.Context, zoneID, phase string, params RulesetParams) (*Ruleset, error) {
 	resp, err := c.cf.Rulesets.Phases.Update(ctx, rulesets.Phase(phase), rulesets.PhaseUpdateParams{
 		ZoneID:      cfgo.F(zoneID),

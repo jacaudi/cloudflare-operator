@@ -40,11 +40,38 @@ jobs:
       go-version: '1.26'
       coverage: true
       coverage-threshold: 40
-      test-packages: './internal/controller/... ./internal/cloudflare/... ./internal/ipresolver/... ./internal/status/... ./api/...'
+      test-packages: './api/... ./internal/... ./cmd/...'
+
+  envtest:
+    name: Envtest Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Run make test (unit + envtest)
+        run: make test
+
+  # Build metadata for version stamping (short commit + ISO build date).
+  meta:
+    name: Build Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.m.outputs.commit }}
+      date: ${{ steps.m.outputs.date }}
+    steps:
+      - id: m
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          echo "commit=${SHA:0:7}" >> "${GITHUB_OUTPUT}"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
 
   # Create semantic version and GitHub release (main branch only)
   release:
-    needs: [lint, test]
+    needs: [lint, test, envtest]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     uses: jacaudi/github-actions/.github/workflows/component-semantic-release.yml@v0.20.3
     permissions:
@@ -60,7 +87,7 @@ jobs:
 
   # Build multi-arch container images
   container:
-    needs: [release]
+    needs: [release, meta]
     if: needs.release.outputs.new-release-published == 'true'
     uses: jacaudi/github-actions/.github/workflows/component-container-build.yml@v0.20.3
     permissions:
@@ -70,6 +97,10 @@ jobs:
       image-name: ${{ github.repository }}
       platforms: 'linux/amd64,linux/arm64'
       version: ${{ needs.release.outputs.new-release-version }}
+      build-args: |
+        VERSION=${{ needs.release.outputs.new-release-version-v }}
+        COMMIT=${{ needs.meta.outputs.commit }}
+        DATE=${{ needs.meta.outputs.date }}
       tags: |
         ghcr.io/${{ github.repository }}:${{ needs.release.outputs.new-release-version-v }}
         ghcr.io/${{ github.repository }}:latest

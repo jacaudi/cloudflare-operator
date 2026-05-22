@@ -1,66 +1,57 @@
-{{/*
-This template builds the full values structure from modular helpers
-and passes it to the bjw-s common library loader
-*/}}
-{{- $bjwsValues := dict "global" .Values.global -}}
-
-{{/* Security/Pod Options */}}
-{{- $security := include "cloudflare-operator.values.security" . | fromYaml -}}
-{{- if $security -}}
-  {{- $_ := set $bjwsValues "defaultPodOptions" $security.defaultPodOptions -}}
+{{- if and .Values.namespace (ne .Values.namespace .Release.Namespace) }}
+{{- fail (printf "values.namespace (%s) must equal the release namespace (%s): bjw-s common renders the ServiceAccount/Deployment in .Release.Namespace, so a divergent values.namespace silently breaks RBAC. Install into the intended namespace (helm --namespace / HelmRelease targetNamespace) and leave values.namespace empty or matching." .Values.namespace .Release.Namespace) }}
 {{- end -}}
-
-{{/* Controllers */}}
-{{- $controllers := include "cloudflare-operator.values.controllers" . | fromYaml -}}
-{{- if $controllers -}}
-  {{- $_ := set $bjwsValues "controllers" $controllers.controllers -}}
-{{- end -}}
-
-{{/* Service */}}
-{{- $service := include "cloudflare-operator.values.service" . | fromYaml -}}
-{{- if $service -}}
-  {{- $_ := set $bjwsValues "service" $service.service -}}
-{{- end -}}
-
-{{/* Service Account */}}
-{{- $serviceAccount := include "cloudflare-operator.values.serviceaccount" . | fromYaml -}}
-{{- if $serviceAccount -}}
-  {{- $_ := set $bjwsValues "serviceAccount" $serviceAccount.serviceAccount -}}
-{{- end -}}
-
-{{/* RBAC (requires serviceAccount for binding subjects) */}}
-{{- if .Values.serviceAccount.create -}}
-{{- $rbac := include "cloudflare-operator.values.rbac" . | fromYaml -}}
-{{- if $rbac -}}
-  {{- $_ := set $bjwsValues "rbac" $rbac.rbac -}}
-{{- end -}}
-{{- else -}}
-  {{- $_ := set $bjwsValues "rbac" dict -}}
-{{- end -}}
-
-{{/* ServiceMonitor */}}
-{{- $serviceMonitor := include "cloudflare-operator.values.servicemonitor" . | fromYaml -}}
-{{- if $serviceMonitor -}}
-  {{- $_ := set $bjwsValues "serviceMonitor" $serviceMonitor.serviceMonitor -}}
-{{- end -}}
-
-{{/* Initialize empty sections if not set */}}
-{{- if not (hasKey $bjwsValues "configMaps") -}}
-  {{- $_ := set $bjwsValues "configMaps" dict -}}
-{{- end -}}
-{{- if not (hasKey $bjwsValues "secrets") -}}
-  {{- $_ := set $bjwsValues "secrets" dict -}}
-{{- end -}}
-{{- if not (hasKey $bjwsValues "persistence") -}}
-  {{- $_ := set $bjwsValues "persistence" dict -}}
-{{- end -}}
-{{- if not (hasKey $bjwsValues "ingress") -}}
-  {{- $_ := set $bjwsValues "ingress" dict -}}
-{{- end -}}
-
-{{/* Create new context with constructed values */}}
+{{- $credSecret := required "credentials.existingSecret is required (the Secret holding the Cloudflare API token + account ID)" .Values.credentials.existingSecret -}}
+{{- $img := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- $args := list "--mode=meta"
+    (printf "--operator-namespace=%s" .Release.Namespace)
+    (printf "--operator-image=%s" $img)
+    (printf "--controllers-zone-enabled=%t" .Values.controllers.zone.enabled)
+    (printf "--zone-replicas=%d" (int .Values.controllers.zone.replicas))
+    (printf "--zone-log-level=%s" .Values.controllers.zone.logLevel)
+    (printf "--controllers-tunnel-enabled=%t" .Values.controllers.tunnel.enabled)
+    (printf "--tunnel-replicas=%d" (int .Values.controllers.tunnel.replicas))
+    (printf "--tunnel-log-level=%s" .Values.controllers.tunnel.logLevel)
+    (printf "--leader-election=%t" .Values.leaderElection.enabled)
+    (printf "--credentials-secret=%s" $credSecret)
+    (printf "--credentials-token-key=%s" .Values.credentials.tokenKey)
+    (printf "--credentials-account-id-key=%s" .Values.credentials.accountIDKey) -}}
+{{- if .Values.controllers.tunnel.connector.resources }}
+{{- $args = append $args (printf "--tunnel-connector-resources=%s" (toJson .Values.controllers.tunnel.connector.resources)) }}
+{{- end }}
+{{- if .Values.controllers.tunnel.connector.image }}
+{{- $args = append $args (printf "--tunnel-connector-image=%s" (toJson .Values.controllers.tunnel.connector.image)) }}
+{{- end }}
+{{- $env := dict
+    "CLOUDFLARE_API_TOKEN" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $credSecret "key" .Values.credentials.tokenKey)))
+    "CLOUDFLARE_ACCOUNT_ID" (dict "valueFrom" (dict "secretKeyRef" (dict "name" $credSecret "key" .Values.credentials.accountIDKey))) -}}
+{{- $values := dict
+  "global" (dict "nameOverride" "cloudflare-operator")
+  "serviceAccount" (dict "cloudflare-operator" (dict "enabled" true "forceRename" "cloudflare-operator"))
+  "defaultPodOptions" (dict
+    "automountServiceAccountToken" true
+    "securityContext" (dict "runAsNonRoot" true "runAsUser" 65532 "runAsGroup" 65532 "fsGroup" 65532 "seccompProfile" (dict "type" "RuntimeDefault")))
+  "controllers" (dict "main" (dict
+    "forceRename" "cloudflare-operator"
+    "replicas" (int .Values.replicas)
+    "containers" (dict "main" (dict
+      "image" (dict "repository" .Values.image.repository "tag" (.Values.image.tag | default .Chart.AppVersion) "pullPolicy" .Values.image.pullPolicy)
+      "args" $args
+      "env" $env
+      "ports" (list (dict "name" "metrics" "containerPort" 8080) (dict "name" "health" "containerPort" 8081))
+      "probes" (dict
+        "liveness" (dict "enabled" true "custom" true "spec" (dict "httpGet" (dict "path" "/healthz" "port" "health") "initialDelaySeconds" 15))
+        "readiness" (dict "enabled" true "custom" true "spec" (dict "httpGet" (dict "path" "/readyz" "port" "health") "initialDelaySeconds" 5)))
+      "securityContext" (dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")))
+      "resources" .Values.resources))))
+  "service" (dict "main" (dict "controller" "main" "ports" (dict "metrics" (dict "port" 8080) "health" (dict "port" 8081))))
+  "serviceMonitor" (dict "main" (dict
+    "enabled" .Values.observability.metrics.serviceMonitor.enabled
+    "endpoints" (list (dict "port" "metrics" "path" "/metrics")))) -}}
+{{- /* Carry the vendored common-chart defaults through so the loader's
+       values.init step merges its scaffolding (rbac, persistence, etc.)
+       under our facade-mapped keys. */ -}}
+{{- $_ := set $values "common" (.Values.common | default dict) -}}
 {{- $ctx := deepCopy . -}}
-{{- $_ := set $ctx "Values" $bjwsValues -}}
-
-{{/* Render all resources */}}
+{{- $_ := set $ctx "Values" $values -}}
 {{ include "bjw-s.common.loader.all" $ctx }}

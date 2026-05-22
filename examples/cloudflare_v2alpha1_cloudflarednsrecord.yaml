@@ -1,0 +1,68 @@
+# CloudflareDNSRecord — manage a single Cloudflare DNS record.
+#
+# The operator creates / updates / deletes the underlying Cloudflare record
+# and a paired TXT companion that marks ownership (so a record created by
+# this operator can later be safely adopted, drift-checked, or removed
+# without colliding with hand-authored or other-tool-authored records).
+#
+# Two safety modes:
+#   Managed (default) — operator writes records and the TXT companion.
+#   Observe           — operator reads but never writes. Useful when
+#                       verifying state before flipping to Managed (or
+#                       before setting Adopt:true on a pre-existing record).
+#
+# Resolve the target zone via `zoneRef.name` (preferred) or `zoneID`.
+apiVersion: cloudflare.io/v2alpha1
+kind: CloudflareDNSRecord
+metadata:
+  name: app-example-com
+  namespace: default
+spec:
+  zoneRef:
+    name: example-com
+
+  # The DNS record name to manage.
+  name: app.example.com
+
+  # A | AAAA | CNAME | SRV | MX | TXT | NS
+  type: CNAME
+
+  # CNAME / A / AAAA / TXT / NS / MX content. For SRV records use `srvData`
+  # below instead of `content`. For A/AAAA you can omit `content` and set
+  # `dynamicIP: true` to have the operator resolve the cluster's egress IP.
+  content: origin.example.net
+
+  # TTL in seconds. 1 means automatic (Cloudflare-managed).
+  ttl: 1
+
+  # Proxied = orange-cloud (Cloudflare CDN/WAF in the request path).
+  # Unset / false = grey-cloud (DNS only).
+  proxied: true
+
+  # Mode controls operator write behavior on this record.
+  # Managed (default): create / update / delete actively.
+  # Observe          : never write — read-only verification.
+  mode: Managed
+
+  # Adopt opts into taking over a pre-existing Cloudflare record. Adoption is
+  # TXT-ownership-verified: the operator only adopts a record whose companion
+  # TXT registry entry identifies THIS CR. A record with no companion, a
+  # foreign companion, or an unparseable companion is refused — there is no
+  # silent backfill. Leave false unless you have walked through the
+  # TXT-registry adoption procedure.
+  adopt: false
+
+  # Per-CR credential override (omit to inherit the operator-level default).
+  cloudflare:
+    tokenSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: token
+    accountIDSecretRef:
+      name: cloudflare-credentials
+      namespace: cloudflare-system
+      key: accountID
+
+  # Reconciliation interval (default 5m for DNSRecords — drift is more
+  # likely to matter quickly here than on the other CRDs).
+  interval: 5m

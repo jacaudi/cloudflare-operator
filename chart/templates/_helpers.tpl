@@ -1,13 +1,6 @@
-{{/*
-Return the full name for the chart
-*/}}
-{{- define "cloudflare-operator.fullname" -}}
-{{- include "bjw-s.common.lib.chart.names.fullname" . -}}
-{{- end -}}
-
-{{/*
-Return the chart name
-*/}}
-{{- define "cloudflare-operator.name" -}}
-{{- include "bjw-s.common.lib.chart.names.name" . -}}
+{{- define "cloudflare-operator.labels" -}}
+app.kubernetes.io/name: cloudflare-operator
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: Helm
+app.kubernetes.io/component: meta-operator
 {{- end -}}
