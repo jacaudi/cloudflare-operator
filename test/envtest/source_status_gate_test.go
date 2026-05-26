@@ -78,6 +78,10 @@ func (c *countingStatusWriter) Patch(ctx context.Context, obj client.Object, pat
 	return c.delegate.Patch(ctx, obj, patch, opts...)
 }
 
+func (c *countingStatusWriter) Apply(ctx context.Context, obj runtime.ApplyConfiguration, opts ...client.SubResourceApplyOption) error {
+	return c.delegate.Apply(ctx, obj, opts...)
+}
+
 // countingClient wraps a controller-runtime client to count Status.Update calls.
 // The counter is accessible via statusUpdateCount / resetCount.
 type countingClient struct {
