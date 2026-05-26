@@ -26,7 +26,7 @@ import (
 // DefaultCloudflaredImage is the operator's compile-time pin. The reconciler
 // passes its configured DefaultImage through to BuildDeployment; this constant
 // is exported so the manager setup wires the same value.
-const DefaultCloudflaredImage = "docker.io/cloudflare/cloudflared:2026.5.0"
+const DefaultCloudflaredImage = "docker.io/cloudflare/cloudflared:2026.5.1"
 
 // dataplaneName returns the Deployment / dataplane resource basename for a
 // given CloudflareTunnel. The 52-char cap on spec.name guarantees this stays
