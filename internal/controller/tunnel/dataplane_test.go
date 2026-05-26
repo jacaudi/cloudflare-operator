@@ -184,7 +184,10 @@ func TestBuildMetricsService_Naming(t *testing.T) {
 }
 
 func TestDefaultCloudflaredImage_IsValidPin(t *testing.T) {
-	require.Equal(t, "docker.io/cloudflare/cloudflared:2026.5.0", DefaultCloudflaredImage)
+	require.Regexp(t,
+		`^docker\.io/cloudflare/cloudflared:\d{4}\.\d+\.\d+$`,
+		DefaultCloudflaredImage,
+		"DefaultCloudflaredImage must pin a calendar-versioned cloudflare/cloudflared tag (Renovate-managed)")
 }
 
 func TestResolveImage_PerAxis(t *testing.T) {

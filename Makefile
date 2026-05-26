@@ -4,7 +4,7 @@ CONTROLLER_GEN := $(GOBIN)/controller-gen
 ENVTEST := $(GOBIN)/setup-envtest
 HELM_DOCS := $(GOBIN)/helm-docs
 CRD_REF_DOCS := $(GOBIN)/crd-ref-docs
-ENVTEST_K8S_VERSION ?= 1.30.0
+ENVTEST_K8S_VERSION ?= 1.32.0
 
 .PHONY: all
 all: generate test build

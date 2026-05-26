@@ -5,6 +5,7 @@
     "github>jacaudi/renovate-config:go",
     "github>jacaudi/renovate-config:kubernetes"
   ],
+  "postUpdateOptions": ["gomodTidy"],
   "packageRules": [
     {
       "description": "Group Kubernetes client libraries (local override of upstream preset which uses deprecated matchPackagePatterns)",
@@ -25,12 +26,13 @@
       "recreateWhen": "always"
     },
     {
-      "description": "cloudflared image bumps -> fix(cloudflared) so the operator gets >= a patch release",
+      "description": "cloudflared image bumps -> patch(cloudflared) so the operator gets >= a patch release",
       "matchDepNames": [
         "cloudflare/cloudflared"
       ],
-      "semanticCommitType": "fix",
-      "semanticCommitScope": "cloudflared"
+      "semanticCommitType": "patch",
+      "semanticCommitScope": "cloudflared",
+      "recreateWhen": "always"
     }
   ],
   "customManagers": [
