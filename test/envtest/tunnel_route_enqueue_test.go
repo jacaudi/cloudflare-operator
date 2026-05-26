@@ -381,6 +381,7 @@ func TestEnvtest_Tunnel_RouteEnqueue_TLSRoute_OnCNAMEStatusChange(t *testing.T) 
 				Hostname: &gwHostname,
 				Port:     443,
 				Protocol: gwv1.TLSProtocolType,
+				TLS:      tlsPassthroughConfig(),
 			}},
 		},
 	}

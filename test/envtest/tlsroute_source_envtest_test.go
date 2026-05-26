@@ -228,6 +228,7 @@ func createTLSGatewayForRouteTest(t *testing.T, f *tlsRouteEnvFixture, gatewayAp
 			GatewayClassName: "any-class",
 			Listeners: []gwv1.Listener{{
 				Name: "tls", Hostname: &h, Port: 443, Protocol: gwv1.TLSProtocolType,
+				TLS: tlsPassthroughConfig(),
 			}},
 		},
 	}

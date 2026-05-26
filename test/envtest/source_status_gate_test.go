@@ -298,6 +298,24 @@ func setupStatusGateTLSEnv(t *testing.T) *statusGateFixture {
 // createGatewayForGateTest sets up the backing Service + tunnel-targeted
 // Gateway and waits for the tunnel CR to reach Status.TunnelCNAME populated.
 // Shared by both HTTPRoute and TLSRoute gate tests.
+// tlsPassthroughConfig returns the GatewayTLSConfig required on TLSProtocolType
+// listeners as of gateway-api v1.5 (CRD validation now rejects listeners with
+// protocol TLS but no TLS.Mode set).
+func tlsPassthroughConfig() *gwv1.GatewayTLSConfig {
+	mode := gwv1.TLSModePassthrough
+	return &gwv1.GatewayTLSConfig{Mode: &mode}
+}
+
+// listenerForProto builds a single Listener and attaches the v1.5-required
+// TLS.Mode when proto is TLS.
+func listenerForProto(hostname *gwv1.Hostname, port int32, proto gwv1.ProtocolType) gwv1.Listener {
+	l := gwv1.Listener{Name: "l", Hostname: hostname, Port: gwv1.PortNumber(port), Protocol: proto}
+	if proto == gwv1.TLSProtocolType {
+		l.TLS = tlsPassthroughConfig()
+	}
+	return l
+}
+
 func createGatewayForGateTest(t *testing.T, f *statusGateFixture, listenerProto gwv1.ProtocolType, port int32) {
 	t.Helper()
 	ctx := context.Background()
@@ -323,9 +341,7 @@ func createGatewayForGateTest(t *testing.T, f *statusGateFixture, listenerProto 
 		},
 		Spec: gwv1.GatewaySpec{
 			GatewayClassName: "any-class",
-			Listeners: []gwv1.Listener{{
-				Name: "l", Hostname: &h, Port: gwv1.PortNumber(port), Protocol: listenerProto,
-			}},
+			Listeners: []gwv1.Listener{listenerForProto(&h, port, listenerProto)},
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, gw))
