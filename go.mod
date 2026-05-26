@@ -4,11 +4,10 @@ go 1.26.2
 
 require (
 	github.com/cloudflare/cloudflare-go/v6 v6.10.0
-	github.com/cloudflare/cloudflare-go/v7 v7.3.0
 	github.com/go-logr/zapr v1.3.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/stretchr/testify v1.11.1
-	go.uber.org/zap v1.27.1
+	go.uber.org/zap v1.28.0
 	golang.org/x/sync v0.20.0
 	k8s.io/api v0.36.1
 	k8s.io/apiextensions-apiserver v0.36.1
