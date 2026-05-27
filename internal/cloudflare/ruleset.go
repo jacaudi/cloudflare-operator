@@ -23,7 +23,7 @@ import (
 // should treat this as "start from scratch" and proceed to UpsertPhaseEntrypoint.
 var ErrPhaseEntrypointNotFound = errors.New("phase entrypoint not found")
 
-// rulesetClient wraps the cloudflare-go v6 SDK to implement RulesetClient.
+// rulesetClient wraps the cloudflare-go SDK to implement RulesetClient.
 type rulesetClient struct {
 	cf *cfgo.Client
 }

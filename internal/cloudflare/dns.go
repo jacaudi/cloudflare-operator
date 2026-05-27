@@ -33,7 +33,7 @@ func classifyDNSAPIErr(err error) error {
 	return err
 }
 
-// dnsClient wraps the cloudflare-go v6 SDK to implement DNSClient.
+// dnsClient wraps the cloudflare-go SDK to implement DNSClient.
 type dnsClient struct {
 	cf *cfgo.Client
 }
