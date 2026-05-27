@@ -28,7 +28,7 @@ import (
 // transient error. Match with errors.Is.
 var ErrPlanTierInsufficient = errors.New("cloudflare plan tier does not support this setting")
 
-// zoneConfigClient wraps the cloudflare-go v6 SDK to implement ZoneConfigClient.
+// zoneConfigClient wraps the cloudflare-go SDK to implement ZoneConfigClient.
 // It covers zone-level settings (PUT /zones/{id}/settings/{setting_id}) and
 // the bot-management resource (GET/PUT /zones/{id}/bot_management).
 type zoneConfigClient struct {

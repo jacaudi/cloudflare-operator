@@ -15,7 +15,7 @@ import (
 	"github.com/cloudflare/cloudflare-go/v7/zones"
 )
 
-// zoneClient wraps the cloudflare-go v6 SDK to implement ZoneClient.
+// zoneClient wraps the cloudflare-go SDK to implement ZoneClient.
 type zoneClient struct {
 	cf *cfgo.Client
 }

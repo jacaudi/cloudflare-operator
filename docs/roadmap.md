@@ -7,7 +7,7 @@ to capture the open design questions before any of them turn into a plan.
 Each section lists what the API looks like today, the rough shape a controller
 might take, and the open questions that need answering before design work
 starts. CRD sketches were cross-checked against the Cloudflare Go SDK
-(`github.com/cloudflare/cloudflare-go/v6`) and the public API reference; API
+(`github.com/cloudflare/cloudflare-go`) and the public API reference; API
 paths quoted below come from those sources.
 
 ## Contents
@@ -152,7 +152,7 @@ KV namespaces are a separate top-level resource at
 and so do container bindings (`[[containers]]` block — image ref,
 `default_port`, `sleep_after`, `enable_internet`, `entrypoint`, allowed/
 denied hosts). The Cloudflare Containers Go management API isn't yet
-surfaced in cloudflare-go v6's typed client; the management surface today
+surfaced in cloudflare-go's typed client; the management surface today
 is the Worker upload itself.
 
 ### Workers — static assets (the Pages replacement)
@@ -273,7 +273,7 @@ operator's scope.
   Do we expose them raw in `Worker.spec.containers[]`, or wrap them in a
   higher-level "egress profile" sub-CRD that can be shared across
   Workers?
-- Container management API: as of cloudflare-go v6 there's no typed
+- Container management API: cloudflare-go has no typed
   client for container-level operations beyond the Worker upload itself.
   If a standalone management API (`/accounts/{account_id}/containers/`
   or `/cloudchamber/`) lands later, we may want a `ContainerInstance`
