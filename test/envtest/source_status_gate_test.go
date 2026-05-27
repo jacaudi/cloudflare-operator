@@ -317,6 +317,24 @@ func listenerForProto(hostname *gwv1.Hostname, port int32, proto gwv1.ProtocolTy
 	return l
 }
 
+// tlsRoutePlaceholderRules returns a minimal TLSRouteRule slice satisfying
+// gateway-api v1.5's CRD requirement that each rule have at least one
+// BackendRef (MinItems=1). The translator ignores rule bodies — TLSRoute
+// hostname matching is SNI-only and there are no per-rule filters cloudflared
+// can enforce — so a placeholder reference is sufficient for envtest CRD
+// validation.
+func tlsRoutePlaceholderRules() []gwv1a2.TLSRouteRule {
+	port := gwv1.PortNumber(443)
+	return []gwv1a2.TLSRouteRule{{
+		BackendRefs: []gwv1.BackendRef{{
+			BackendObjectReference: gwv1.BackendObjectReference{
+				Name: "placeholder",
+				Port: &port,
+			},
+		}},
+	}}
+}
+
 func createGatewayForGateTest(t *testing.T, f *statusGateFixture, listenerProto gwv1.ProtocolType, port int32) {
 	t.Helper()
 	ctx := context.Background()
@@ -489,7 +507,7 @@ func TestEnvtest_SourceStatus_Gate_TLSRoute(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{
 				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
 			},
-			Rules: []gwv1a2.TLSRouteRule{{}},
+			Rules: tlsRoutePlaceholderRules(),
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, rt))

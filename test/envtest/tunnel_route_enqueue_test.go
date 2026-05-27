@@ -402,7 +402,7 @@ func TestEnvtest_Tunnel_RouteEnqueue_TLSRoute_OnCNAMEStatusChange(t *testing.T) 
 			CommonRouteSpec: gwv1.CommonRouteSpec{
 				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
 			},
-			Rules: []gwv1a2.TLSRouteRule{{}},
+			Rules: tlsRoutePlaceholderRules(),
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, rt))

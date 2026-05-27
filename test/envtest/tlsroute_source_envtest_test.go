@@ -301,11 +301,7 @@ func TestTLSRouteSourceEnvtest_AttachedEmitsTCPIngressAndClientSideClientRequire
 			CommonRouteSpec: gwv1.CommonRouteSpec{
 				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
 			},
-			// TLSRoute CRD admission requires spec.rules to be present. The
-			// translator ignores rule bodies (TLSRoute hostname matching is
-			// SNI-only — there are no per-rule filters cloudflared can
-			// enforce), so an empty rule satisfies the structural requirement.
-			Rules: []gwv1a2.TLSRouteRule{{}},
+			Rules: tlsRoutePlaceholderRules(),
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, rt))
@@ -419,7 +415,7 @@ func TestTLSRouteSourceEnvtest_AttachedWithGatewayApexOverride_EmitsChainToApex(
 			CommonRouteSpec: gwv1.CommonRouteSpec{
 				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
 			},
-			Rules: []gwv1a2.TLSRouteRule{{}},
+			Rules: tlsRoutePlaceholderRules(),
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, rt))
