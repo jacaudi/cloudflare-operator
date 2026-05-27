@@ -298,12 +298,13 @@ func setupStatusGateTLSEnv(t *testing.T) *statusGateFixture {
 // createGatewayForGateTest sets up the backing Service + tunnel-targeted
 // Gateway and waits for the tunnel CR to reach Status.TunnelCNAME populated.
 // Shared by both HTTPRoute and TLSRoute gate tests.
-// tlsPassthroughConfig returns the GatewayTLSConfig required on TLSProtocolType
+// tlsPassthroughConfig returns the ListenerTLSConfig required on TLSProtocolType
 // listeners as of gateway-api v1.5 (CRD validation now rejects listeners with
-// protocol TLS but no TLS.Mode set).
-func tlsPassthroughConfig() *gwv1.GatewayTLSConfig {
+// protocol TLS but no TLS.Mode set). In v1.5 the per-listener TLS shape was
+// renamed from GatewayTLSConfig to ListenerTLSConfig.
+func tlsPassthroughConfig() *gwv1.ListenerTLSConfig {
 	mode := gwv1.TLSModePassthrough
-	return &gwv1.GatewayTLSConfig{Mode: &mode}
+	return &gwv1.ListenerTLSConfig{Mode: &mode}
 }
 
 // listenerForProto builds a single Listener and attaches the v1.5-required
