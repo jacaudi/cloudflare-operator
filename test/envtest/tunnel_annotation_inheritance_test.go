@@ -235,8 +235,7 @@ func TestEnvtest_TLSRoute_InheritsAdoptFromGateway(t *testing.T) {
 			CommonRouteSpec: gwv1.CommonRouteSpec{
 				ParentRefs: []gwv1.ParentReference{{Name: "gw", Namespace: &nsRef}},
 			},
-			// TLSRoute CRD admission requires spec.rules to be present.
-			Rules: []gwv1a2.TLSRouteRule{{}},
+			Rules: tlsRoutePlaceholderRules(),
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, rt))
