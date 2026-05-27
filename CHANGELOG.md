@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.19.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.0...v0.19.1) (2026-05-27)
+
+### Bug Fixes
+
+* trigger release for queued dependency upgrades ([a927465](https://github.com/jacaudi/cloudflare-operator/commit/a927465867f302b8c381c930e7e90c010cceebf9))
+
 ## [0.19.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.3...v0.19.0) (2026-05-22)
 
 * refactor(api)!: bump CRD API version cloudflare.io/v1alpha1 -> v2alpha1 ([89c7cf7](https://github.com/jacaudi/cloudflare-operator/commit/89c7cf7afadbb603d513167fb497c0aef3f768cb))
