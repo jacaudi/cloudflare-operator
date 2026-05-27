@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"testing"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
 	"github.com/stretchr/testify/require"
 )
 

@@ -14,8 +14,8 @@ import (
 	"fmt"
 	"net/http"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/rulesets"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/rulesets"
 )
 
 // ErrPhaseEntrypointNotFound is returned by GetPhaseEntrypoint when no

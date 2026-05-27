@@ -10,8 +10,8 @@ package cloudflare
 import (
 	"fmt"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/option"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/option"
 )
 
 // Client is the Foundation-owned façade over cloudflare-go. It is intentionally

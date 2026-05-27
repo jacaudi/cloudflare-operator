@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"strings"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/bot_management"
-	"github.com/cloudflare/cloudflare-go/v6/zones"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/bot_management"
+	"github.com/cloudflare/cloudflare-go/v7/zones"
 )
 
 // ErrPlanTierInsufficient is returned by ZoneConfigClient methods when the

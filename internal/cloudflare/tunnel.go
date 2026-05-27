@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"net/http"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/zero_trust"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/zero_trust"
 )
 
 // Tunnel is the operator's plain-Go view of a Cloudflare tunnel.
