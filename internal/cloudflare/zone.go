@@ -11,8 +11,8 @@ import (
 	"context"
 	"fmt"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/zones"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/zones"
 )
 
 // zoneClient wraps the cloudflare-go v6 SDK to implement ZoneClient.

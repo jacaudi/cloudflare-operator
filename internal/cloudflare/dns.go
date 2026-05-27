@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"net/http"
 
-	cfgo "github.com/cloudflare/cloudflare-go/v6"
-	"github.com/cloudflare/cloudflare-go/v6/dns"
+	cfgo "github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/dns"
 )
 
 // ErrRecordNotFound is returned when the Cloudflare API responds with 404
