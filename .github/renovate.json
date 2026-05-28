@@ -1,14 +1,32 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "github>jacaudi/renovate-config:base",
-    "github>jacaudi/renovate-config:go",
-    "github>jacaudi/renovate-config:kubernetes"
+    "config:recommended",
+    ":dependencyDashboard",
+    ":disableRateLimiting",
+    ":timezone(America/Los_Angeles)",
+    ":semanticCommits"
   ],
+  "dependencyDashboardTitle": "Renovate Dashboard",
+  "assignees": ["jacaudi"],
+  "labels": ["renovate"],
+  "suppressNotifications": [
+    "prEditedNotification",
+    "prIgnoreNotification"
+  ],
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "commitMessagePrefix": "chore(deps):",
+  "branchPrefix": "renovate/",
   "postUpdateOptions": ["gomodTidy"],
   "packageRules": [
     {
-      "description": "Group Kubernetes client libraries (local override of upstream preset which uses deprecated matchPackagePatterns)",
+      "description": "Group all GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Group Kubernetes client libraries (must be updated together)",
       "matchPackageNames": ["/^k8s\\.io//", "sigs.k8s.io/controller-runtime"],
       "groupName": "kubernetes-client-libraries",
       "recreateWhen": "always"
@@ -26,16 +44,25 @@
       "recreateWhen": "always"
     },
     {
-      "description": "cloudflared image bumps -> patch(cloudflared) so the operator gets >= a patch release",
-      "matchDepNames": [
-        "cloudflare/cloudflared"
-      ],
-      "semanticCommitType": "patch",
+      "description": "cloudflared image bumps -> fix(cloudflared) so the operator gets a patch release",
+      "matchDepNames": ["cloudflare/cloudflared"],
+      "commitMessagePrefix": "fix(cloudflared):",
+      "semanticCommitType": "fix",
       "semanticCommitScope": "cloudflared",
       "recreateWhen": "always"
     }
   ],
   "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Match go-version inputs to reusable workflows (native github-actions manager only matches direct setup-go usage)",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.*\\.ya?ml$/"
+      ],
+      "matchStrings": ["go-version:\\s*['\"]?(?<currentValue>[0-9.]+)['\"]?"],
+      "depNameTemplate": "go",
+      "datasourceTemplate": "golang-version"
+    },
     {
       "customType": "regex",
       "managerFilePatterns": [
