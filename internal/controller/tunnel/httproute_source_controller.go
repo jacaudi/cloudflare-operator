@@ -126,6 +126,16 @@ func (r *HTTPRouteSourceReconciler) Reconcile(ctx context.Context, req reconcile
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
 		}
+		// Deactivation prune (issue #145): source no longer requests any DNS
+		// records. Delete previously-emitted CRs so they don't squat on
+		// Cloudflare-side records. Best-effort: log and continue.
+		pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "HTTPRoute", rt.Name, rt.Namespace, nil)
+		if perr != nil {
+			logger.Error(perr, "orphan-prune failed during deactivation sweep")
+		} else if len(pruned) > 0 {
+			r.dedupe.emit(r.Recorder, &rt, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+				fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) on source deactivation", len(pruned)))
+		}
 		return reconcile.Result{}, nil
 	}
 
