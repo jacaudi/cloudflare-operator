@@ -89,6 +89,8 @@ One unit test (controller-runtime fake client, matching the package's existing t
 
 1. The Gateway `resolveGatewayService` error branch: the code already disambiguates via `errGatewayServiceAnnotationMissing` vs other failures. If we want to split, "annotation missing" is definitive and could prune. Deferring per design's conservative stance — revisit if field reports show real orphans from this branch.
 
+2. `findTunnelTargetedParentRef` (`internal/controller/tunnel/attach.go:516-551`) swallows transient `Get` errors on parent Gateways via `continue`. A real apiserver glitch during reconcile could surface as `parent == nil` and spuriously fire the deactivation prune on HTTPRoute/TLSRoute. Theoretical in practice — the controller-runtime cache returns `NotFound` (not network errors) — and `client.IgnoreNotFound` in the pruner makes the prune itself race-safe, but a spurious delete-and-reemit churn is possible if the parent Gateway is unreadable at the wrong moment. Mitigation if observed: distinguish "no tunnel-targeted parent in spec" from "transient Get error" at the call site rather than swallowing both with the same `continue`. Surfaced by independent Go review; not blocking.
+
 ## Implementation enumeration history
 
 The "Per-controller call sites" table and the principle table were finalized after reading each source controller's reconcile end-to-end during implementation planning. Two branches were added beyond the initial brainstorming enumeration:
