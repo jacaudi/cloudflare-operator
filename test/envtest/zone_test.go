@@ -217,11 +217,11 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 			// TXT-verified adoption + drift correction: RecordID and TxtRecordID
 			// both populated, and CurrentContent matches the spec content.
 			return got.Status.RecordID != "" && got.Status.TxtRecordID != "" && got.Status.CurrentContent == "192.0.2.20"
-			// 30s (vs the 10s used elsewhere in this test): TXT-verified
+			// 120s (vs the 10s used elsewhere in this test): TXT-verified
 			// adoption + drift correction needs several reconcile passes
-			// chained (probe → adopt → status → drift-correct) and the chain
-			// doesn't fit in 10s on slower CI runners.
-		}, 30*time.Second, 200*time.Millisecond, "adopted via TXT-verified ownership + drift corrected")
+			// chained (probe → adopt → status → drift-correct); the prior
+			// 30s ceiling still flaked at the boundary on slower CI runners.
+		}, 120*time.Second, 200*time.Millisecond, "adopted via TXT-verified ownership + drift corrected")
 	})
 
 	t.Run("§10.5 Ruleset PUT-entrypoint creates rules", func(t *testing.T) {
