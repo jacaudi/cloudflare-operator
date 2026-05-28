@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.19.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.1...v0.19.2) (2026-05-28)
+### Bug Fixes
+
+* **ci:** install conventional-changelog-conventionalcommits for release-notes-generator ([1f576de](https://github.com/jacaudi/cloudflare-operator/commit/1f576de4b322af6f1257c6a3fa51f3a156a9bb21))
+* **release:** drop chore catch-all that masked scoped release rules ([71d2ab8](https://github.com/jacaudi/cloudflare-operator/commit/71d2ab84b43c4037768f08e7db427cc28586c5c4))
+
+### Dependencies
+
+* **cloudflared:** release in-tree cloudflared bump to v2026.5.2 ([496553e](https://github.com/jacaudi/cloudflare-operator/commit/496553e653c3f81b0101a967327ee83c9d49da7a))
+* **deps:** Update cloudflare/cloudflared Docker tag to v2026.5.2 ([f099948](https://github.com/jacaudi/cloudflare-operator/commit/f099948df14e167652afcc746eb9a9032c2d775a))
+
 ## [0.19.1](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.0...v0.19.1) (2026-05-27)
 
 ### Bug Fixes
