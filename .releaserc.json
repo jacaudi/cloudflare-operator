@@ -8,8 +8,7 @@
         "releaseRules": [
           { "breaking": true, "release": "minor" },
           { "type": "refactor", "release": "patch" },
-          { "type": "chore", "scope": "cloudflared", "release": "patch" },
-          { "type": "chore", "release": false }
+          { "type": "chore", "scope": "cloudflared", "release": "patch" }
         ]
       }
     ],
