@@ -126,6 +126,16 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if k, derr := DeriveTunnelName(gw.Namespace, gw.Annotations[conventions.AnnotationTunnelName]); derr == nil {
 			r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: gw.Namespace, Name: k}, srcKey)
 		}
+		// Deactivation prune (issue #145): source opted out of the tunnel.
+		// Delete previously-emitted CRs so they don't squat on Cloudflare-
+		// side records. Best-effort: log and continue.
+		pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Gateway", gw.Name, gw.Namespace, nil)
+		if perr != nil {
+			logger.Error(perr, "orphan-prune failed during deactivation sweep")
+		} else if len(pruned) > 0 {
+			r.dedupe.emit(r.recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+				fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) on source deactivation", len(pruned)))
+		}
 		return reconcile.Result{}, nil
 	}
 
@@ -137,6 +147,15 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			"Gateway has no listener with a hostname; tunnel-apex synthesis requires at least one")
 		if prev, ok := r.tracker.sweep(srcKey); ok {
 			r.Cache.Clear(prev, srcKey)
+		}
+		// Deactivation prune (issue #145): no listener hostnames means no
+		// records can be requested. Delete previously-emitted CRs.
+		pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Gateway", gw.Name, gw.Namespace, nil)
+		if perr != nil {
+			logger.Error(perr, "orphan-prune failed during deactivation sweep")
+		} else if len(pruned) > 0 {
+			r.dedupe.emit(r.recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+				fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) on source deactivation", len(pruned)))
 		}
 		return reconcile.Result{}, nil
 	}
