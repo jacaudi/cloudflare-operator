@@ -80,7 +80,7 @@ jobs:
       pull-requests: write
     with:
       use-github-app: true
-      extra-plugins: '@semantic-release/changelog @semantic-release/git @semantic-release/exec'
+      extra-plugins: '@semantic-release/changelog @semantic-release/git @semantic-release/exec conventional-changelog-conventionalcommits'
     secrets:
       app-id: ${{ secrets.APP_ID }}
       app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
