@@ -6,6 +6,22 @@
 
 * trigger release for queued dependency upgrades ([a927465](https://github.com/jacaudi/cloudflare-operator/commit/a927465867f302b8c381c930e7e90c010cceebf9))
 
+
+### Dependencies
+
+* **deps:** migrate cloudflare-go from v6 to v7 ([394f2ae](https://github.com/jacaudi/cloudflare-operator/commit/394f2ae6db7ec8fb96d2b4c93a6cb2a7c2c5a9fe))
+* **deps:** remove orphaned cloudflare-go/v7 from go.mod ([3aa2d24](https://github.com/jacaudi/cloudflare-operator/commit/3aa2d2437818a502f3ac4f6707c399fe6eb9c3c9))
+* **deps:** tidy go.sum and regenerate CRDs for controller-tools v0.21.0 ([b7b836b](https://github.com/jacaudi/cloudflare-operator/commit/b7b836b044298beb9374ad2ed95d1847f28519a8))
+* **deps:** Update cloudflare/cloudflared Docker tag to v2026.5.1 ([047d5ca](https://github.com/jacaudi/cloudflare-operator/commit/047d5ca30cd01143f74e4065e605967a8605fdda))
+* **deps:** Update GitHub Actions to v6 ([51a6ac7](https://github.com/jacaudi/cloudflare-operator/commit/51a6ac75ae55fae82acdd7e88da9d257f4d1cc8b))
+* **deps:** Update kubernetes-client-libraries ([6bb26ea](https://github.com/jacaudi/cloudflare-operator/commit/6bb26ea2779436258fe1d130391987c50fd0848d))
+* **deps:** Update module github.com/cloudflare/cloudflare-go/v6 to v7 ([4dc1880](https://github.com/jacaudi/cloudflare-operator/commit/4dc1880e655ec72073c9959c1514c961bda64510))
+* **deps:** Update module github.com/cloudflare/cloudflare-go/v6 to v7 ([5551e67](https://github.com/jacaudi/cloudflare-operator/commit/5551e67d0db3491fa6736d13416bb34edb80276b))
+* **deps:** Update module go.uber.org/zap to v1.28.0 ([aa7b028](https://github.com/jacaudi/cloudflare-operator/commit/aa7b0288c8f4c56fb43f494176421724e9f86cc7))
+* **deps:** Update module sigs.k8s.io/controller-runtime/tools/setup-envtest to v0.24.1 ([a209089](https://github.com/jacaudi/cloudflare-operator/commit/a209089862020a462c55d407f3f5d6b94855acf3))
+* **deps:** Update module sigs.k8s.io/controller-tools to v0.21.0 ([f5b572f](https://github.com/jacaudi/cloudflare-operator/commit/f5b572f2cffc05549ea0628fe9dcd540195eadf3))
+* **deps:** Update module sigs.k8s.io/gateway-api to v1.5.1 ([19ead6f](https://github.com/jacaudi/cloudflare-operator/commit/19ead6fbd8db1ece90ce62ffb7539848b2989e59))
+
 ## [0.19.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.18.3...v0.19.0) (2026-05-22)
 
 * refactor(api)!: bump CRD API version cloudflare.io/v1alpha1 -> v2alpha1 ([89c7cf7](https://github.com/jacaudi/cloudflare-operator/commit/89c7cf7afadbb603d513167fb497c0aef3f768cb))
@@ -140,6 +156,11 @@
 * **tunnel:** hash-gate ensureDataplane SSA patches (simplify H) ([5a1b5da](https://github.com/jacaudi/cloudflare-operator/commit/5a1b5da180a707e216a107dbc660c070028e12e3))
 * **tunnel:** skip CF GetConfiguration in applyRemoteConfig when snap matches (simplify G) ([08b846a](https://github.com/jacaudi/cloudflare-operator/commit/08b846aee6613f50645f0479f1abbcc16da25cdd))
 * **zoneconfig:** fan out the 6 setting-group applies via errgroup ([b0078d7](https://github.com/jacaudi/cloudflare-operator/commit/b0078d786f41c4914889e4568552e7cb0c2770dc))
+
+
+### Dependencies
+
+* **deps:** go mod tidy after CloudflareOperator removal ([806b9a3](https://github.com/jacaudi/cloudflare-operator/commit/806b9a3e3bc9a56cd5f91be1137194d15d299120))
 
 
 ### BREAKING CHANGES
