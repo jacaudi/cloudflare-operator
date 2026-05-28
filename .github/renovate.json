@@ -44,10 +44,10 @@
       "recreateWhen": "always"
     },
     {
-      "description": "cloudflared image bumps -> fix(cloudflared) so the operator gets a patch release",
+      "description": "cloudflared image bumps -> chore(cloudflared) so the operator gets a patch release",
       "matchDepNames": ["cloudflare/cloudflared"],
-      "commitMessagePrefix": "fix(cloudflared):",
-      "semanticCommitType": "fix",
+      "commitMessagePrefix": "chore(cloudflared):",
+      "semanticCommitType": "chore",
       "semanticCommitScope": "cloudflared",
       "recreateWhen": "always"
     }
