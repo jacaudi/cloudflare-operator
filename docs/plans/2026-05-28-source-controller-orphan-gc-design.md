@@ -33,7 +33,9 @@ A branch is **definitive deactivation** if reaching it means the source's curren
 |---|---|---|
 | HTTPRoute `parent == nil` | Definitive | Prune |
 | TLSRoute `parent == nil` | Definitive | Prune |
+| Gateway `!enabled` (cloudflare.io/tunnel not truthy) | Definitive | Prune |
 | Gateway `len(hostnames) == 0` | Definitive | Prune |
+| Service `!enabled` (cloudflare.io/tunnel not truthy) | Definitive | Prune |
 | TLSRoute deferred emission (`chainContent == ""`, `tn.Status.TunnelCNAME == ""`) | Transient | No change |
 | Service deferred emission (`tn.Status.TunnelCNAME == ""`) | Transient | No change |
 | Gateway `resolveGatewayService(...)` error | Ambiguous (missing annotation vs. transient lookup failure) | No change pending field evidence |
@@ -43,15 +45,15 @@ Pruning at a transient branch would delete and recreate CRs every time the tunne
 
 ## Per-controller call sites
 
-Three new prune calls. One existing pattern reused: `if _, perr := pruneOrphanedDNSRecords(ctx, r.Client, kind, name, ns, nil); perr != nil { logger.Error(perr, "orphan-prune failed during deactivation sweep") }`, placed **after** the existing `r.Cache.Clear(prev, srcKey)` so cache state is consistent first.
+Five new prune calls. One existing pattern reused: `if _, perr := pruneOrphanedDNSRecords(ctx, r.Client, kind, name, ns, nil); perr != nil { logger.Error(perr, "orphan-prune failed during deactivation sweep") }`, placed **after** the existing `r.Cache.Clear(prev, srcKey)` so cache state is consistent first.
 
 | Controller | File | Branch | Kind constant |
 |---|---|---|---|
-| HTTPRoute | `internal/controller/tunnel/httproute_source_controller.go` | `parent == nil` (~L123–L129) | `"HTTPRoute"` |
-| TLSRoute | `internal/controller/tunnel/tlsroute_source_controller.go` | `parent == nil` (~L121–L125) | `"TLSRoute"` |
-| Gateway | `internal/controller/tunnel/gateway_source_controller.go` | `len(hostnames) == 0` (~L135–L141) | `"Gateway"` |
-
-**Service:** no new call. The Service reconcile's `desired` set is computed unconditionally from ports/zones; annotation removal naturally yields an empty `desired`, which the **existing** end-of-reconcile prune already handles. The implementation plan adds a verification test (see Tests) to confirm this; if the test fails, add a prune call at the appropriate Service branch.
+| HTTPRoute | `internal/controller/tunnel/httproute_source_controller.go` | `parent == nil` (L123–L129) | `"HTTPRoute"` |
+| TLSRoute | `internal/controller/tunnel/tlsroute_source_controller.go` | `parent == nil` (L121–L125) | `"TLSRoute"` |
+| Gateway | `internal/controller/tunnel/gateway_source_controller.go` | `!enabled` (L110–L130) | `"Gateway"` |
+| Gateway | `internal/controller/tunnel/gateway_source_controller.go` | `len(hostnames) == 0` (L135–L141) | `"Gateway"` |
+| Service | `internal/controller/tunnel/service_source_controller.go` | `!enabled` (L104–L123) | `"Service"` |
 
 The helper is in the same package (`internal/controller/tunnel/orphan_prune.go`); no new imports.
 
@@ -64,14 +66,15 @@ The helper is in the same package (`internal/controller/tunnel/orphan_prune.go`)
 
 ## Tests
 
-One envtest case per controller getting a new prune call, plus the Service verification test. Each follows the same shape: create source → assert derived CR exists → mutate source to deactivation state → assert derived CR is deleted within the `Eventually` timeout.
+One unit test (controller-runtime fake client, matching the package's existing test pattern) per new prune call. Each follows the same shape: build client with source + pre-created tunnel → reconcile → assert derived CR exists → mutate source to deactivation state → reconcile again → assert derived CR list is empty.
 
 | Controller | Test scenario | File |
 |---|---|---|
 | HTTPRoute | Create route with tunnel-targeted parent; remove the parent's tunnel annotation (or drop parentRef); assert CR deleted. | `httproute_source_controller_test.go` |
 | TLSRoute | Same shape, TLSRoute kind. | `tlsroute_source_controller_test.go` |
-| Gateway | Create Gateway with one hostname listener + cloudflare annotation; remove all listener hostnames; assert CRs deleted. | `gateway_source_controller_test.go` |
-| Service (verification) | Create Service with `cloudflare.io/zones`; remove the annotation; assert CRs deleted. **If this fails**, the implementation plan adds a prune call at the right Service branch; if it passes, the test serves as regression coverage for the existing end-of-reconcile prune. | `service_source_controller_test.go` |
+| Gateway (`!enabled`) | Create Gateway with `cloudflare.io/tunnel: "true"` + hostname listener; assert CR exists; remove the `cloudflare.io/tunnel` annotation; assert CR deleted. **Primary repro for issue #145.** | `gateway_source_controller_test.go` |
+| Gateway (`no hostnames`) | Create Gateway with hostname listener + tunnel annotation; assert CR exists; clear all listener hostnames; assert CR deleted. | `gateway_source_controller_test.go` |
+| Service (`!enabled`) | Create Service with `cloudflare.io/tunnel: "true"` + zones annotation; assert CRs exist; remove the `cloudflare.io/tunnel` annotation; assert CRs deleted. | `service_source_controller_test.go` |
 
 **Acceptance:** each test must pass with the new code; each test must fail (orphan persists) without it.
 
@@ -84,8 +87,18 @@ One envtest case per controller getting a new prune call, plus the Service verif
 
 ## Open questions for implementation plan
 
-1. The Service verification test: which exact Service deactivation branch should it exercise? Confirm by reading Service reconcile end-to-end during implementation.
-2. The Gateway `resolveGatewayService` error branch: if the implementation reveals it can be disambiguated cheaply (e.g., explicit "annotation absent" error type), reconsider the design's "no change" stance. Otherwise, defer.
+1. The Gateway `resolveGatewayService` error branch: the code already disambiguates via `errGatewayServiceAnnotationMissing` vs other failures. If we want to split, "annotation missing" is definitive and could prune. Deferring per design's conservative stance — revisit if field reports show real orphans from this branch.
+
+2. `findTunnelTargetedParentRef` (`internal/controller/tunnel/attach.go:516-551`) swallows transient `Get` errors on parent Gateways via `continue`. A real apiserver glitch during reconcile could surface as `parent == nil` and spuriously fire the deactivation prune on HTTPRoute/TLSRoute. Theoretical in practice — the controller-runtime cache returns `NotFound` (not network errors) — and `client.IgnoreNotFound` in the pruner makes the prune itself race-safe, but a spurious delete-and-reemit churn is possible if the parent Gateway is unreadable at the wrong moment. Mitigation if observed: distinguish "no tunnel-targeted parent in spec" from "transient Get error" at the call site rather than swallowing both with the same `continue`. Surfaced by independent Go review; not blocking.
+
+## Implementation enumeration history
+
+The "Per-controller call sites" table and the principle table were finalized after reading each source controller's reconcile end-to-end during implementation planning. Two branches were added beyond the initial brainstorming enumeration:
+
+- **Gateway `!enabled`** — the most direct match for issue #145's repro ("remove all cloudflare.io/* annotations"). Initial enumeration listed only `len(hostnames) == 0`.
+- **Service `!enabled`** — parallel to Gateway `!enabled`. Initial design claimed Service was covered by the existing end-of-reconcile prune; that was wrong (the `!enabled` branch early-returns before reaching it).
+
+Both additions follow the design's stated principle (definitive deactivation: source's current state says "I want zero records"); the gap was an incomplete enumeration, not a different principle.
 
 ## References
 

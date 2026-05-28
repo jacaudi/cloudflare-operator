@@ -1015,3 +1015,69 @@ drainLoop:
 	require.True(t, foundApexRequired,
 		"expected a Warning event with reason GatewayApexRequired among events: %v", allEvents)
 }
+
+// TestTLSRouteSource_ParentDeactivation_PrunesEmittedCRs verifies issue #145
+// fix: when a TLSRoute's tunnel-targeted parent disappears (parent Gateway
+// loses its cloudflare.io/tunnel annotation), the previously-emitted
+// CloudflareDNSRecord CRs are deleted on the next reconcile.
+func TestTLSRouteSource_ParentDeactivation_PrunesEmittedCRs(t *testing.T) {
+	hp := gwv1.Hostname("apex.example.com")
+	gw := &gwv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw", Namespace: "gw-ns",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:         "true",
+				conventions.AnnotationTunnelName:     "edge",
+				conventions.AnnotationGatewayService: "gw-ns/envoy-gw",
+			},
+		},
+		Spec: gwv1.GatewaySpec{Listeners: []gwv1.Listener{
+			{Name: "tls", Hostname: &hp, Port: 443, Protocol: gwv1.TLSProtocolType},
+		}},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gw", Namespace: "gw-ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 443}}},
+	}
+	rt := &gwv1a2.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "rt", Namespace: "rt-ns"},
+		Spec: gwv1a2.TLSRouteSpec{
+			CommonRouteSpec: gwv1.CommonRouteSpec{
+				ParentRefs: []gwv1.ParentReference{{
+					Name:      "gw",
+					Namespace: ptrNs("gw-ns"),
+				}},
+			},
+			Hostnames: []gwv1.Hostname{"apex.example.com"},
+		},
+	}
+	preTun := gwPreCreatedTunnel("gw-ns-edge", "gw-ns")
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, svc, preTun, rt).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	cache := tunnelsynth.NewCache()
+	r := &TLSRouteSourceReconciler{
+		Client: c, Scheme: tlsRtScheme(t), Cache: cache,
+	}
+
+	// Pass 1: expect 1 CR emitted.
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "rt-ns", Name: "rt"}})
+	require.NoError(t, err)
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "first reconcile should emit one CR")
+	require.Equal(t, "TLSRoute", dnsList.Items[0].Labels[conventions.LabelSourceKind])
+
+	// Mutate: strip the tunnel annotation off the Gateway → parent == nil.
+	var got gwv1.Gateway
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "gw-ns", Name: "gw"}, &got))
+	delete(got.Annotations, conventions.AnnotationTunnel)
+	require.NoError(t, c.Update(context.Background(), &got))
+
+	// Pass 2: expect CR deleted.
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "rt-ns", Name: "rt"}})
+	require.NoError(t, err)
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Empty(t, dnsList.Items, "deactivation prune should delete the previously-emitted CR")
+}

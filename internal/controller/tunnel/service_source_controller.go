@@ -119,6 +119,16 @@ func (r *ServiceSourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		if k, derr := DeriveTunnelName(svc.Namespace, svc.Annotations[conventions.AnnotationTunnelName]); derr == nil {
 			r.Cache.Clear(tunnelsynth.TunnelKey{Namespace: svc.Namespace, Name: k}, srcKey)
 		}
+		// Deactivation prune (issue #145): source opted out of the tunnel.
+		// Delete previously-emitted CRs so they don't squat on Cloudflare-
+		// side records. Best-effort: log and continue.
+		pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Service", svc.Name, svc.Namespace, nil)
+		if perr != nil {
+			logger.Error(perr, "orphan-prune failed during deactivation sweep")
+		} else if len(pruned) > 0 {
+			r.dedupe.emit(r.Recorder, &svc, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+				fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) on source deactivation", len(pruned)))
+		}
 		return reconcile.Result{}, nil
 	}
 

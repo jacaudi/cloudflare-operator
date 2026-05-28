@@ -599,5 +599,54 @@ func TestEmittedDNSRecordName_NoCollisionOnTruncation(t *testing.T) {
 	require.NotEqual(t, a, b, "long hostnames sharing a prefix must produce distinct CR names")
 }
 
+// TestServiceSource_OptOut_PrunesEmittedCRs verifies issue #145 fix for the
+// Service controller: a Service with cloudflare.io/tunnel="true" that emits
+// DNSRecord CRs must have those CRs deleted when the annotation is removed.
+// Note: TestServiceSource_OptOut_ClearsCache covers the cache-side of opt-out;
+// this test covers the CR-side gap that was missed there.
+func TestServiceSource_OptOut_PrunesEmittedCRs(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "svc", Namespace: "app-foo",
+			Annotations: map[string]string{
+				conventions.AnnotationTunnel:     "true",
+				conventions.AnnotationTunnelName: "payments",
+				conventions.AnnotationHostnames:  "foo.example.com",
+			},
+		},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	tn := preCreatedTunnel("app-foo-payments", "app-foo")
+	base := fake.NewClientBuilder().WithScheme(srcScheme(t)).WithObjects(svc, tn).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	cache := tunnelsynth.NewCache()
+	r := &ServiceSourceReconciler{
+		Client: c, Scheme: srcScheme(t), Cache: cache,
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	// Pass 1: opted in → 1 CR.
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
+	require.NoError(t, err)
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "first reconcile should emit one CR")
+	require.Equal(t, "Service", dnsList.Items[0].Labels[conventions.LabelSourceKind])
+
+	// Mutate: remove cloudflare.io/tunnel → !enabled branch.
+	var got corev1.Service
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "app-foo", Name: "svc"}, &got))
+	delete(got.Annotations, conventions.AnnotationTunnel)
+	require.NoError(t, c.Update(context.Background(), &got))
+
+	// Pass 2: !enabled → expect CR deleted.
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "app-foo", Name: "svc"}})
+	require.NoError(t, err)
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Empty(t, dnsList.Items, "opt-out prune should delete the previously-emitted CR")
+}
+
 // Verify the reconciler satisfies the controller-runtime Reconciler interface.
 var _ reconcile.Reconciler = (*ServiceSourceReconciler)(nil)

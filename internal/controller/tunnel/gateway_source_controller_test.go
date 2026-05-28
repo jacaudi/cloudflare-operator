@@ -1181,3 +1181,90 @@ func TestGatewaySource_SchemeGarbage_FallsThroughToListener(t *testing.T) {
 	require.True(t, strings.HasPrefix(snap[0].Service, "https://"),
 		"cloudflare.io/scheme=garbage must silently fall through to the HTTPS listener, got %s", snap[0].Service)
 }
+
+// TestGatewaySource_OptOut_PrunesEmittedCRs is the primary repro for issue
+// #145: a Gateway with cloudflare.io/tunnel="true" emits DNSRecord CRs;
+// when the annotation is removed, the previously-emitted CRs must be
+// deleted on the next reconcile.
+func TestGatewaySource_OptOut_PrunesEmittedCRs(t *testing.T) {
+	gw := mkGw("gw", "gw-ns", "gw-ns/envoy-gw", []string{"apex.example.com"})
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gw", Namespace: "gw-ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	preTun := gwPreCreatedTunnel("gw-ns-edge", "gw-ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(),
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	// Pass 1: enabled → CR emitted.
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "gw-ns", Name: "gw"}})
+	require.NoError(t, err)
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "first reconcile should emit one CR")
+	require.Equal(t, "Gateway", dnsList.Items[0].Labels[conventions.LabelSourceKind])
+
+	// Mutate: remove cloudflare.io/tunnel → !enabled branch on next reconcile.
+	var got gwv1.Gateway
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "gw-ns", Name: "gw"}, &got))
+	delete(got.Annotations, conventions.AnnotationTunnel)
+	require.NoError(t, c.Update(context.Background(), &got))
+
+	// Pass 2: !enabled → expect CR deleted.
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "gw-ns", Name: "gw"}})
+	require.NoError(t, err)
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Empty(t, dnsList.Items, "opt-out prune should delete the previously-emitted CR")
+}
+
+// TestGatewaySource_HostnamesCleared_PrunesEmittedCRs covers the second
+// Gateway deactivation branch: an opted-in Gateway whose listeners all
+// lose their hostname must prune previously-emitted CRs.
+func TestGatewaySource_HostnamesCleared_PrunesEmittedCRs(t *testing.T) {
+	gw := mkGw("gw", "gw-ns", "gw-ns/envoy-gw", []string{"apex.example.com"})
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoy-gw", Namespace: "gw-ns"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	preTun := gwPreCreatedTunnel("gw-ns-edge", "gw-ns")
+	base := fake.NewClientBuilder().WithScheme(gwScheme(t)).WithObjects(gw, svc, preTun).
+		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
+	c := reconcilelib.SSATranslatingClient(t, base)
+
+	// Recorder is wired here (unlike the OptOut variant) because the no-
+	// hostnames branch emits a ReasonNoListenerHostname Warning BEFORE the
+	// new deactivation prune; we want the Warning to land somewhere even
+	// though we don't assert on it.
+	r := &GatewaySourceReconciler{
+		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(), Recorder: record.NewFakeRecorder(8),
+		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
+	}
+
+	// Pass 1: 1 CR emitted.
+	_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "gw-ns", Name: "gw"}})
+	require.NoError(t, err)
+	var dnsList v2alpha1.CloudflareDNSRecordList
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Len(t, dnsList.Items, 1, "first reconcile should emit one CR")
+	require.Equal(t, "Gateway", dnsList.Items[0].Labels[conventions.LabelSourceKind])
+
+	// Mutate: clear all listener hostnames (set to nil pointer).
+	var got gwv1.Gateway
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Namespace: "gw-ns", Name: "gw"}, &got))
+	for i := range got.Spec.Listeners {
+		got.Spec.Listeners[i].Hostname = nil
+	}
+	require.NoError(t, c.Update(context.Background(), &got))
+
+	// Pass 2: len(hostnames) == 0 → expect CR deleted.
+	_, err = r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "gw-ns", Name: "gw"}})
+	require.NoError(t, err)
+	require.NoError(t, c.List(context.Background(), &dnsList))
+	require.Empty(t, dnsList.Items, "no-hostnames prune should delete the previously-emitted CR")
+}
