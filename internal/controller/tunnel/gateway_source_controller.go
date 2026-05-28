@@ -128,12 +128,15 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 		}
 		// Deactivation prune (issue #145): source opted out of the tunnel.
 		// Delete previously-emitted CRs so they don't squat on Cloudflare-
-		// side records. Best-effort: log and continue.
+		// side records. Best-effort: log and continue. Uses r.Recorder for
+		// ReasonOrphanedDNSRecordPruned consistently with the happy-path
+		// prune at the end of this reconcile (and with the other source
+		// controllers' deactivation prunes).
 		pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Gateway", gw.Name, gw.Namespace, nil)
 		if perr != nil {
 			logger.Error(perr, "orphan-prune failed during deactivation sweep")
 		} else if len(pruned) > 0 {
-			r.dedupe.emit(r.recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
 				fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) on source deactivation", len(pruned)))
 		}
 		return reconcile.Result{}, nil
@@ -149,12 +152,15 @@ func (r *GatewaySourceReconciler) Reconcile(ctx context.Context, req reconcile.R
 			r.Cache.Clear(prev, srcKey)
 		}
 		// Deactivation prune (issue #145): no listener hostnames means no
-		// records can be requested. Delete previously-emitted CRs.
+		// records can be requested. Delete previously-emitted CRs. Uses
+		// r.Recorder for the prune event (cf. r.recorder above for the
+		// Warning) so all ReasonOrphanedDNSRecordPruned emits use the same
+		// recorder field across the package.
 		pruned, perr := pruneOrphanedDNSRecords(ctx, r.Client, "Gateway", gw.Name, gw.Namespace, nil)
 		if perr != nil {
 			logger.Error(perr, "orphan-prune failed during deactivation sweep")
 		} else if len(pruned) > 0 {
-			r.dedupe.emit(r.recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
+			r.dedupe.emit(r.Recorder, &gw, corev1.EventTypeNormal, conventions.ReasonOrphanedDNSRecordPruned,
 				fmt.Sprintf("deleted %d orphaned DNSRecord CR(s) on source deactivation", len(pruned)))
 		}
 		return reconcile.Result{}, nil

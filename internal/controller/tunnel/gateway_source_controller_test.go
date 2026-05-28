@@ -1237,6 +1237,10 @@ func TestGatewaySource_HostnamesCleared_PrunesEmittedCRs(t *testing.T) {
 		WithStatusSubresource(&v2alpha1.CloudflareDNSRecord{}, &v2alpha1.CloudflareTunnel{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
+	// Recorder is wired here (unlike the OptOut variant) because the no-
+	// hostnames branch emits a ReasonNoListenerHostname Warning BEFORE the
+	// new deactivation prune; we want the Warning to land somewhere even
+	// though we don't assert on it.
 	r := &GatewaySourceReconciler{
 		Client: c, Scheme: gwScheme(t), Cache: tunnelsynth.NewCache(), Recorder: record.NewFakeRecorder(8),
 		DefaultConnector: v2alpha1.ConnectorSpec{Replicas: 2, Protocol: "auto", LogLevel: "info", GracePeriodSeconds: 30},
@@ -1248,6 +1252,7 @@ func TestGatewaySource_HostnamesCleared_PrunesEmittedCRs(t *testing.T) {
 	var dnsList v2alpha1.CloudflareDNSRecordList
 	require.NoError(t, c.List(context.Background(), &dnsList))
 	require.Len(t, dnsList.Items, 1, "first reconcile should emit one CR")
+	require.Equal(t, "Gateway", dnsList.Items[0].Labels[conventions.LabelSourceKind])
 
 	// Mutate: clear all listener hostnames (set to nil pointer).
 	var got gwv1.Gateway
