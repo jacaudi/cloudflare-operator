@@ -692,6 +692,21 @@ func TestHandleDeriveTunnelNameErr_NoTrackerEntry(t *testing.T) {
 //
 // Negative case: a plain Gateway without the cloudflare.io/tunnel annotation
 // yields all-nil/zero returns (no match, no error).
+//
+// Test-category coverage for the issue #146 fix (Get-error distinction):
+//   1. Happy path         — "positive: tunnel-targeted gateway resolves all fields"
+//   2. Negative/no-match   — "negative: plain gateway ...", "... missing CloudflareTunnel CR ..."
+//   3. Error handling      — "transient Gateway Get error propagates",
+//                            "transient CloudflareTunnel Get error propagates"
+//   4. Edge/boundary       — "NotFound on Gateway still skips (not an error)" — the
+//                            precise NotFound-vs-other boundary the fix branches on
+//   5. Concurrency         — N/A: findTunnelTargetedParentRef is a pure per-call read
+//                            with no shared mutable state; controller-runtime already
+//                            serializes reconciles per object via the workqueue.
+//   6. Security            — N/A: this path performs no auth/secret/tenant-boundary
+//                            handling; it only reads Gateway/CloudflareTunnel/Service.
+//   7. Regression          — the two "transient ... Get error propagates" subtests are
+//                            the direct regression guard for issue #146.
 func TestFindTunnelTargetedParentRef(t *testing.T) {
 	t.Run("positive: tunnel-targeted gateway resolves all fields", func(t *testing.T) {
 		// Build the tunnel-targeted Gateway (mirrors mkParentGw("gw","ns1")).
@@ -773,6 +788,115 @@ func TestFindTunnelTargetedParentRef(t *testing.T) {
 			WithScheme(rtScheme(t)).
 			WithObjects(gw, gwSvc). // deliberately NO CloudflareTunnel
 			Build()
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.NoError(t, err)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
+
+	// Regression for issue #146: a transient (non-NotFound) Get failure on the
+	// Gateway must be surfaced as an error so the reconcile requeues, rather
+	// than returning all-nil (which the #145 deactivation-prune branch would
+	// misread as "no tunnel-targeted parent" and spuriously delete emitted CRs).
+	t.Run("transient Gateway Get error propagates (issue #146)", func(t *testing.T) {
+		gw := mkParentGw("gw", "ns1")
+		gwSvc := mkGwSvc("gw-svc", "ns1")
+		tnName, derr := DeriveTunnelName("ns1", "edge")
+		require.NoError(t, derr)
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: tnName, Namespace: "ns1"},
+		}
+
+		boom := errors.New("etcdserver: request timed out")
+		base := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(gw, tn, gwSvc).
+			Build()
+		c := interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*gwv1.Gateway); ok {
+					return boom
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.ErrorIs(t, err, boom)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
+
+	// Same distinction for the CloudflareTunnel Get: the Gateway resolves fine,
+	// but a transient failure fetching the derived CloudflareTunnel must be
+	// surfaced rather than swallowed into an all-nil "no parent" result.
+	t.Run("transient CloudflareTunnel Get error propagates (issue #146)", func(t *testing.T) {
+		gw := mkParentGw("gw", "ns1")
+		gwSvc := mkGwSvc("gw-svc", "ns1")
+		tnName, derr := DeriveTunnelName("ns1", "edge")
+		require.NoError(t, derr)
+		tn := &v2alpha1.CloudflareTunnel{
+			ObjectMeta: metav1.ObjectMeta{Name: tnName, Namespace: "ns1"},
+		}
+
+		boom := errors.New("connection reset by peer")
+		base := fake.NewClientBuilder().
+			WithScheme(rtScheme(t)).
+			WithObjects(gw, tn, gwSvc).
+			Build()
+		c := interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*v2alpha1.CloudflareTunnel); ok {
+					return boom
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
+
+		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
+			context.Background(), c, "ns1",
+			[]gwv1.ParentReference{{Name: gwv1.ObjectName("gw")}},
+		)
+
+		require.ErrorIs(t, err, boom)
+		require.Nil(t, pr)
+		require.Nil(t, foundGw)
+		require.Nil(t, foundTn)
+		require.Nil(t, svc)
+		require.Equal(t, int32(0), port)
+	})
+
+	// Edge/boundary: the other side of the #146 branch. A NotFound Get (the
+	// definitively-missing case) must STILL skip the parent and return
+	// all-nil with NO error — only non-NotFound errors are surfaced. Injecting
+	// a synthetic NotFound (rather than just omitting the object) proves the
+	// branch keys on apierrors.IsNotFound, not on the fake client's behavior.
+	t.Run("NotFound on Gateway still skips (not an error)", func(t *testing.T) {
+		notFound := apierrors.NewNotFound(schema.GroupResource{Group: gwv1.GroupName, Resource: "gateways"}, "gw")
+		base := fake.NewClientBuilder().WithScheme(rtScheme(t)).Build()
+		c := interceptor.NewClient(base, interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*gwv1.Gateway); ok {
+					return notFound
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
 
 		pr, foundGw, foundTn, svc, port, err := findTunnelTargetedParentRef(
 			context.Background(), c, "ns1",
