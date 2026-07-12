@@ -243,32 +243,27 @@ func TestTLSRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 }
 
 // TestTLSRouteSource_PreservesOtherParentStatusEntry verifies that when
-// another controller has already written a status entry for a NON-tunnel
-// parent, our reconcile does NOT clobber it. Mirror of T12's regression test
-// against the parent-only-status-write contract (§4.2 / Q3 lock).
+// another controller has already reported the SAME tunnel-targeted parent,
+// our reconcile adds its own entry instead of clobbering the other controller.
 func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{
 		ObjectMeta: metav1.ObjectMeta{Name: "gw-ns-edge", Namespace: "gw-ns"},
 		Status:     v2alpha1.CloudflareTunnelStatus{TunnelID: "tnl-1", TunnelCNAME: "tnl-1.cfargotunnel.com"},
 	}
-	otherGw := &gwv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "other-gw", Namespace: "other-ns"},
-	}
 	gwSvc := mkTLSGwSvc("gw-svc", "gw-ns")
 	rt := &gwv1a2.TLSRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
 		Spec: gwv1a2.TLSRouteSpec{
 			Hostnames: []gwv1.Hostname{"x.example.com"},
-			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{
-				{Name: "other-gw", Namespace: ptrNs("other-ns")},
-				{Name: "gw", Namespace: ptrNs("gw-ns")},
-			}},
+			CommonRouteSpec: gwv1.CommonRouteSpec{ParentRefs: []gwv1.ParentReference{{
+				Name: "gw", Namespace: ptrNs("gw-ns"),
+			}}},
 		},
 		Status: gwv1a2.TLSRouteStatus{
 			RouteStatus: gwv1.RouteStatus{
 				Parents: []gwv1.RouteParentStatus{{
-					ParentRef:      gwv1.ParentReference{Name: "other-gw", Namespace: ptrNs("other-ns")},
+					ParentRef:      gwv1.ParentReference{Name: "gw", Namespace: ptrNs("gw-ns")},
 					ControllerName: gwv1.GatewayController("other.io/other-controller"),
 					Conditions: []metav1.Condition{{
 						Type:               "Accepted",
@@ -280,7 +275,7 @@ func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 			},
 		},
 	}
-	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, otherGw, tn, gwSvc, rt).
+	base := fake.NewClientBuilder().WithScheme(tlsRtScheme(t)).WithObjects(gw, tn, gwSvc, rt).
 		WithStatusSubresource(&gwv1a2.TLSRoute{}, &v2alpha1.CloudflareDNSRecord{}).Build()
 	c := reconcilelib.SSATranslatingClient(t, base)
 
@@ -294,15 +289,15 @@ func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 
 	var foundOther, foundOurs bool
 	for _, ps := range got.Status.Parents {
-		if ps.ParentRef.Name == "other-gw" {
+		if ps.ControllerName == "other.io/other-controller" {
 			foundOther = true
-			require.Equal(t, gwv1.GatewayController("other.io/other-controller"), ps.ControllerName)
+			require.Equal(t, gwv1.ObjectName("gw"), ps.ParentRef.Name)
 			require.NotEmpty(t, ps.Conditions)
 			require.Equal(t, "OtherReason", ps.Conditions[0].Reason)
 		}
-		if ps.ParentRef.Name == "gw" {
+		if ps.ControllerName == tunnelControllerName {
 			foundOurs = true
-			require.Equal(t, gwv1.GatewayController("cloudflare.io/tunnel-controller"), ps.ControllerName)
+			require.Equal(t, gwv1.ObjectName("gw"), ps.ParentRef.Name)
 		}
 	}
 	require.True(t, foundOther, "other-controller parent entry must be preserved")
