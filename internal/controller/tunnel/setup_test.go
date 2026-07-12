@@ -65,6 +65,23 @@ func TestSourceDNSRecordPredicate(t *testing.T) {
 	require.True(t, predicate.Update(event.UpdateEvent{ObjectOld: record, ObjectNew: updated}))
 }
 
+func TestSourceObjectPredicate(t *testing.T) {
+	predicate := sourceObjectPredicate()
+	object := &v2alpha1.CloudflareDNSRecord{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
+
+	require.True(t, predicate.Create(event.CreateEvent{Object: object}))
+	require.True(t, predicate.Delete(event.DeleteEvent{Object: object}))
+	require.False(t, predicate.Update(event.UpdateEvent{ObjectOld: object, ObjectNew: object.DeepCopy()}))
+
+	annotationChanged := object.DeepCopy()
+	annotationChanged.Annotations = map[string]string{"cloudflare.io/tunnel": "true"}
+	require.True(t, predicate.Update(event.UpdateEvent{ObjectOld: object, ObjectNew: annotationChanged}))
+
+	specChanged := object.DeepCopy()
+	specChanged.Generation = 2
+	require.True(t, predicate.Update(event.UpdateEvent{ObjectOld: object, ObjectNew: specChanged}))
+}
+
 // mapFuncScheme registers the types needed by the tunnelTo* MapFuncs in unit
 // tests: CloudflareTunnel (the obj arg), HTTPRoute, and TLSRoute (the listed
 // types).

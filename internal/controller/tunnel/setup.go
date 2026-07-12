@@ -63,6 +63,13 @@ func sourceDNSRecordPredicate() predicate.Predicate {
 	return predicate.GenerationChangedPredicate{}
 }
 
+func sourceObjectPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+	)
+}
+
 // tlsRouteSupported reports whether the gateway-api TLSRoute kind is served
 // by the cluster (it lives only in the gateway-api EXPERIMENTAL channel).
 // (false, nil) => CRD genuinely absent (degrade gracefully). (false, err)
@@ -185,7 +192,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("service-source").
-		For(&corev1.Service{}).
+		For(&corev1.Service{}, builder.WithPredicates(sourceObjectPredicate())).
 		Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToServices(mgr))).
 		Complete(svcR); err != nil {
@@ -209,7 +216,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-source").
-		For(&gwv1.Gateway{}).
+		For(&gwv1.Gateway{}, builder.WithPredicates(sourceObjectPredicate())).
 		Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToGateways(mgr))).
 		Complete(gwR); err != nil {
@@ -229,9 +236,9 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("httproute-source").
-		For(&gwv1.HTTPRoute{}).
+		For(&gwv1.HTTPRoute{}, builder.WithPredicates(sourceObjectPredicate())).
 		Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
-		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutes(mgr))).
+		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutes(mgr)), builder.WithPredicates(sourceObjectPredicate())).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToHTTPRoutes(mgr))).
 		Complete(httpR); err != nil {
 		return fmt.Errorf("setup HTTPRouteSource: %w", err)
@@ -251,9 +258,9 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		}
 		if err := ctrl.NewControllerManagedBy(mgr).
 			Named("tlsroute-source").
-			For(&gwv1a2.TLSRoute{}).
+			For(&gwv1a2.TLSRoute{}, builder.WithPredicates(sourceObjectPredicate())).
 			Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
-			Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr))).
+			Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr)), builder.WithPredicates(sourceObjectPredicate())).
 			Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
 			Complete(tlsR); err != nil {
 			return fmt.Errorf("setup TLSRouteSource: %w", err)
