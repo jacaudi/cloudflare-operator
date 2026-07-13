@@ -136,6 +136,10 @@ func setupStatusGateHTTPEnv(t *testing.T) *statusGateFixture {
 	utilruntime.Must(v2alpha1.AddToScheme(sch))
 	utilruntime.Must(gwv1.Install(sch))
 
+	// Start from an empty cluster: earlier tests' CRs outlive them in the
+	// shared apiserver and every manager watches cluster-wide.
+	purgeCloudflareCRs(t)
+
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
 		Metrics: metricsserver.Options{BindAddress: "0"},
@@ -195,7 +199,7 @@ func setupStatusGateHTTPEnv(t *testing.T) *statusGateFixture {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer syncCancel()
@@ -221,6 +225,10 @@ func setupStatusGateTLSEnv(t *testing.T) *statusGateFixture {
 	utilruntime.Must(v2alpha1.AddToScheme(sch))
 	utilruntime.Must(gwv1.Install(sch))
 	utilruntime.Must(gwv1a2.Install(sch))
+
+	// Start from an empty cluster: earlier tests' CRs outlive them in the
+	// shared apiserver and every manager watches cluster-wide.
+	purgeCloudflareCRs(t)
 
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
@@ -281,7 +289,7 @@ func setupStatusGateTLSEnv(t *testing.T) *statusGateFixture {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer syncCancel()
@@ -360,7 +368,7 @@ func createGatewayForGateTest(t *testing.T, f *statusGateFixture, listenerProto 
 		},
 		Spec: gwv1.GatewaySpec{
 			GatewayClassName: "any-class",
-			Listeners: []gwv1.Listener{listenerForProto(&h, port, listenerProto)},
+			Listeners:        []gwv1.Listener{listenerForProto(&h, port, listenerProto)},
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, gw))

@@ -35,6 +35,10 @@ func TestEnvtest_AddToManager_AppliesConcurrency(t *testing.T) {
 	utilruntime.Must(gwv1.Install(sch))
 	utilruntime.Must(gwv1a2.Install(sch))
 
+	// Start from an empty cluster: earlier tests' CRs outlive them in the
+	// shared apiserver and every manager watches cluster-wide.
+	purgeCloudflareCRs(t)
+
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
 		Metrics: metricsserver.Options{BindAddress: "0"},

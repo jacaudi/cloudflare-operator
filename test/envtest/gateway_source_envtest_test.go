@@ -58,6 +58,10 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 	utilruntime.Must(v2alpha1.AddToScheme(sch))
 	utilruntime.Must(gwv1.Install(sch))
 
+	// Start from an empty cluster: earlier tests' CRs outlive them in the
+	// shared apiserver and every manager watches cluster-wide.
+	purgeCloudflareCRs(t)
+
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
 		Metrics: metricsserver.Options{BindAddress: "0"},
@@ -106,7 +110,7 @@ func setupGatewayEnv(t *testing.T, nsName string) *gatewayEnvFixture {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer syncCancel()
