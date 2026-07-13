@@ -2,6 +2,11 @@
 
 ## [0.19.3](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.2...v0.19.3) (2026-07-13)
 
+### Bug Fixes
+
+* source-controllers GC derived DNSRecord CRs on deactivation ([#145](https://github.com/jacaudi/cloudflare-operator/issues/145)) ([#149](https://github.com/jacaudi/cloudflare-operator/issues/149)) ([5de7324](https://github.com/jacaudi/cloudflare-operator/commit/5de73241873718e73c48879dab4a3e721324236b))
+* **ci:** let workflow_dispatch cut a release ([3aafa14](https://github.com/jacaudi/cloudflare-operator/commit/3aafa14))
+
 ## [0.19.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.1...v0.19.2) (2026-05-28)
 ### Bug Fixes
 
