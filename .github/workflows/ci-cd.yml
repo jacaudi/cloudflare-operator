@@ -69,10 +69,7 @@ jobs:
           echo "commit=${SHA:0:7}" >> "${GITHUB_OUTPUT}"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
 
-  # Create semantic version and GitHub release (main branch only).
-  # workflow_dispatch is accepted so a release can be recovered by hand when a
-  # push event fails to produce a run (see v0.19.3: the merge of #149 never
-  # created one, and a dispatch-triggered rerun silently skipped this job).
+  # Create semantic version and GitHub release (main branch only)
   release:
     needs: [lint, test, envtest]
     if: >-
@@ -85,11 +82,7 @@ jobs:
       pull-requests: write
     with:
       use-github-app: true
-      # conventional-changelog-conventionalcommits is pinned: v10 (2026-06-26)
-      # is incompatible with the release-notes-generator bundled in
-      # semantic-release v24 and silently emits an EMPTY notes body, so every
-      # release since then lost its changelog (v0.19.3 shipped with none).
-      # Do not unpin without checking release-notes-generator's peer versions.
+      # Pin @9: conventionalcommits v10 silently emits empty release notes under semantic-release v24.
       extra-plugins: '@semantic-release/changelog @semantic-release/git @semantic-release/exec conventional-changelog-conventionalcommits@9'
     secrets:
       app-id: ${{ secrets.APP_ID }}
