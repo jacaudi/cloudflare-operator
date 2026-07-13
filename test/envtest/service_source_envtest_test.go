@@ -62,6 +62,10 @@ func setupServiceEnv(t *testing.T, nsName string) *serviceEnvFixture {
 	utilruntime.Must(clientgoscheme.AddToScheme(sch))
 	utilruntime.Must(v2alpha1.AddToScheme(sch))
 
+	// Start from an empty cluster: earlier tests' CRs outlive them in the
+	// shared apiserver and every manager watches cluster-wide.
+	purgeCloudflareCRs(t)
+
 	mgr, err := ctrl.NewManager(sharedConfig, ctrl.Options{
 		Scheme:  sch,
 		Metrics: metricsserver.Options{BindAddress: "0"},
