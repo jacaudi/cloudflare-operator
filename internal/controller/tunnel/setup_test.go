@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -49,6 +50,36 @@ func TestAddToManager_DefaultConnectorResourcesPassthrough(t *testing.T) {
 	applyOptionDefaults(&opts)
 	require.Equal(t, want, opts.DefaultConnector.Resources)
 	require.Equal(t, int32(2), opts.DefaultConnector.Replicas) // scalar defaulting still applies
+}
+
+func TestSourceDNSRecordPredicate(t *testing.T) {
+	predicate := sourceDNSRecordPredicate()
+	record := &v2alpha1.CloudflareDNSRecord{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
+
+	require.True(t, predicate.Create(event.CreateEvent{Object: record}))
+	require.True(t, predicate.Delete(event.DeleteEvent{Object: record}))
+	require.False(t, predicate.Update(event.UpdateEvent{ObjectOld: record, ObjectNew: record.DeepCopy()}))
+
+	updated := record.DeepCopy()
+	updated.Generation = 2
+	require.True(t, predicate.Update(event.UpdateEvent{ObjectOld: record, ObjectNew: updated}))
+}
+
+func TestSourceObjectPredicate(t *testing.T) {
+	predicate := sourceObjectPredicate()
+	object := &v2alpha1.CloudflareDNSRecord{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
+
+	require.True(t, predicate.Create(event.CreateEvent{Object: object}))
+	require.True(t, predicate.Delete(event.DeleteEvent{Object: object}))
+	require.False(t, predicate.Update(event.UpdateEvent{ObjectOld: object, ObjectNew: object.DeepCopy()}))
+
+	annotationChanged := object.DeepCopy()
+	annotationChanged.Annotations = map[string]string{"cloudflare.io/tunnel": "true"}
+	require.True(t, predicate.Update(event.UpdateEvent{ObjectOld: object, ObjectNew: annotationChanged}))
+
+	specChanged := object.DeepCopy()
+	specChanged.Generation = 2
+	require.True(t, predicate.Update(event.UpdateEvent{ObjectOld: object, ObjectNew: specChanged}))
 }
 
 // mapFuncScheme registers the types needed by the tunnelTo* MapFuncs in unit
