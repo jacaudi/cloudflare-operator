@@ -85,7 +85,12 @@ jobs:
       pull-requests: write
     with:
       use-github-app: true
-      extra-plugins: '@semantic-release/changelog @semantic-release/git @semantic-release/exec conventional-changelog-conventionalcommits'
+      # conventional-changelog-conventionalcommits is pinned: v10 (2026-06-26)
+      # is incompatible with the release-notes-generator bundled in
+      # semantic-release v24 and silently emits an EMPTY notes body, so every
+      # release since then lost its changelog (v0.19.3 shipped with none).
+      # Do not unpin without checking release-notes-generator's peer versions.
+      extra-plugins: '@semantic-release/changelog @semantic-release/git @semantic-release/exec conventional-changelog-conventionalcommits@9'
     secrets:
       app-id: ${{ secrets.APP_ID }}
       app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
