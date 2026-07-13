@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.19.3](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.2...v0.19.3) (2026-07-13)
+
 ## [0.19.2](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.1...v0.19.2) (2026-05-28)
 ### Bug Fixes
 
