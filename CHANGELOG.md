@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.20.0](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.3...v0.20.0) (2026-07-13)
+### Features
+
+* **tunnel:** expose per-controller MaxConcurrentReconciles ([0360261](https://github.com/jacaudi/cloudflare-operator/commit/03602614b628ad85dde4c8363417ad3d40baa2ef)), closes [#134](https://github.com/jacaudi/cloudflare-operator/issues/134) [#134](https://github.com/jacaudi/cloudflare-operator/issues/134)
+
+### Bug Fixes
+
+* **tunnel:** distinguish transient Get errors from "no tunnel-targeted parent" ([3fd65c2](https://github.com/jacaudi/cloudflare-operator/commit/3fd65c20418473d1b0babf95a9525343ca69bdac)), closes [#145](https://github.com/jacaudi/cloudflare-operator/issues/145) [#146](https://github.com/jacaudi/cloudflare-operator/issues/146)
+* **tunnel:** filter status-only DNSRecord child events ([06e0c8d](https://github.com/jacaudi/cloudflare-operator/commit/06e0c8d0f3ee208c2930024c7fb008fd6056f49f))
+* **tunnel:** ignore status-only source updates ([d92fbfb](https://github.com/jacaudi/cloudflare-operator/commit/d92fbfb3d479a08c05da0a025cf3013e9f3face3))
+* **tunnel:** preserve route status per controller ([bdcf54e](https://github.com/jacaudi/cloudflare-operator/commit/bdcf54e69b0a2a702649de683475b1f5a613a30b))
+
+### Dependencies
+
+* **cloudflared:** Update cloudflare/cloudflared Docker tag to v2026.7.1 ([21e1cb7](https://github.com/jacaudi/cloudflare-operator/commit/21e1cb76eeab2e42ccdf239b28e414ab6c8d367e))
+* **deps:** Update actions/checkout action to v7 ([b662849](https://github.com/jacaudi/cloudflare-operator/commit/b6628491a489cdf5fe7d0bb0c233e7b9565d48a9))
+* **deps:** Update golang Docker tag to v1.26.5 ([702b667](https://github.com/jacaudi/cloudflare-operator/commit/702b6677e301994f06b44c053bbceaf2e2242158))
+* **deps:** Update module github.com/cloudflare/cloudflare-go/v7 to v7.7.0 ([4eaa682](https://github.com/jacaudi/cloudflare-operator/commit/4eaa682e5dca0dbd6a15322d3e2a30dc28fa21d4))
+* **deps:** Update module golang.org/x/sync to v0.22.0 ([fc3d48b](https://github.com/jacaudi/cloudflare-operator/commit/fc3d48bba787a6ad9a62098d92c16d5db8c8c455))
+* **deps:** Update module sigs.k8s.io/gateway-api to v1.6.0 ([9c11c00](https://github.com/jacaudi/cloudflare-operator/commit/9c11c004e971fe3d31815e0cbe7c350ae6e7f60a))
+
 ## [0.19.3](https://github.com/jacaudi/cloudflare-operator/compare/v0.19.2...v0.19.3) (2026-07-13)
 
 ### Bug Fixes
