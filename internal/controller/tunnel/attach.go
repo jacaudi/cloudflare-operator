@@ -510,12 +510,7 @@ func handleDeriveTunnelNameErr(
 // findTunnelTargetedParentRef scans parentRefs for the first parent Gateway
 // that opts into tunnel attachment (cloudflare.io/tunnel truthy), has a
 // derivable tunnel name, an existing CloudflareTunnel, and a resolvable
-// Gateway Service. Returns all-nil when none qualifies. A NotFound on a
-// candidate's Gateway or CloudflareTunnel is treated as "not this parent"
-// (skip); any other (transient) Get failure is returned so the caller can
-// requeue instead of mis-reporting "no tunnel-targeted parent" and tripping
-// the deactivation prune (issue #146). Shared by the HTTPRoute and TLSRoute
-// source reconcilers.
+// Gateway Service. Returns all-nil when none qualifies. NotFound skips the candidate; any other Get error is returned so the caller requeues rather than tripping the deactivation prune (issue #146).
 func findTunnelTargetedParentRef(
 	ctx context.Context,
 	c client.Client,
@@ -530,11 +525,7 @@ func findTunnelTargetedParentRef(
 		}
 		var gw gwv1.Gateway
 		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: string(pr.Name)}, &gw); err != nil {
-			// A definitively-missing parent (NotFound) is "not this parent" —
-			// skip it. Any other Get failure (apiserver glitch, cache resync
-			// hole) is transient: surface it so the reconcile requeues and
-			// retries, rather than mis-reporting "no tunnel-targeted parent"
-			// and tripping the #145 deactivation prune (issue #146).
+			// NotFound means "not this parent"; a transient error must requeue, not deactivate (issue #146).
 			if apierrors.IsNotFound(err) {
 				continue
 			}
@@ -550,11 +541,7 @@ func findTunnelTargetedParentRef(
 		}
 		var tn v2alpha1.CloudflareTunnel
 		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: derived}, &tn); err != nil {
-			// Same distinction as the Gateway Get above: a missing
-			// CloudflareTunnel (NotFound) means this parent doesn't yet opt
-			// into tunnelling — skip it. A transient Get failure is surfaced
-			// so the reconcile requeues instead of spuriously deactivating
-			// (issue #146).
+			// Same distinction as the Gateway Get above (issue #146).
 			if apierrors.IsNotFound(err) {
 				continue
 			}

@@ -315,9 +315,7 @@ func (r *TLSRouteSourceReconciler) writeParentStatus(
 		return fmt.Errorf("re-fetch tlsroute for status write: %w", err)
 	}
 
-	// Find our existing entry (by parent identity and controller name) or
-	// append a new one. Other Gateway API controllers can report the same
-	// parent reference, so matching ParentRef alone would overwrite them.
+	// Match on controller name too, or we'd overwrite another controller's entry for the same parentRef.
 	idx := -1
 	for i := range live.Status.Parents {
 		if live.Status.Parents[i].ControllerName == tunnelControllerName &&

@@ -242,9 +242,7 @@ func TestTLSRouteSource_MultiParent_OnlyTunnelTargetedTouched(t *testing.T) {
 	require.Equal(t, gwv1.ObjectName("gw"), got.Status.Parents[0].ParentRef.Name)
 }
 
-// TestTLSRouteSource_PreservesOtherParentStatusEntry verifies that when
-// another controller has already reported the SAME tunnel-targeted parent,
-// our reconcile adds its own entry instead of clobbering the other controller.
+// TestTLSRouteSource_PreservesOtherParentStatusEntry: when another controller already reported the same parent, we add our entry rather than clobber theirs.
 func TestTLSRouteSource_PreservesOtherParentStatusEntry(t *testing.T) {
 	gw := mkTLSParentGw("gw", "gw-ns")
 	tn := &v2alpha1.CloudflareTunnel{

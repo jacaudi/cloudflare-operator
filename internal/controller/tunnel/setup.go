@@ -59,51 +59,20 @@ type Options struct {
 	// defaults (Replicas=2, Protocol="auto", LogLevel="info", GracePeriod=30s).
 	DefaultConnector v2alpha1.ConnectorSpec
 
-	// Concurrency sets MaxConcurrentReconciles per controller in the tunnel
-	// bundle. The zero value preserves controller-runtime's default of 1. See
-	// ConcurrencyOptions.
+	// Concurrency sets MaxConcurrentReconciles per controller; zero keeps controller-runtime's default of 1.
 	Concurrency ConcurrencyOptions
 }
 
-// ConcurrencyOptions controls MaxConcurrentReconciles per controller in the
-// tunnel bundle. A zero value passes through to controller-runtime's default
-// of 1, preserving pre-feature behavior. Raise per controller to drain
-// event-driven workqueues faster when many objects of that kind change
-// concurrently (issue #134: measured ~1s p95 workqueue dwell on
-// httproute-source under the default when a multi-app Flux apply changes
-// several HTTPRoutes in the same window, while each reconcile itself is ~5ms).
-//
-// Setting any field > 1 makes the reconcilers in that controller execute in
-// parallel. That is safe here: controller-runtime serializes reconciles for
-// the same object via the workqueue regardless of MaxConcurrentReconciles, and
-// the source reconcilers already guard their per-instance lazy state behind
-// sync.Once for exactly this reason (see the "MaxConcurrentReconciles > 1"
-// notes in source_base.go and the *_source_controller.go files).
-//
-// Per-controller rather than a single global knob because load profiles differ
-// (httproute-source is hot in the homelab profile from #134; service-source and
-// gateway-source are cooler; tlsroute-source is often disabled). Named fields
-// (not a map[string]int keyed by controller name) keep the API compile-time
-// safe and IDE-discoverable, matching the existing Options-struct-of-named-
-// fields pattern (DefaultImage, DefaultConnector, ...).
+// ConcurrencyOptions sets MaxConcurrentReconciles per controller; zero keeps controller-runtime's default of 1. Values > 1 are safe: controller-runtime serializes reconciles per object, and the source reconcilers guard lazy state behind sync.Once.
 type ConcurrencyOptions struct {
-	// Tunnel is MaxConcurrentReconciles for the CloudflareTunnel reconciler.
-	Tunnel int
-	// Service is MaxConcurrentReconciles for the service-source controller.
-	Service int
-	// Gateway is MaxConcurrentReconciles for the gateway-source controller.
-	Gateway int
-	// HTTPRoute is MaxConcurrentReconciles for the httproute-source controller.
-	// The most likely field to need raising in clusters with many HTTPRoutes.
+	Tunnel    int
+	Service   int
+	Gateway   int
 	HTTPRoute int
-	// TLSRoute is MaxConcurrentReconciles for the tlsroute-source controller.
-	TLSRoute int
+	TLSRoute  int
 }
 
-// controllerOptions maps a per-controller MaxConcurrentReconciles value to a
-// controller-runtime controller.Options. A zero (or negative) value is passed
-// through unchanged; controller-runtime's controller.New normalizes any value
-// <= 0 to its default of 1, so the zero value preserves pre-feature behavior.
+// controllerOptions maps a MaxConcurrentReconciles value to controller.Options; controller-runtime normalizes <= 0 to 1.
 func controllerOptions(maxConcurrent int) controllerpkg.Options {
 	return controllerpkg.Options{MaxConcurrentReconciles: maxConcurrent}
 }

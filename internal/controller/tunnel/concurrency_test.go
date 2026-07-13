@@ -13,36 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Test-category coverage for the issue #134 per-controller concurrency knob
-// (a Go-library change: ConcurrencyOptions on tunnel.Options threaded through
-// the five setup.go builders). The end-to-end wiring smoke — that all five
-// builders accept the threaded controller.Options — lives in the envtest
-// integration suite (test/envtest/tunnel_concurrency_envtest_test.go), which
-// runs in maintainer CI where the kube binaries are available.
-//
-//	1. Happy path      — TestControllerOptions_Passthrough (positive value)
-//	2. Boundary/default — TestControllerOptions_Passthrough (zero -> 0, which
-//	                      controller-runtime normalizes to its default of 1)
-//	3. Negative input   — TestControllerOptions_Passthrough (negative -> passed
-//	                      through unchanged; controller-runtime clamps <=0 to 1)
-//	4. Per-field wiring — TestConcurrencyOptions_PerFieldIndependence
-//	5. Regression       — TestApplyOptionDefaults_LeavesConcurrencyZero (a future
-//	                      default must not clobber the zero-value passthrough)
-//	6. Integration      — envtest AddToManager smoke (see file note above)
-//	7. Concurrency      — N/A: this knob *enables* parallel reconciles; the
-//	                      reconcilers' own thread-safety under
-//	                      MaxConcurrentReconciles > 1 is already guarded by the
-//	                      sync.Once lazy-state init in source_base.go and the
-//	                      *_source_controller.go files, and exercised by the
-//	                      existing tunnel envtest suite. No new race surface is
-//	                      introduced by wiring the option through.
+// Unit coverage for the issue #134 per-controller concurrency knob; the AddToManager wiring smoke lives in test/envtest/tunnel_concurrency_envtest_test.go.
 
-// TestControllerOptions_Passthrough verifies that controllerOptions maps a
-// per-controller MaxConcurrentReconciles value straight through to
-// controller.Options without pre-validation. The zero and negative rows document
-// the contract that controller-runtime's controller.New clamps any value <= 0 to
-// its default of 1 (controller.go: `if MaxConcurrentReconciles <= 0 { = 1 }`),
-// so callers do not need to special-case the default here.
+// TestControllerOptions_Passthrough verifies controllerOptions passes the value straight through: controller-runtime clamps <= 0 to its default of 1, so callers need no special-casing.
 func TestControllerOptions_Passthrough(t *testing.T) {
 	cases := []struct {
 		name string
@@ -63,11 +36,7 @@ func TestControllerOptions_Passthrough(t *testing.T) {
 	}
 }
 
-// TestConcurrencyOptions_PerFieldIndependence proves the five named fields are
-// independently addressable and each threads to its own controller value — the
-// reason for a typed struct over a stringly-typed map[string]int (go-standards
-// §1). Distinct per-field values must survive the controllerOptions mapping
-// without cross-talk.
+// TestConcurrencyOptions_PerFieldIndependence proves each of the five fields threads to its own controller without cross-talk.
 func TestConcurrencyOptions_PerFieldIndependence(t *testing.T) {
 	opts := Options{Concurrency: ConcurrencyOptions{
 		Tunnel:    2,
@@ -84,13 +53,7 @@ func TestConcurrencyOptions_PerFieldIndependence(t *testing.T) {
 	require.Equal(t, 6, controllerOptions(opts.Concurrency.TLSRoute).MaxConcurrentReconciles)
 }
 
-// TestApplyOptionDefaults_LeavesConcurrencyZero is the regression lock for the
-// zero-value contract: applyOptionDefaults must NOT populate Concurrency, so an
-// unset ConcurrencyOptions stays all-zero and every controller keeps
-// controller-runtime's default of 1 (pre-feature behavior). If a future edit
-// adds a non-zero concurrency default here, this test fails and forces a
-// deliberate decision (see the issue's "default-bump alternative" discussion —
-// any such bump belongs in the chart, not in the Go zero-value default).
+// TestApplyOptionDefaults_LeavesConcurrencyZero locks the zero-value contract: a non-zero default here belongs in the chart, not in Go.
 func TestApplyOptionDefaults_LeavesConcurrencyZero(t *testing.T) {
 	opts := Options{}
 	applyOptionDefaults(&opts)
@@ -104,7 +67,6 @@ func TestApplyOptionDefaults_LeavesConcurrencyZero(t *testing.T) {
 		"applyOptionDefaults must not clobber a caller-supplied concurrency value")
 	require.Equal(t, ConcurrencyOptions{HTTPRoute: 3}, opts2.Concurrency)
 
-	// Sanity: unrelated scalar defaulting still fires (guards against this test
-	// accidentally passing because applyOptionDefaults became a no-op).
+	// Sanity: unrelated defaulting still fires, so this can't pass by applyOptionDefaults becoming a no-op.
 	require.Equal(t, int32(2), opts2.DefaultConnector.Replicas)
 }

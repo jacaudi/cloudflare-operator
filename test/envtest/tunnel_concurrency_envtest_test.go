@@ -23,26 +23,7 @@ import (
 	"github.com/jacaudi/cloudflare-operator/internal/controller/tunnel"
 )
 
-// TestEnvtest_AddToManager_AppliesConcurrency is the integration smoke for the
-// issue #134 per-controller concurrency knob. It builds a real
-// controller-runtime manager against the envtest apiserver and calls
-// tunnel.AddToManager with a non-default ConcurrencyOptions on every field,
-// then asserts the whole bundle wires without error.
-//
-// This exercises the exact production wiring path — all five source-controller
-// builders now carry `.WithOptions(controllerOptions(opts.Concurrency.X))` — so
-// a malformed option, a wrong controller.Options type, or a builder that
-// rejects WithOptions would surface here as a non-nil AddToManager error. The
-// manager is intentionally NOT started: registering the controllers is
-// sufficient to prove the WithOptions plumbing integrates, and not starting
-// avoids interfering with the reconcile loops of sibling tests in the shared
-// envtest process (AddToManager registers the fixed controller names
-// "httproute-source", "service-source", ... which no other test uses).
-//
-// End-to-end verification that the value is *honored* by controller-runtime
-// (MaxConcurrentReconciles <= 0 -> 1) is controller-runtime's own contract,
-// asserted at the unit level against the pinned version in
-// internal/controller/tunnel/concurrency_test.go.
+// TestEnvtest_AddToManager_AppliesConcurrency is the integration smoke for issue #134: AddToManager must wire ConcurrencyOptions across all five builders without error. The manager is deliberately not started, so it can't disturb sibling tests in the shared envtest process.
 func TestEnvtest_AddToManager_AppliesConcurrency(t *testing.T) {
 	if sharedConfig == nil {
 		t.Skip("envtest not initialized (KUBEBUILDER_ASSETS unset)")

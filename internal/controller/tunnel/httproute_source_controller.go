@@ -444,9 +444,7 @@ func hostnameMatchesListener(listenerHost, routeHost string) bool {
 // arbitrarily-old copy). This is the "merge-in-memory then full Update"
 // approach — preferred over SSA here for testability with the fake client.
 //
-// Identity match for parent entries includes the controller name. Gateway API
-// permits multiple controllers to report status for the same parent reference;
-// each controller owns only its own RouteParentStatus entry.
+// Parent entries are matched by controller name too: other Gateway API controllers may report the same parentRef, and each owns only its own entry.
 //
 // Returns any error from the final Status().Update so the caller can log it.
 func (r *HTTPRouteSourceReconciler) writeParentStatus(
@@ -463,9 +461,7 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 		return fmt.Errorf("re-fetch httproute for status write: %w", err)
 	}
 
-	// Find our existing entry (by parent identity and controller name) or
-	// append a new one. Other Gateway API controllers can report the same
-	// parent reference, so matching ParentRef alone would overwrite them.
+	// Match on controller name too, or we'd overwrite another controller's entry for the same parentRef.
 	idx := -1
 	for i := range live.Status.Parents {
 		if live.Status.Parents[i].ControllerName == tunnelControllerName &&
@@ -560,9 +556,7 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 	return r.Status().Update(ctx, &live)
 }
 
-// parentRefEquals matches complete ParentReferences. A Route may attach to
-// multiple sections of the same Gateway, each of which has a distinct status
-// entry under Gateway API.
+// parentRefEquals compares complete ParentReferences: a Route may attach to multiple sections of one Gateway, each with its own status entry.
 func parentRefEquals(a, b gwv1.ParentReference) bool {
 	return reflect.DeepEqual(a, b)
 }
