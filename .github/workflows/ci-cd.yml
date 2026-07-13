@@ -69,10 +69,15 @@ jobs:
           echo "commit=${SHA:0:7}" >> "${GITHUB_OUTPUT}"
           echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
 
-  # Create semantic version and GitHub release (main branch only)
+  # Create semantic version and GitHub release (main branch only).
+  # workflow_dispatch is accepted so a release can be recovered by hand when a
+  # push event fails to produce a run (see v0.19.3: the merge of #149 never
+  # created one, and a dispatch-triggered rerun silently skipped this job).
   release:
     needs: [lint, test, envtest]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     uses: jacaudi/github-actions/.github/workflows/component-semantic-release.yml@v0.20.3
     permissions:
       contents: write
