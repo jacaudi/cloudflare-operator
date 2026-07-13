@@ -128,7 +128,7 @@ func setupDataplaneHashEnv(t *testing.T) (client.Client, *dataplaneCountingClien
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer syncCancel()

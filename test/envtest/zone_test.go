@@ -107,7 +107,7 @@ func TestZoneBundle_EnvtestAcceptance(t *testing.T) {
 		Complete(rsR))
 
 	ctx := t.Context()
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	// Block until the manager's informer cache is populated; mgr.GetClient()
 	// returns a cached reader and `the cache is not started` errors until

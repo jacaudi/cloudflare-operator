@@ -199,7 +199,7 @@ func setupStatusGateHTTPEnv(t *testing.T) *statusGateFixture {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer syncCancel()
@@ -289,7 +289,7 @@ func setupStatusGateTLSEnv(t *testing.T) *statusGateFixture {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = mgr.Start(ctx) }()
+	startManager(t, ctx, mgr)
 
 	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer syncCancel()
@@ -368,7 +368,7 @@ func createGatewayForGateTest(t *testing.T, f *statusGateFixture, listenerProto 
 		},
 		Spec: gwv1.GatewaySpec{
 			GatewayClassName: "any-class",
-			Listeners: []gwv1.Listener{listenerForProto(&h, port, listenerProto)},
+			Listeners:        []gwv1.Listener{listenerForProto(&h, port, listenerProto)},
 		},
 	}
 	require.NoError(t, f.c.Create(ctx, gw))

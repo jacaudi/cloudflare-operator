@@ -24,6 +24,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -160,6 +161,29 @@ func purgeCloudflareCRs(t *testing.T) {
 		}
 		return true
 	}, 30*time.Second, 50*time.Millisecond, "cloudflare.io CRs from an earlier test never cleared")
+}
+
+// startManager runs mgr and blocks the test's cleanup until it has fully
+// stopped. Use it instead of a bare `go mgr.Start(ctx)`.
+//
+// Cancelling a manager's context does not stop it synchronously — Start returns
+// only once its workers have drained. A test that does not wait therefore leaves
+// controllers reconciling after it has returned, and the source controllers emit
+// CloudflareDNSRecord CRs, so a straggler can repopulate the cluster that the
+// next test just purged. Owning the cancel here keeps this independent of the
+// caller's other t.Cleanup ordering.
+func startManager(t *testing.T, parent context.Context, mgr ctrl.Manager) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = mgr.Start(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 }
 
 func TestMain(m *testing.M) {
