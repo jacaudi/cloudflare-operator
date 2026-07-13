@@ -22,9 +22,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	controllerpkg "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwv1a2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -55,6 +58,34 @@ type Options struct {
 	// CRs by the source reconcilers. Empty fields fall back to internal
 	// defaults (Replicas=2, Protocol="auto", LogLevel="info", GracePeriod=30s).
 	DefaultConnector v2alpha1.ConnectorSpec
+
+	// Concurrency sets MaxConcurrentReconciles per controller; zero keeps controller-runtime's default of 1.
+	Concurrency ConcurrencyOptions
+}
+
+// ConcurrencyOptions sets MaxConcurrentReconciles per controller; zero keeps controller-runtime's default of 1. Values > 1 are safe: controller-runtime serializes reconciles per object, and the source reconcilers guard lazy state behind sync.Once.
+type ConcurrencyOptions struct {
+	Tunnel    int
+	Service   int
+	Gateway   int
+	HTTPRoute int
+	TLSRoute  int
+}
+
+// controllerOptions maps a MaxConcurrentReconciles value to controller.Options; controller-runtime normalizes <= 0 to 1.
+func controllerOptions(maxConcurrent int) controllerpkg.Options {
+	return controllerpkg.Options{MaxConcurrentReconciles: maxConcurrent}
+}
+
+func sourceDNSRecordPredicate() predicate.Predicate {
+	return predicate.GenerationChangedPredicate{}
+}
+
+func sourceObjectPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+	)
 }
 
 // tlsRouteSupported reports whether the gateway-api TLSRoute kind is served
@@ -161,6 +192,7 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		For(&v2alpha1.CloudflareTunnel{}).
+		WithOptions(controllerOptions(opts.Concurrency.Tunnel)).
 		Complete(tunnelR); err != nil {
 		return fmt.Errorf("setup CloudflareTunnel: %w", err)
 	}
@@ -179,9 +211,10 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("service-source").
-		For(&corev1.Service{}).
-		Owns(&v2alpha1.CloudflareDNSRecord{}).
+		For(&corev1.Service{}, builder.WithPredicates(sourceObjectPredicate())).
+		Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToServices(mgr))).
+		WithOptions(controllerOptions(opts.Concurrency.Service)).
 		Complete(svcR); err != nil {
 		return fmt.Errorf("setup ServiceSource: %w", err)
 	}
@@ -203,9 +236,10 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("gateway-source").
-		For(&gwv1.Gateway{}).
-		Owns(&v2alpha1.CloudflareDNSRecord{}).
+		For(&gwv1.Gateway{}, builder.WithPredicates(sourceObjectPredicate())).
+		Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToGateways(mgr))).
+		WithOptions(controllerOptions(opts.Concurrency.Gateway)).
 		Complete(gwR); err != nil {
 		return fmt.Errorf("setup GatewaySource: %w", err)
 	}
@@ -223,10 +257,11 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("httproute-source").
-		For(&gwv1.HTTPRoute{}).
-		Owns(&v2alpha1.CloudflareDNSRecord{}).
-		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutes(mgr))).
+		For(&gwv1.HTTPRoute{}, builder.WithPredicates(sourceObjectPredicate())).
+		Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
+		Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToHTTPRoutes(mgr)), builder.WithPredicates(sourceObjectPredicate())).
 		Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToHTTPRoutes(mgr))).
+		WithOptions(controllerOptions(opts.Concurrency.HTTPRoute)).
 		Complete(httpR); err != nil {
 		return fmt.Errorf("setup HTTPRouteSource: %w", err)
 	}
@@ -245,10 +280,11 @@ func AddToManager(mgr ctrl.Manager, opts Options) error {
 		}
 		if err := ctrl.NewControllerManagedBy(mgr).
 			Named("tlsroute-source").
-			For(&gwv1a2.TLSRoute{}).
-			Owns(&v2alpha1.CloudflareDNSRecord{}).
-			Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr))).
+			For(&gwv1a2.TLSRoute{}, builder.WithPredicates(sourceObjectPredicate())).
+			Owns(&v2alpha1.CloudflareDNSRecord{}, builder.WithPredicates(sourceDNSRecordPredicate())).
+			Watches(&gwv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(gatewayToTLSRoutes(mgr)), builder.WithPredicates(sourceObjectPredicate())).
 			Watches(&v2alpha1.CloudflareTunnel{}, handler.EnqueueRequestsFromMapFunc(tunnelToTLSRoutes(mgr))).
+			WithOptions(controllerOptions(opts.Concurrency.TLSRoute)).
 			Complete(tlsR); err != nil {
 			return fmt.Errorf("setup TLSRouteSource: %w", err)
 		}

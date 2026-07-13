@@ -315,10 +315,11 @@ func (r *TLSRouteSourceReconciler) writeParentStatus(
 		return fmt.Errorf("re-fetch tlsroute for status write: %w", err)
 	}
 
-	// Find our existing entry (by parent identity) or append a new one.
+	// Match on controller name too, or we'd overwrite another controller's entry for the same parentRef.
 	idx := -1
 	for i := range live.Status.Parents {
-		if parentRefEquals(live.Status.Parents[i].ParentRef, parent) {
+		if live.Status.Parents[i].ControllerName == tunnelControllerName &&
+			parentRefEquals(live.Status.Parents[i].ParentRef, parent) {
 			idx = i
 			break
 		}

@@ -10,6 +10,7 @@ package tunnel
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -443,10 +444,7 @@ func hostnameMatchesListener(listenerHost, routeHost string) bool {
 // arbitrarily-old copy). This is the "merge-in-memory then full Update"
 // approach — preferred over SSA here for testability with the fake client.
 //
-// Identity match for parent entries: same Name AND same Namespace pointer
-// content (both nil, or both non-nil with equal strings). Section / Port
-// are ignored — a Route may pin one parent ref per controller without
-// ambiguity in practice.
+// Parent entries are matched by controller name too: other Gateway API controllers may report the same parentRef, and each owns only its own entry.
 //
 // Returns any error from the final Status().Update so the caller can log it.
 func (r *HTTPRouteSourceReconciler) writeParentStatus(
@@ -463,10 +461,11 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 		return fmt.Errorf("re-fetch httproute for status write: %w", err)
 	}
 
-	// Find our existing entry (by parent identity) or append a new one.
+	// Match on controller name too, or we'd overwrite another controller's entry for the same parentRef.
 	idx := -1
 	for i := range live.Status.Parents {
-		if parentRefEquals(live.Status.Parents[i].ParentRef, parent) {
+		if live.Status.Parents[i].ControllerName == tunnelControllerName &&
+			parentRefEquals(live.Status.Parents[i].ParentRef, parent) {
 			idx = i
 			break
 		}
@@ -557,22 +556,9 @@ func (r *HTTPRouteSourceReconciler) writeParentStatus(
 	return r.Status().Update(ctx, &live)
 }
 
-// parentRefEquals matches two ParentReferences on Name + Namespace. Section
-// / Port are intentionally ignored — for the tunnel controller's purposes a
-// (Gateway, listener) pair is identified by (name, namespace) alone; the
-// design doesn't address per-section attachment.
+// parentRefEquals compares complete ParentReferences: a Route may attach to multiple sections of one Gateway, each with its own status entry.
 func parentRefEquals(a, b gwv1.ParentReference) bool {
-	if a.Name != b.Name {
-		return false
-	}
-	switch {
-	case a.Namespace == nil && b.Namespace == nil:
-		return true
-	case a.Namespace != nil && b.Namespace != nil:
-		return *a.Namespace == *b.Namespace
-	default:
-		return false
-	}
+	return reflect.DeepEqual(a, b)
 }
 
 var _ reconcile.Reconciler = (*HTTPRouteSourceReconciler)(nil)

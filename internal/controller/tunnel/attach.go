@@ -510,9 +510,7 @@ func handleDeriveTunnelNameErr(
 // findTunnelTargetedParentRef scans parentRefs for the first parent Gateway
 // that opts into tunnel attachment (cloudflare.io/tunnel truthy), has a
 // derivable tunnel name, an existing CloudflareTunnel, and a resolvable
-// Gateway Service. Returns all-nil when none qualifies. Get failures on a
-// candidate are treated as "not this parent" (skip, don't fail). Shared by
-// the HTTPRoute and TLSRoute source reconcilers.
+// Gateway Service. Returns all-nil when none qualifies. NotFound skips the candidate; any other Get error is returned so the caller requeues rather than tripping the deactivation prune (issue #146).
 func findTunnelTargetedParentRef(
 	ctx context.Context,
 	c client.Client,
@@ -527,7 +525,11 @@ func findTunnelTargetedParentRef(
 		}
 		var gw gwv1.Gateway
 		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: string(pr.Name)}, &gw); err != nil {
-			continue
+			// NotFound means "not this parent"; a transient error must requeue, not deactivate (issue #146).
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, nil, nil, nil, 0, err
 		}
 		enabled, _ := conventions.ParseTruthy(gw.Annotations[conventions.AnnotationTunnel])
 		if !enabled {
@@ -539,7 +541,11 @@ func findTunnelTargetedParentRef(
 		}
 		var tn v2alpha1.CloudflareTunnel
 		if err := c.Get(ctx, types.NamespacedName{Namespace: gwNS, Name: derived}, &tn); err != nil {
-			continue
+			// Same distinction as the Gateway Get above (issue #146).
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, nil, nil, nil, 0, err
 		}
 		gwSvc, port, err := resolveGatewayService(ctx, c, &gw)
 		if err != nil {
